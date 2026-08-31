@@ -71,6 +71,18 @@ def main(argv: list[str] | None = None) -> int:
         result = replay_dataset(args.data_dir, args.market_ticker)
         print(json.dumps(result.__dict__, indent=2, sort_keys=True))
         return 0
+    if args.command == "bootstrap-backfill":
+        from .bootstrap.backfill import backfill_binance, backfill_kalshi
+        from .bootstrap.config import BootstrapSettings
+
+        bootstrap = BootstrapSettings()
+        reports: dict[str, object] = {}
+        if args.source in {"kalshi", "all"}:
+            reports["kalshi"] = backfill_kalshi(CollectorSettings(), bootstrap).model_dump(mode="json")
+        if args.source in {"binance", "all"}:
+            reports["binance"] = backfill_binance(bootstrap).model_dump(mode="json")
+        print(json.dumps(reports, indent=2, sort_keys=True))
+        return 0
     raise AssertionError("bootstrap command execution is wired by later implementation tasks")
 
 

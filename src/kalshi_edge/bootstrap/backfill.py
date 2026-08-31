@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict
 
 from ..config import CollectorSettings
+from .binance_history import (
+    BinanceArchiveClient,
+    BinanceDataError,
+    archive_urls,
+    convert_spot_1s_to_parquet,
+)
 from .config import BootstrapSettings
 from .kalshi_history import KalshiHistoricalClient
 from .labels import LabelNormalizationError, normalize_market_label
-from .provenance import verify_artifact, write_raw_artifact
+from .provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact
 
 
 class KalshiBackfillReport(BaseModel):
@@ -20,6 +28,16 @@ class KalshiBackfillReport(BaseModel):
     downloaded_artifacts: int
     skipped_artifacts: int
     excluded_markets: tuple[str, ...]
+
+
+class BinanceBackfillReport(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    day_count: int
+    downloaded_archives: int
+    skipped_archives: int
+    normalized_archives: int
+    dates: tuple[str, ...]
 
 
 def _canonical_json(payload: Any) -> bytes:
@@ -147,6 +165,144 @@ def backfill_kalshi(
             downloaded_artifacts=downloaded,
             skipped_artifacts=skipped,
             excluded_markets=tuple(excluded),
+        )
+    finally:
+        if own_client:
+            history.close()
+
+
+def _dates_for_valid_kalshi_markets(root: Path) -> list[date]:
+    market_root = root / "raw" / "kalshi" / "markets"
+    manifest_root = root / "manifests" / "kalshi" / "markets"
+    if not market_root.exists():
+        raise BinanceDataError("Kalshi bootstrap market history is required before Binance backfill")
+
+    dates: set[date] = set()
+    valid_markets = 0
+    for market_path in sorted(market_root.glob("*.json")):
+        manifest_path = manifest_root / f"{market_path.name}.manifest.json"
+        if not manifest_path.exists() or not verify_artifact(market_path, manifest_path):
+            raise BinanceDataError(f"Kalshi market artifact failed provenance verification: {market_path.name}")
+        payload = json.loads(market_path.read_text(encoding="utf-8"))
+        try:
+            label = normalize_market_label(payload)
+        except LabelNormalizationError:
+            continue
+        valid_markets += 1
+        first = datetime.fromtimestamp(label.open_ts_ns // 1_000_000_000, tz=timezone.utc).date()
+        last = datetime.fromtimestamp(label.close_ts_ns // 1_000_000_000, tz=timezone.utc).date()
+        current = first
+        while current <= last:
+            dates.add(current)
+            current += timedelta(days=1)
+
+    if valid_markets == 0 or not dates:
+        raise BinanceDataError("Kalshi bootstrap history contains no valid settled markets for Binance date derivation")
+    return sorted(dates)
+
+
+def _normalized_paths(root: Path, filename: str) -> tuple[Path, Path]:
+    parquet_name = f"{filename[:-4]}.parquet" if filename.lower().endswith(".zip") else f"{filename}.parquet"
+    data_path = root / "normalized" / "binance" / "1s" / parquet_name
+    manifest_path = root / "manifests" / "binance_normalized" / "1s" / f"{parquet_name}.manifest.json"
+    return data_path, manifest_path
+
+
+def _normalized_verified(root: Path, filename: str) -> bool:
+    data_path, manifest_path = _normalized_paths(root, filename)
+    return data_path.exists() and manifest_path.exists() and verify_artifact(data_path, manifest_path)
+
+
+def _write_normalized_manifest(root: Path, filename: str, raw_artifact: RawArtifact, row_count: int) -> None:
+    data_path, manifest_path = _normalized_paths(root, filename)
+    artifact = RawArtifact(
+        path=data_path.relative_to(root),
+        manifest_path=manifest_path.relative_to(root),
+        sha256=sha256_file(data_path),
+        source="binance_normalized",
+        retrieval_ts_utc=datetime.now(timezone.utc).isoformat(),
+        byte_count=data_path.stat().st_size,
+        metadata={
+            "source_raw_path": raw_artifact.path.as_posix(),
+            "source_raw_sha256": raw_artifact.sha256,
+            "parser_version": "1",
+            "row_count": row_count,
+            "timestamp_unit": "nanoseconds",
+            "format": "parquet",
+            "schema": [
+                "ts_ns",
+                "open",
+                "high",
+                "low",
+                "close",
+                "base_volume",
+                "quote_volume",
+                "trade_count",
+                "taker_buy_base",
+                "taker_buy_quote",
+            ],
+        },
+    )
+    write_manifest(root, artifact)
+
+
+def _raw_artifact_from_existing(root: Path, filename: str) -> RawArtifact:
+    data_path, manifest_path = _artifact_paths(root, "binance", f"archive/{filename}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return RawArtifact(
+        path=data_path.relative_to(root),
+        manifest_path=manifest_path.relative_to(root),
+        sha256=str(manifest["sha256"]),
+        source="binance",
+        retrieval_ts_utc=str(manifest["retrieval_ts_utc"]),
+        byte_count=int(manifest["byte_count"]),
+        metadata=dict(manifest.get("metadata", {})),
+    )
+
+
+def backfill_binance(
+    bootstrap: BootstrapSettings,
+    *,
+    client: BinanceArchiveClient | Any | None = None,
+    parquet_converter: Callable[[Path, Path], int] = convert_spot_1s_to_parquet,
+) -> BinanceBackfillReport:
+    root = bootstrap.bootstrap_dir.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    dates = _dates_for_valid_kalshi_markets(root)
+    urls = archive_urls(bootstrap.binance_symbol, dates, dataset="klines", interval="1s")
+    own_client = client is None
+    history = client or BinanceArchiveClient()
+    downloaded = 0
+    skipped = 0
+    normalized = 0
+
+    try:
+        for url in urls:
+            filename = Path(urlparse(url).path).name
+            logical_name = f"archive/{filename}"
+            if _verified_existing(root, "binance", logical_name):
+                raw_artifact = _raw_artifact_from_existing(root, filename)
+                skipped += 1
+            else:
+                raw_artifact = history.download_and_verify(url, f"{url}.CHECKSUM", root)
+                downloaded += 1
+
+            if _normalized_verified(root, filename):
+                continue
+            raw_path = root / raw_artifact.path
+            normalized_path, _ = _normalized_paths(root, filename)
+            row_count = parquet_converter(raw_path, normalized_path)
+            if not normalized_path.exists():
+                raise BinanceDataError(f"Parquet converter did not produce output for {filename}")
+            _write_normalized_manifest(root, filename, raw_artifact, row_count)
+            normalized += 1
+
+        return BinanceBackfillReport(
+            day_count=len(dates),
+            downloaded_archives=downloaded,
+            skipped_archives=skipped,
+            normalized_archives=normalized,
+            dates=tuple(day.isoformat() for day in dates),
         )
     finally:
         if own_client:

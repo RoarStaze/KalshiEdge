@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from .provenance import RawArtifact, sha256_file, write_manifest
+from .provenance import RawArtifact, write_manifest
 
 
 BINANCE_ARCHIVE_ORIGIN = "https://data.binance.vision"
@@ -56,11 +56,11 @@ class BinanceParseStats(BaseModel):
 
 def normalize_epoch_to_ns(value: int) -> int:
     """Normalize Binance millisecond/microsecond/nanosecond Unix timestamps to ns."""
-    if 1_000_000_000_000 <= value < 100_000_000_000_000:  # milliseconds
+    if 1_000_000_000_000 <= value < 100_000_000_000_000:
         return value * 1_000_000
-    if 100_000_000_000_000 <= value < 100_000_000_000_000_000:  # microseconds
+    if 100_000_000_000_000 <= value < 100_000_000_000_000_000:
         return value * 1_000
-    if 100_000_000_000_000_000 <= value < 100_000_000_000_000_000_000:  # nanoseconds
+    if 100_000_000_000_000_000 <= value < 100_000_000_000_000_000_000:
         return value
     raise BinanceDataError(f"unsupported Binance epoch magnitude: {value}")
 
@@ -116,14 +116,10 @@ def _reject_phase1_root(root: Path) -> Path:
 
 class BinanceArchiveClient:
     def __init__(self, *, http_client: httpx.Client | None = None, timeout_seconds: float = 60.0) -> None:
-        self._owns_client = http_client is None
         self._http = http_client or httpx.Client(timeout=timeout_seconds, follow_redirects=True)
 
     def close(self) -> None:
-        if self._owns_client:
-            self._http.close()
-        else:
-            self._http.close()
+        self._http.close()
 
     def download_and_verify(self, url: str, checksum_url: str, root: Path) -> RawArtifact:
         filename = _validate_official_url(url)
@@ -162,6 +158,18 @@ class BinanceArchiveClient:
                 raise BinanceDataError(f"Binance checksum mismatch: expected {expected}, got {actual}")
 
             os.replace(temp_path, final_path)
+            stats = inspect_spot_1s(final_path) if "/klines/" in url and "/1s/" in url else None
+            metadata: dict[str, object] = {
+                "source_locator": url,
+                "checksum_url": checksum_url,
+                "official_checksum_sha256": expected,
+                "parser_version": "1",
+                "archive_format": "zip",
+                "timestamp_unit": "source ms/us; normalized to ns during parsing",
+            }
+            if stats is not None:
+                metadata.update(stats.model_dump(mode="json"))
+
             manifest_relative = Path("manifests") / "binance" / "archive" / f"{filename}.manifest.json"
             artifact = RawArtifact(
                 path=final_path.relative_to(root),
@@ -170,13 +178,7 @@ class BinanceArchiveClient:
                 source="binance",
                 retrieval_ts_utc=datetime.now(timezone.utc).isoformat(),
                 byte_count=byte_count,
-                metadata={
-                    "source_locator": url,
-                    "checksum_url": checksum_url,
-                    "official_checksum_sha256": expected,
-                    "parser_version": "1",
-                    "archive_format": "zip",
-                },
+                metadata=metadata,
             )
             write_manifest(root, artifact)
             return artifact
@@ -279,6 +281,54 @@ def inspect_spot_1s(path: Path) -> BinanceParseStats:
     )
 
 
-def raw_artifact_is_verified(root: Path, artifact: RawArtifact) -> bool:
-    root = root.resolve()
-    return sha256_file(root / artifact.path) == artifact.sha256
+def convert_spot_1s_to_parquet(path: Path, output_path: Path, *, batch_size: int = 65_536) -> int:
+    """Convert an official Binance 1s archive to normalized Parquet without loading it all into memory."""
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError as exc:
+        raise BinanceDataError("pyarrow is required for Binance Parquet normalization; install the research extra") from exc
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent)
+    os.close(descriptor)
+    temp_path = Path(temp_name)
+    schema = pa.schema(
+        [
+            ("ts_ns", pa.int64()),
+            ("open", pa.float64()),
+            ("high", pa.float64()),
+            ("low", pa.float64()),
+            ("close", pa.float64()),
+            ("base_volume", pa.float64()),
+            ("quote_volume", pa.float64()),
+            ("trade_count", pa.int64()),
+            ("taker_buy_base", pa.float64()),
+            ("taker_buy_quote", pa.float64()),
+        ]
+    )
+    writer = None
+    rows: list[dict[str, int | float]] = []
+    row_count = 0
+    try:
+        writer = pq.ParquetWriter(str(temp_path), schema=schema, compression="zstd")
+        for bar in parse_spot_1s(path):
+            rows.append(bar.model_dump())
+            if len(rows) >= batch_size:
+                writer.write_table(pa.Table.from_pylist(rows, schema=schema))
+                row_count += len(rows)
+                rows.clear()
+        if rows:
+            writer.write_table(pa.Table.from_pylist(rows, schema=schema))
+            row_count += len(rows)
+        writer.close()
+        writer = None
+        os.replace(temp_path, output_path)
+        return row_count
+    finally:
+        if writer is not None:
+            writer.close()
+        if temp_path.exists():
+            temp_path.unlink()
