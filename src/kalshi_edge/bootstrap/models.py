@@ -252,7 +252,13 @@ def train_candidate_models(
     groups = _group_order(rows)
     if any(max(fold.lockbox_indices, default=-1) >= len(groups) for fold in splits):
         raise ModelError("split references unknown market group")
-    feature_names = _feature_names(rows)
+    if any(fold.lockbox_indices != splits[0].lockbox_indices for fold in splits[1:]):
+        raise ModelError("all walk-forward folds must share one untouched lockbox")
+
+    lockbox_group_indices = set(splits[0].lockbox_indices)
+    development_group_indices = tuple(index for index in range(len(groups)) if index not in lockbox_group_indices)
+    development_rows = _rows_for_group_indices(rows, groups, development_group_indices)
+    feature_names = _feature_names([rows[index] for index in development_rows])
     x = _row_matrix(rows, feature_names)
     y = [row.label_yes for row in rows]
 
@@ -291,9 +297,6 @@ def train_candidate_models(
         )
     best_candidate = min(CANDIDATE_NAMES, key=lambda name: (oof_metrics[name].log_loss, oof_metrics[name].brier))
 
-    lockbox_groups = set(splits[0].lockbox_indices)
-    development_group_indices = tuple(index for index in range(len(groups)) if index not in lockbox_groups)
-    development_rows = _rows_for_group_indices(rows, groups, development_group_indices)
     final_models: dict[str, object] = {}
     for name in CANDIDATE_NAMES:
         params = selected[name][-1]
