@@ -31,7 +31,7 @@ from .types import FeatureRow
 MODEL_VERSION = "bootstrap-hybrid-v1"
 FEATURE_SCHEMA_VERSION = 1
 STRUCTURAL_SIMULATIONS = 512
-EVALUATION_CHECKPOINT_SECONDS = (840.0, 600.0, 300.0, 120.0, 60.0)
+MIN_HISTORICAL_EVALUATION_SECONDS = 60.0
 KALSHI_FLOW_PREFIXES = (
     "kalshi_trade_volume_",
     "kalshi_yes_taker_imbalance_",
@@ -47,9 +47,9 @@ STRUCTURAL_FEATURES = (
 )
 PRIOR_FEATURES = (
     "kalshi_mid",
-    "kalshi_mid_available",
+    "kalshi_quote_available",
     "kalshi_last_trade_yes",
-    "kalshi_last_trade_available",
+    "kalshi_trade_available",
 )
 
 
@@ -95,7 +95,7 @@ class FittedBootstrapPipeline:
             raise TrainingError("prediction requires at least one row")
         _require_feature_schema(selected, self.required_feature_names)
         if any(not is_evaluation_row(row) for row in selected):
-            raise TrainingError("historical pipeline prediction requires a predeclared evaluation checkpoint")
+            raise TrainingError("historical pipeline prediction requires a causally evaluable checkpoint")
 
         x = _matrix(selected, self.outcome_feature_names)
         prior = [_kalshi_prior(row) for row in selected]
@@ -134,7 +134,7 @@ def is_evaluation_row(row: FeatureRow) -> bool:
     seconds = row.features.get("seconds_remaining")
     if seconds is None or not math.isfinite(seconds):
         return False
-    return any(abs(seconds - checkpoint) <= 1e-9 for checkpoint in EVALUATION_CHECKPOINT_SECONDS)
+    return seconds >= MIN_HISTORICAL_EVALUATION_SECONDS
 
 
 def _dataset_paths(root: Path) -> tuple[Path, Path, Path]:
@@ -406,11 +406,11 @@ def _predict_classifier(model: object, matrix: Sequence[Sequence[float]]) -> lis
 
 def _kalshi_prior(row: FeatureRow) -> float:
     features = row.features
-    if features.get("kalshi_mid_available", 0.0) > 0.0:
+    if features.get("kalshi_quote_available", 0.0) > 0.0:
         value = features.get("kalshi_mid")
         if value is not None and math.isfinite(value) and 0.0 <= value <= 1.0:
             return float(value)
-    if features.get("kalshi_last_trade_available", 0.0) > 0.0:
+    if features.get("kalshi_trade_available", 0.0) > 0.0:
         value = features.get("kalshi_last_trade_yes")
         if value is not None and math.isfinite(value) and 0.0 <= value <= 1.0:
             return float(value)
@@ -672,7 +672,7 @@ def _training_config_hash(settings: BootstrapSettings) -> str:
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "settings": settings.model_dump(mode="json"),
         "structural_simulations": STRUCTURAL_SIMULATIONS,
-        "evaluation_checkpoint_seconds": EVALUATION_CHECKPOINT_SECONDS,
+        "minimum_historical_evaluation_seconds": MIN_HISTORICAL_EVALUATION_SECONDS,
         "feature_ablations": ("external_btc_features", "kalshi_flow_features"),
         "component_ablations": ("structural_component", "residual_component", "xgboost_vs_lower_variance"),
     }
@@ -762,7 +762,7 @@ def build_experiment_bundle(root: Path, settings: BootstrapSettings, *, git_sha:
 
     evaluation_calibration_rows = tuple(row for row in calibration_rows if is_evaluation_row(row))
     if len(evaluation_calibration_rows) < 6 or len({row.label_yes for row in evaluation_calibration_rows}) < 2:
-        raise TrainingError("calibration partition lacks enough predeclared evaluable rows/classes")
+        raise TrainingError("calibration partition lacks enough causally evaluable rows/classes")
     required_features = _required_bundle_features(outcome_features, context.feature_names)
     _require_feature_schema(evaluation_calibration_rows, required_features)
     calibration_x = _matrix(evaluation_calibration_rows, outcome_features)
