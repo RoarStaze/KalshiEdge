@@ -83,6 +83,14 @@ def main(argv: list[str] | None = None) -> int:
             reports["binance"] = backfill_binance(bootstrap).model_dump(mode="json")
         print(json.dumps(reports, indent=2, sort_keys=True))
         return 0
+    if args.command == "bootstrap-build-dataset":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.dataset import build_dataset
+
+        bootstrap = BootstrapSettings()
+        report = build_dataset(bootstrap.bootstrap_dir, bootstrap)
+        print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0
     raise AssertionError("bootstrap command execution is wired by later implementation tasks")
 
 
