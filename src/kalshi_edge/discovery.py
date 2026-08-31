@@ -15,7 +15,7 @@ def extract_market_tickers(payload: dict[str, Any], series_ticker: str) -> list[
         if event.get("series_ticker") != series_ticker:
             continue
         for market in event.get("markets", []):
-            if market.get("status") == "open" and market.get("ticker"):
+            if market.get("status") == "active" and market.get("ticker"):
                 tickers.append(str(market["ticker"]))
     return sorted(set(tickers))
 

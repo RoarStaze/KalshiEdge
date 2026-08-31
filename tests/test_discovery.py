@@ -7,11 +7,11 @@ def test_extract_market_tickers_filters_kxbtc15m_open_markets() -> None:
             {
                 "series_ticker": "KXBTC15M",
                 "markets": [
-                    {"ticker": "KXBTC15M-A", "status": "open"},
-                    {"ticker": "KXBTC15M-B", "status": "settled"},
+                    {"ticker": "KXBTC15M-A", "status": "active"},
+                    {"ticker": "KXBTC15M-B", "status": "finalized"},
                 ],
             },
-            {"series_ticker": "OTHER", "markets": [{"ticker": "OTHER-A", "status": "open"}]},
+            {"series_ticker": "OTHER", "markets": [{"ticker": "OTHER-A", "status": "active"}]},
         ]
     }
     assert extract_market_tickers(payload, "KXBTC15M") == ["KXBTC15M-A"]
