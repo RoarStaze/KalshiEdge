@@ -36,3 +36,11 @@ def test_kalshi_prior_uses_actual_feature_builder_availability_names() -> None:
     assert training._kalshi_prior(trade_only) == 0.59
     assert "kalshi_quote_available" in training.PRIOR_FEATURES
     assert "kalshi_trade_available" in training.PRIOR_FEATURES
+
+
+def test_historical_evaluation_accepts_every_causal_checkpoint_at_or_above_60_seconds() -> None:
+    assert training.is_evaluation_row(_row({"seconds_remaining": 780.0})) is True
+    assert training.is_evaluation_row(_row({"seconds_remaining": 61.0})) is True
+    assert training.is_evaluation_row(_row({"seconds_remaining": 60.0})) is True
+    assert training.is_evaluation_row(_row({"seconds_remaining": 59.999})) is False
+    assert training.is_evaluation_row(_row({"seconds_remaining": 30.0})) is False
