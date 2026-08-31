@@ -147,6 +147,7 @@ def test_simplex_stacker_has_nonnegative_unit_sum_weights_and_favors_better_comp
         "kalshi": [0.1, 0.9, 0.15, 0.85, 0.2, 0.8, 0.1, 0.9],
         "structural": [0.45, 0.55, 0.45, 0.55, 0.45, 0.55, 0.45, 0.55],
         "historical_ml": [0.3, 0.7, 0.35, 0.65, 0.3, 0.7, 0.35, 0.65],
+        "residual_corrected": [0.2, 0.8, 0.25, 0.75, 0.2, 0.8, 0.25, 0.75],
     }
 
     stacker = models.fit_stacker(component_predictions, labels)
@@ -157,3 +158,12 @@ def test_simplex_stacker_has_nonnegative_unit_sum_weights_and_favors_better_comp
     assert all(weight >= 0.0 for weight in stacker.weights.values())
     assert stacker.weights["kalshi"] >= stacker.weights["structural"]
     assert all(0.0 <= value <= 1.0 for value in predictions)
+
+
+def test_zero_weight_stacker_component_can_be_omitted_at_inference() -> None:
+    stacker = models.Stacker({"kalshi": 1.0, "residual_corrected": 0.0})
+
+    assert stacker.predict({"kalshi": [0.2, 0.8]}) == pytest.approx([0.2, 0.8])
+
+    with pytest.raises(models.ModelError, match="active component"):
+        stacker.predict({"residual_corrected": [0.2, 0.8]})
