@@ -245,3 +245,25 @@ def build_feature_row(
         features=features,
         source_max_ts_ns=source_max,
     )
+
+
+def build_market_feature_rows(
+    label: MarketLabel,
+    kalshi: HistoricalKalshiState,
+    btc: HistoricalBTCState,
+    *,
+    checkpoint_seconds: Sequence[int],
+) -> tuple[FeatureRow, ...]:
+    duration_seconds = (label.close_ts_ns - label.open_ts_ns) / NS
+    seen: set[int] = set()
+    rows: list[FeatureRow] = []
+    for seconds_remaining in checkpoint_seconds:
+        value = int(seconds_remaining)
+        if value <= 0 or value >= duration_seconds:
+            raise FeatureConstructionError(f"invalid checkpoint seconds remaining: {seconds_remaining}")
+        if value in seen:
+            raise FeatureConstructionError(f"duplicate checkpoint seconds remaining: {seconds_remaining}")
+        seen.add(value)
+        checkpoint_ts_ns = label.close_ts_ns - value * NS
+        rows.append(build_feature_row(label, checkpoint_ts_ns, kalshi, btc))
+    return tuple(rows)
