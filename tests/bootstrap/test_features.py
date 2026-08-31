@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 import pytest
 
 from kalshi_edge.bootstrap.binance_history import BinanceBar
+from kalshi_edge.bootstrap.config import DEFAULT_CHECKPOINT_SECONDS
 from kalshi_edge.bootstrap.features import (
     HistoricalBTCState,
     HistoricalKalshiCandle,
     HistoricalKalshiState,
     HistoricalKalshiTrade,
     build_feature_row,
+    build_market_feature_rows,
 )
 from kalshi_edge.bootstrap.types import MarketLabel
 
@@ -119,3 +121,22 @@ def test_build_feature_row_uses_only_past_values_for_rolling_statistics() -> Non
     assert row.features["btc_return_60s"] == pytest.approx(0.06)
     assert row.features["btc_realized_vol_60s"] >= 0.0
     assert row.source_max_ts_ns["binance"] == checkpoint
+
+
+def test_market_builder_generates_all_checkpoints_in_one_split_group() -> None:
+    label = _label()
+    bars = tuple(_bar(label.open_ts_ns + second * NS, 100.0 + second / 1000.0) for second in range(0, 901))
+    rows = build_market_feature_rows(
+        label,
+        HistoricalKalshiState(),
+        HistoricalBTCState(bars=bars),
+        checkpoint_seconds=DEFAULT_CHECKPOINT_SECONDS,
+    )
+
+    assert len(rows) == len(DEFAULT_CHECKPOINT_SECONDS) == 18
+    assert {row.market_ticker for row in rows} == {label.ticker}
+    assert {row.market_date for row in rows} == {"2026-08-01"}
+    assert {row.split_group_id for row in rows} == {label.ticker}
+    assert {row.label_yes for row in rows} == {1}
+    assert [row.features["seconds_remaining"] for row in rows] == [float(value) for value in DEFAULT_CHECKPOINT_SECONDS]
+    assert len({row.checkpoint_ts_ns for row in rows}) == 18
