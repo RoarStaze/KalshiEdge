@@ -80,6 +80,20 @@ def test_candidate_training_is_seeded_and_never_scores_lockbox() -> None:
             assert predictions[index] is None
 
 
+def test_lockbox_only_feature_cannot_enter_development_feature_schema() -> None:
+    rows = list(_rows())
+    folds = _folds(tuple(rows))
+    lockbox_group_indices = set(folds[0].lockbox_indices)
+    for group_index in lockbox_group_indices:
+        rows[group_index] = rows[group_index].model_copy(
+            update={"features": {**rows[group_index].features, "future_lockbox_only_signal": 999.0}}
+        )
+
+    result = models.train_candidate_models(tuple(rows), folds, seed=73115)
+
+    assert "future_lockbox_only_signal" not in result.feature_names
+
+
 def test_residual_model_is_zero_weight_when_it_fails_to_beat_kalshi_prior() -> None:
     train_x = [[0.0], [0.0], [0.0], [0.0], [0.0], [0.0]]
     train_y = [0, 1, 0, 1, 0, 1]
