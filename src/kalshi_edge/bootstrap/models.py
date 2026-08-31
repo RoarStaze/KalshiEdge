@@ -30,18 +30,41 @@ class CandidateResults:
 
 
 class ResidualModel:
-    def __init__(self, *, estimator: object, component_weight: float) -> None:
-        self._estimator = estimator
+    def __init__(
+        self,
+        *,
+        intercept: float,
+        coefficients: Sequence[float],
+        feature_means: Sequence[float],
+        feature_scales: Sequence[float],
+        component_weight: float,
+    ) -> None:
+        self.intercept = float(intercept)
+        self.coefficients = tuple(float(value) for value in coefficients)
+        self.feature_means = tuple(float(value) for value in feature_means)
+        self.feature_scales = tuple(float(value) for value in feature_scales)
         self.component_weight = float(component_weight)
 
     def predict(self, feature_matrix: Sequence[Sequence[float]], prior_predictions: Sequence[float]) -> list[float]:
         x = _validate_matrix(feature_matrix)
         prior = _validate_probabilities(prior_predictions, expected=len(x))
+        if len(x[0]) != len(self.coefficients):
+            raise ModelError("residual feature width does not match fitted model")
         if self.component_weight <= 0.0:
             return list(prior)
-        design = _residual_design(x, prior)
-        corrected = self._estimator.predict_proba(design)[:, 1]
-        return [min(1.0, max(0.0, float(value))) for value in corrected]
+
+        output: list[float] = []
+        for row, probability in zip(x, prior):
+            residual = self.intercept
+            for value, coefficient, mean, scale in zip(
+                row,
+                self.coefficients,
+                self.feature_means,
+                self.feature_scales,
+            ):
+                residual += coefficient * ((value - mean) / scale)
+            output.append(_sigmoid(_logit(probability) + residual))
+        return output
 
 
 class Stacker:
@@ -320,8 +343,40 @@ def _logit(probability: float, eps: float = 1e-4) -> float:
     return math.log(clipped / (1.0 - clipped))
 
 
-def _residual_design(feature_matrix: Sequence[Sequence[float]], prior: Sequence[float]) -> list[list[float]]:
-    return [[_logit(probability), *row] for row, probability in zip(feature_matrix, prior)]
+def _sigmoid(value: float) -> float:
+    if value >= 0.0:
+        return 1.0 / (1.0 + math.exp(-value))
+    exp_value = math.exp(value)
+    return exp_value / (1.0 + exp_value)
+
+
+def _softplus(value: float) -> float:
+    if value > 0.0:
+        return value + math.log1p(math.exp(-value))
+    return math.log1p(math.exp(value))
+
+
+def _feature_standardization(feature_matrix: Sequence[Sequence[float]]) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    width = len(feature_matrix[0])
+    count = len(feature_matrix)
+    means = tuple(sum(row[column] for row in feature_matrix) / count for column in range(width))
+    scales: list[float] = []
+    for column, mean in enumerate(means):
+        variance = sum((row[column] - mean) ** 2 for row in feature_matrix) / count
+        scale = math.sqrt(variance)
+        scales.append(scale if scale > 1e-12 else 1.0)
+    return means, tuple(scales)
+
+
+def _standardize(
+    feature_matrix: Sequence[Sequence[float]],
+    means: Sequence[float],
+    scales: Sequence[float],
+) -> list[list[float]]:
+    return [
+        [(value - mean) / scale for value, mean, scale in zip(row, means, scales)]
+        for row in feature_matrix
+    ]
 
 
 def fit_residual_model(
@@ -333,8 +388,9 @@ def fit_residual_model(
     validation_prior: Sequence[float],
     seed: int,
 ) -> ResidualModel:
-    from sklearn.linear_model import LogisticRegression
+    from scipy.optimize import minimize
 
+    del seed  # deterministic convex objective; retained for a stable public interface
     train_x = _validate_matrix(train_features)
     validation_x = _validate_matrix(validation_features)
     if len(train_x[0]) != len(validation_x[0]):
@@ -350,13 +406,52 @@ def fit_residual_model(
     train_p = _validate_probabilities(train_prior, expected=len(train_x))
     validation_p = _validate_probabilities(validation_prior, expected=len(validation_x))
 
-    estimator = LogisticRegression(C=0.25, solver="lbfgs", max_iter=1000, random_state=seed)
-    estimator.fit(_residual_design(train_x, train_p), train_y)
-    corrected = [float(value) for value in estimator.predict_proba(_residual_design(validation_x, validation_p))[:, 1]]
+    means, scales = _feature_standardization(train_x)
+    standardized_train = _standardize(train_x, means, scales)
+    prior_logits = [_logit(probability) for probability in train_p]
+    l2_penalty = 0.25
+
+    def objective(parameters) -> float:
+        intercept = float(parameters[0])
+        coefficients = [float(value) for value in parameters[1:]]
+        negative_log_likelihood = 0.0
+        for row, prior_logit, label in zip(standardized_train, prior_logits, train_y):
+            residual = intercept + sum(coefficient * value for coefficient, value in zip(coefficients, row))
+            score = prior_logit + residual
+            negative_log_likelihood += _softplus(score) - label * score
+        negative_log_likelihood /= len(train_y)
+        regularization = 0.5 * l2_penalty * sum(coefficient * coefficient for coefficient in coefficients)
+        return negative_log_likelihood + regularization
+
+    result = minimize(
+        objective,
+        [0.0] * (len(train_x[0]) + 1),
+        method="L-BFGS-B",
+        options={"ftol": 1e-12, "maxiter": 1000},
+    )
+    if not result.success:
+        raise ModelError(f"residual optimizer failed: {result.message}")
+
+    candidate = ResidualModel(
+        intercept=float(result.x[0]),
+        coefficients=tuple(float(value) for value in result.x[1:]),
+        feature_means=means,
+        feature_scales=scales,
+        component_weight=1.0,
+    )
+    corrected = candidate.predict(validation_x, validation_p)
     base_metrics = probability_metrics(validation_y, validation_p)
     corrected_metrics = probability_metrics(validation_y, corrected)
     improves = corrected_metrics.log_loss < base_metrics.log_loss and corrected_metrics.brier < base_metrics.brier
-    return ResidualModel(estimator=estimator, component_weight=1.0 if improves else 0.0)
+    if improves:
+        return candidate
+    return ResidualModel(
+        intercept=candidate.intercept,
+        coefficients=candidate.coefficients,
+        feature_means=candidate.feature_means,
+        feature_scales=candidate.feature_scales,
+        component_weight=0.0,
+    )
 
 
 def fit_stacker(oof_predictions: Mapping[str, Sequence[float]], labels: Sequence[int]) -> Stacker:
