@@ -72,17 +72,32 @@ class Stacker:
         self.weights = dict(weights)
 
     def predict(self, component_predictions: Mapping[str, Sequence[float]]) -> list[float]:
-        if set(component_predictions) != set(self.weights):
-            raise ModelError("stacker component set does not match fitted weights")
-        lengths = {len(values) for values in component_predictions.values()}
+        known_components = set(self.weights)
+        provided_components = set(component_predictions)
+        unknown_components = provided_components - known_components
+        if unknown_components:
+            raise ModelError("stacker received unknown component")
+
+        active_components = {name for name, weight in self.weights.items() if weight > 0.0}
+        missing_active = active_components - provided_components
+        if missing_active:
+            raise ModelError("stacker active component is missing")
+        if not active_components:
+            raise ModelError("stacker requires at least one active component")
+
+        lengths = {len(component_predictions[name]) for name in active_components}
         if len(lengths) != 1:
-            raise ModelError("stacker components must have equal lengths")
-        count = lengths.pop() if lengths else 0
+            raise ModelError("stacker active components must have equal lengths")
+        count = lengths.pop()
         if count == 0:
             raise ModelError("stacker requires at least one prediction")
+
         output: list[float] = []
         for index in range(count):
-            value = sum(self.weights[name] * float(component_predictions[name][index]) for name in self.weights)
+            value = sum(
+                self.weights[name] * float(component_predictions[name][index])
+                for name in active_components
+            )
             output.append(min(1.0, max(0.0, value)))
         return output
 
