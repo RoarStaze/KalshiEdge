@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from kalshi_edge.bootstrap import models, splits
@@ -50,6 +52,10 @@ def _folds(rows: tuple[FeatureRow, ...]):
     )
 
 
+def _logit(probability: float) -> float:
+    return math.log(probability / (1.0 - probability))
+
+
 def test_candidate_training_is_seeded_and_never_scores_lockbox() -> None:
     rows = _rows()
     folds = _folds(rows)
@@ -94,6 +100,31 @@ def test_residual_model_is_zero_weight_when_it_fails_to_beat_kalshi_prior() -> N
 
     assert fitted.component_weight == 0.0
     assert fitted.predict(validation_x, validation_prior) == pytest.approx(validation_prior)
+
+
+def test_residual_model_uses_kalshi_logit_as_fixed_unit_offset() -> None:
+    train_x = [[-1.0], [-0.7], [-0.4], [0.4], [0.7], [1.0]]
+    train_y = [0, 0, 0, 1, 1, 1]
+    train_prior = [0.5] * 6
+    validation_x = [[-0.8], [-0.5], [0.5], [0.8]]
+    validation_y = [0, 0, 1, 1]
+    validation_prior = [0.5] * 4
+
+    fitted = models.fit_residual_model(
+        train_x,
+        train_y,
+        train_prior,
+        validation_x,
+        validation_y,
+        validation_prior,
+        seed=73115,
+    )
+
+    assert fitted.component_weight == 1.0
+    low, high = fitted.predict([[0.0], [0.0]], [0.2, 0.8])
+    corrected_logit_gap = _logit(high) - _logit(low)
+    prior_logit_gap = _logit(0.8) - _logit(0.2)
+    assert corrected_logit_gap == pytest.approx(prior_logit_gap, rel=1e-7, abs=1e-7)
 
 
 def test_simplex_stacker_has_nonnegative_unit_sum_weights_and_favors_better_component() -> None:
