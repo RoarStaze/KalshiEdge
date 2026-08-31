@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 
 import pytest
 
@@ -37,6 +38,49 @@ def _training_rows() -> tuple[FeatureRow, ...]:
                 source_max_ts_ns={"binance": base + index * 900 * NS},
             )
         )
+    return tuple(rows)
+
+
+def _validation_rows() -> tuple[FeatureRow, ...]:
+    rows: list[FeatureRow] = []
+    base = 1_900_000_000_000_000_000
+    for index, (ret, label) in enumerate(((-0.0008, 0), (-0.0002, 0), (0.0002, 1), (0.0008, 1))):
+        rows.append(
+            FeatureRow(
+                market_ticker=f"KXBTC15M-VALID-{index}",
+                market_date="2026-08-01",
+                split_group_id=f"KXBTC15M-VALID-{index}",
+                checkpoint_ts_ns=base + index * 900 * NS,
+                label_yes=label,
+                features={
+                    "seconds_remaining": 120.0,
+                    "strike": 100_000.0,
+                    "btc_close": 100_000.0 * (1.0 + ret),
+                    "btc_return_5s": ret,
+                    "btc_return_5s_available": 1.0,
+                    "btc_realized_vol_60s": 0.0008,
+                },
+                source_max_ts_ns={"binance": base + index * 900 * NS},
+            )
+        )
+    rows.append(
+        FeatureRow(
+            market_ticker="KXBTC15M-VALID-SUBMINUTE",
+            market_date="2026-08-01",
+            split_group_id="KXBTC15M-VALID-SUBMINUTE",
+            checkpoint_ts_ns=base + 4 * 900 * NS,
+            label_yes=1,
+            features={
+                "seconds_remaining": 45.0,
+                "strike": 100_000.0,
+                "btc_close": 100_020.0,
+                "btc_return_5s": 0.0002,
+                "btc_return_5s_available": 1.0,
+                "btc_realized_vol_60s": 0.0008,
+            },
+            source_max_ts_ns={"binance": base + 4 * 900 * NS},
+        )
+    )
     return tuple(rows)
 
 
@@ -169,3 +213,64 @@ def test_partial_final_minute_probability_is_bounded_and_reproducible(candidate:
 
     assert 0.0 <= first <= 1.0
     assert first == second
+
+
+def _metrics(candidate: str, log_loss: float, brier: float, calibration: float):
+    return structural.StructuralCandidateMetrics(
+        candidate=candidate,
+        log_loss=log_loss,
+        brier_score=brier,
+        calibration_error=calibration,
+        row_count=10,
+    )
+
+
+def test_candidate_choice_orders_log_loss_then_brier_then_calibration() -> None:
+    assert structural.choose_structural_candidate(
+        (_metrics("diffusion", 0.20, 0.20, 0.20), _metrics("empirical_residual", 0.21, 0.01, 0.01))
+    ) == "diffusion"
+    assert structural.choose_structural_candidate(
+        (_metrics("diffusion", 0.20, 0.10, 0.20), _metrics("empirical_residual", 0.20, 0.09, 0.30))
+    ) == "empirical_residual"
+    assert structural.choose_structural_candidate(
+        (_metrics("diffusion", 0.20, 0.10, 0.05), _metrics("empirical_residual", 0.20, 0.10, 0.04))
+    ) == "empirical_residual"
+
+
+def test_chronological_selector_evaluates_only_pre_final_rows_and_saves_evidence(tmp_path) -> None:
+    selection = structural.select_structural_model(
+        _training_rows(),
+        _validation_rows(),
+        seed=73115,
+        simulations=128,
+    )
+
+    assert selection.model.candidate == selection.evidence.chosen_candidate
+    assert selection.evidence.evaluated_rows == 4
+    assert selection.evidence.excluded_subminute_rows == 1
+    assert selection.evidence.training_end_ts_ns < selection.evidence.validation_start_ts_ns
+    assert {metric.candidate for metric in selection.evidence.metrics} == {"diffusion", "empirical_residual"}
+
+    evidence_path = tmp_path / "structural-selection.json"
+    structural.save_selection_evidence(selection.evidence, evidence_path)
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert payload["chosen_candidate"] == selection.evidence.chosen_candidate
+    assert payload["evaluated_rows"] == 4
+
+
+def test_chronological_selector_rejects_split_group_overlap() -> None:
+    validation = list(_validation_rows())
+    validation[0] = validation[0].model_copy(update={"split_group_id": _training_rows()[0].split_group_id})
+
+    with pytest.raises(structural.StructuralDataError, match="split group overlap"):
+        structural.select_structural_model(_training_rows(), validation, simulations=64)
+
+
+def test_chronological_selector_rejects_nonchronological_validation() -> None:
+    validation = list(_validation_rows())
+    validation[0] = validation[0].model_copy(
+        update={"checkpoint_ts_ns": _training_rows()[0].checkpoint_ts_ns - NS}
+    )
+
+    with pytest.raises(structural.StructuralDataError, match="strictly after"):
+        structural.select_structural_model(_training_rows(), validation, simulations=64)
