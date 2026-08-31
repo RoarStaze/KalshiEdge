@@ -1,0 +1,2 @@
+# Research-only dependencies; not installed in the Phase 1 runtime container.
+pyarrow==21.0.0
