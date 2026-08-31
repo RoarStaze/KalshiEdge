@@ -39,8 +39,13 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_backfill = sub.add_parser("bootstrap-backfill", help="backfill bootstrap historical data")
     bootstrap_backfill.add_argument("--source", choices=("kalshi", "binance", "all"), default="all")
     sub.add_parser("bootstrap-build-dataset", help="build point-in-time bootstrap feature dataset")
-    sub.add_parser("bootstrap-train", help="train bootstrap probability models")
-    sub.add_parser("bootstrap-evaluate", help="evaluate bootstrap models")
+
+    bootstrap_train = sub.add_parser("bootstrap-train", help="train bootstrap probability models")
+    bootstrap_train.add_argument("--git-sha", default=None, help="explicit 40-character Git SHA for reproducible host runs")
+
+    bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate bootstrap models")
+    bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
+
     sub.add_parser("predict-live", help="run the read-only live bootstrap predictor")
     return parser
 
@@ -91,7 +96,23 @@ def main(argv: list[str] | None = None) -> int:
         report = build_dataset(bootstrap.bootstrap_dir, bootstrap)
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
-    raise AssertionError("bootstrap command execution is wired by later implementation tasks")
+    if args.command == "bootstrap-train":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.evaluate import train_experiment
+
+        bootstrap = BootstrapSettings()
+        report = train_experiment(bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha)
+        print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0
+    if args.command == "bootstrap-evaluate":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.evaluate import run_lockbox_evaluation
+
+        bootstrap = BootstrapSettings()
+        run = run_lockbox_evaluation(bootstrap.bootstrap_dir, args.bundle)
+        print(json.dumps(run.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0 if run.decision.promoted else 2
+    raise AssertionError("live bootstrap prediction execution is wired by Task 9")
 
 
 if __name__ == "__main__":
