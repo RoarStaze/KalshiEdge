@@ -94,14 +94,18 @@ def test_complete_final_minute_collapses_to_verified_at_least_rule() -> None:
 
 
 @pytest.mark.parametrize(
-    ("elapsed", "observations", "match"),
+    ("elapsed", "sample_specs", "match"),
     [
-        (2, (_observation(0, 100_000.0), _observation(0, 100_001.0)), "duplicate"),
-        (3, (_observation(0, 100_000.0), _observation(2, 100_001.0)), "missing"),
-        (2, (_observation(0, 100_000.0), _observation(1, 100_001.0, ambiguous=True)), "ambiguous"),
+        (2, ((0, 100_000.0, False), (0, 100_001.0, False)), "duplicate"),
+        (3, ((0, 100_000.0, False), (2, 100_001.0, False)), "missing"),
+        (2, ((0, 100_000.0, False), (1, 100_001.0, True)), "ambiguous"),
     ],
 )
-def test_final_minute_bad_sample_quality_fails_closed(elapsed, observations, match: str) -> None:
+def test_final_minute_bad_sample_quality_fails_closed(elapsed, sample_specs, match: str) -> None:
+    observations = tuple(
+        _observation(second_index, value, ambiguous=ambiguous)
+        for second_index, value, ambiguous in sample_specs
+    )
     state = structural.FinalMinuteState(
         strike=100_000.0,
         current_value=100_001.0,
