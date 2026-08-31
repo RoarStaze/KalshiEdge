@@ -14,7 +14,7 @@ from .validation import evaluate_phase1_gate, verify_dataset
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="kalshi-edge", description="KXBTC15M Phase 1 empirical data foundation")
+    parser = argparse.ArgumentParser(prog="kalshi-edge", description="KXBTC15M empirical data and prediction engine")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("collect", help="run the read-only Kalshi/BRTI collector")
 
@@ -35,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     replay_all = sub.add_parser("replay-dataset", help="deterministically replay one market across all WS segments")
     replay_all.add_argument("data_dir", type=Path)
     replay_all.add_argument("market_ticker")
+
+    bootstrap_backfill = sub.add_parser("bootstrap-backfill", help="backfill bootstrap historical data")
+    bootstrap_backfill.add_argument("--source", choices=("kalshi", "binance", "all"), default="all")
+    sub.add_parser("bootstrap-build-dataset", help="build point-in-time bootstrap feature dataset")
+    sub.add_parser("bootstrap-train", help="train bootstrap probability models")
+    sub.add_parser("bootstrap-evaluate", help="evaluate bootstrap models")
+    sub.add_parser("predict-live", help="run the read-only live bootstrap predictor")
     return parser
 
 
@@ -64,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         result = replay_dataset(args.data_dir, args.market_ticker)
         print(json.dumps(result.__dict__, indent=2, sort_keys=True))
         return 0
-    raise AssertionError("unreachable")
+    raise AssertionError("bootstrap command execution is wired by later implementation tasks")
 
 
 if __name__ == "__main__":
