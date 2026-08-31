@@ -17,7 +17,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9,<10", "pytest-asyncio>=1.2,<2"]
-research = ["duckdb>=1.4,<2", "pyarrow>=21,<22"]
+research = [
+  "duckdb>=1.5,<2",
+  "numpy>=2.5,<3",
+  "pyarrow>=21,<22",
+  "scikit-learn>=1.9,<2",
+  "scipy>=1.18,<2",
+  "xgboost-cpu>=3.4,<4",
+]
 
 [project.scripts]
 kalshi-edge = "kalshi_edge.cli:main"
