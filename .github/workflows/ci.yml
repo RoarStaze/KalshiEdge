@@ -19,6 +19,8 @@ jobs:
           cache: pip
       - name: Install locked dependencies
         run: pip install -r requirements.lock
+      - name: Install research test dependencies
+        run: pip install -r requirements.research.lock
       - name: Install package
         run: pip install --no-deps --no-build-isolation -e .
       - name: Validate dependency environment
