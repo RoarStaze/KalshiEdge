@@ -40,10 +40,10 @@ def _training_rows() -> tuple[FeatureRow, ...]:
     return tuple(rows)
 
 
-def _model():
+def _model(candidate: str = "diffusion"):
     return structural.StructuralModel.fit(
         _training_rows(),
-        candidate="diffusion",
+        candidate=candidate,
         seed=73115,
         simulations=256,
     )
@@ -116,3 +116,56 @@ def test_final_minute_bad_sample_quality_fails_closed(elapsed, sample_specs, mat
 
     with pytest.raises(structural.StructuralDataError, match=match):
         _model().predict_final_minute(state)
+
+
+@pytest.mark.parametrize("candidate", ["diffusion", "empirical_residual"])
+def test_seeded_structural_probability_is_bounded_reproducible_and_monotone(candidate: str) -> None:
+    model = _model(candidate)
+    low = structural.StructuralState(
+        current_value=99_900.0,
+        strike=100_000.0,
+        seconds_remaining=120.0,
+        volatility_per_second=0.0008,
+        recent_return_5s=0.0,
+    )
+    high = low.model_copy(update={"current_value": 100_100.0})
+
+    p_low_first = model.predict_proba(low)
+    p_low_second = model.predict_proba(low)
+    p_high = model.predict_proba(high)
+
+    assert 0.0 <= p_low_first <= 1.0
+    assert p_low_first == p_low_second
+    assert 0.0 <= p_high <= 1.0
+    assert p_high >= p_low_first
+
+
+def test_pre_final_prediction_requires_exact_final_minute_state_once_window_has_started() -> None:
+    state = structural.StructuralState(
+        current_value=100_000.0,
+        strike=100_000.0,
+        seconds_remaining=59.0,
+        volatility_per_second=0.0008,
+        recent_return_5s=0.0,
+    )
+
+    with pytest.raises(structural.StructuralDataError, match="final-minute state"):
+        _model().predict_proba(state)
+
+
+@pytest.mark.parametrize("candidate", ["diffusion", "empirical_residual"])
+def test_partial_final_minute_probability_is_bounded_and_reproducible(candidate: str) -> None:
+    model = _model(candidate)
+    state = structural.FinalMinuteState(
+        strike=100_000.0,
+        current_value=100_020.0,
+        volatility_per_second=0.0008,
+        elapsed_observations=30,
+        observations=tuple(_observation(index, 100_000.0 + index) for index in range(30)),
+    )
+
+    first = model.predict_final_minute(state)
+    second = model.predict_final_minute(state)
+
+    assert 0.0 <= first <= 1.0
+    assert first == second
