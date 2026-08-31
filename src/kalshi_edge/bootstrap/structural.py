@@ -2,8 +2,11 @@ from __future__ import annotations
 
 """Structural KXBTC15M settlement probability engine."""
 
+import json
 import math
+import os
 import random
+from pathlib import Path
 from typing import Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -125,6 +128,11 @@ def _fit_path_statistics(training_rows: Sequence[FeatureRow]) -> tuple[float, fl
                 residuals.append(residual)
     if not residuals:
         residuals.append(0.0)
+    else:
+        mean_residual = sum(residuals) / len(residuals)
+        centered = [value - mean_residual for value in residuals]
+        rms = math.sqrt(sum(value * value for value in centered) / len(centered))
+        residuals = [value / rms for value in centered] if rms > 0.0 else [0.0]
     return drift, drift_cap, tuple(residuals)
 
 
@@ -245,3 +253,163 @@ class StructuralModel(BaseModel):
             if sum(future) / remaining >= required_mean:
                 wins += 1
         return wins / self.simulations
+
+
+class StructuralCandidateMetrics(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    candidate: CandidateName
+    log_loss: float = Field(ge=0.0)
+    brier_score: float = Field(ge=0.0, le=1.0)
+    calibration_error: float = Field(ge=0.0, le=1.0)
+    row_count: int = Field(gt=0)
+
+
+class StructuralSelectionEvidence(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    chosen_candidate: CandidateName
+    metrics: tuple[StructuralCandidateMetrics, ...]
+    training_end_ts_ns: int
+    validation_start_ts_ns: int
+    evaluated_rows: int = Field(gt=0)
+    excluded_subminute_rows: int = Field(ge=0)
+    seed: int
+    simulations: int = Field(gt=0)
+
+
+class StructuralSelection(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: StructuralModel
+    evidence: StructuralSelectionEvidence
+
+
+def structural_state_from_row(row: FeatureRow) -> StructuralState:
+    features = row.features
+    required = ("btc_close", "strike", "seconds_remaining", "btc_realized_vol_60s")
+    missing = [name for name in required if name not in features]
+    if missing:
+        raise StructuralDataError(f"structural validation row is missing features: {', '.join(missing)}")
+    recent_return = features.get("btc_return_5s", 0.0) if features.get("btc_return_5s_available", 0.0) > 0.0 else 0.0
+    return StructuralState(
+        current_value=features["btc_close"],
+        strike=features["strike"],
+        seconds_remaining=features["seconds_remaining"],
+        volatility_per_second=features["btc_realized_vol_60s"],
+        recent_return_5s=recent_return,
+    )
+
+
+def _candidate_metrics(candidate: CandidateName, probabilities: Sequence[float], labels: Sequence[int]) -> StructuralCandidateMetrics:
+    if not probabilities or len(probabilities) != len(labels):
+        raise StructuralDataError("candidate metrics require aligned non-empty probabilities and labels")
+    epsilon = 1e-12
+    clipped = [_clip(probability, epsilon, 1.0 - epsilon) for probability in probabilities]
+    log_loss = -sum(
+        label * math.log(probability) + (1 - label) * math.log(1.0 - probability)
+        for probability, label in zip(clipped, labels)
+    ) / len(labels)
+    brier = sum((probability - label) ** 2 for probability, label in zip(probabilities, labels)) / len(labels)
+
+    calibration_total = 0.0
+    bin_count = 10
+    for bin_index in range(bin_count):
+        members = [
+            (probability, label)
+            for probability, label in zip(probabilities, labels)
+            if min(int(probability * bin_count), bin_count - 1) == bin_index
+        ]
+        if not members:
+            continue
+        mean_probability = sum(probability for probability, _ in members) / len(members)
+        mean_label = sum(label for _, label in members) / len(members)
+        calibration_total += len(members) * abs(mean_probability - mean_label)
+    calibration_error = calibration_total / len(labels)
+    return StructuralCandidateMetrics(
+        candidate=candidate,
+        log_loss=log_loss,
+        brier_score=brier,
+        calibration_error=calibration_error,
+        row_count=len(labels),
+    )
+
+
+def choose_structural_candidate(metrics: Sequence[StructuralCandidateMetrics]) -> CandidateName:
+    if not metrics:
+        raise StructuralDataError("candidate selection requires metrics")
+    return min(
+        metrics,
+        key=lambda item: (item.log_loss, item.brier_score, item.calibration_error, item.candidate),
+    ).candidate
+
+
+def _group_id(row: FeatureRow) -> str:
+    return row.split_group_id or row.market_ticker
+
+
+def select_structural_model(
+    training_rows: Sequence[FeatureRow],
+    validation_rows: Sequence[FeatureRow],
+    *,
+    seed: int = 73115,
+    simulations: int = 4096,
+) -> StructuralSelection:
+    if not training_rows or not validation_rows:
+        raise StructuralDataError("structural selection requires non-empty training and validation rows")
+
+    training_groups = {_group_id(row) for row in training_rows}
+    validation_groups = {_group_id(row) for row in validation_rows}
+    overlap = training_groups & validation_groups
+    if overlap:
+        raise StructuralDataError(f"split group overlap between training and validation: {sorted(overlap)[0]}")
+
+    training_end = max(row.checkpoint_ts_ns for row in training_rows)
+    validation_start = min(row.checkpoint_ts_ns for row in validation_rows)
+    if training_end >= validation_start:
+        raise StructuralDataError("validation rows must occur strictly after all training rows")
+
+    evaluable = [row for row in validation_rows if row.features.get("seconds_remaining", 0.0) >= 60.0]
+    excluded_subminute = len(validation_rows) - len(evaluable)
+    if not evaluable:
+        raise StructuralDataError("no causally evaluable pre-final-minute validation rows")
+
+    models: dict[CandidateName, StructuralModel] = {}
+    metrics: list[StructuralCandidateMetrics] = []
+    labels = [row.label_yes for row in evaluable]
+    for candidate in ("diffusion", "empirical_residual"):
+        model = StructuralModel.fit(
+            training_rows,
+            candidate=candidate,
+            seed=seed,
+            simulations=simulations,
+        )
+        probabilities = [model.predict_proba(structural_state_from_row(row)) for row in evaluable]
+        models[candidate] = model
+        metrics.append(_candidate_metrics(candidate, probabilities, labels))
+
+    chosen = choose_structural_candidate(metrics)
+    evidence = StructuralSelectionEvidence(
+        chosen_candidate=chosen,
+        metrics=tuple(metrics),
+        training_end_ts_ns=training_end,
+        validation_start_ts_ns=validation_start,
+        evaluated_rows=len(evaluable),
+        excluded_subminute_rows=excluded_subminute,
+        seed=seed,
+        simulations=simulations,
+    )
+    return StructuralSelection(model=models[chosen], evidence=evidence)
+
+
+def save_selection_evidence(evidence: StructuralSelectionEvidence, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    content = json.dumps(
+        evidence.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ) + "\n"
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
