@@ -36,6 +36,8 @@ class FeatureRow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     market_ticker: str
+    market_date: str | None = None
+    split_group_id: str | None = None
     checkpoint_ts_ns: int
     label_yes: Literal[0, 1]
     features: dict[str, float]
