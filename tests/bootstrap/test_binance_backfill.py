@@ -64,12 +64,12 @@ class _FakeBinanceClient:
         pass
 
 
-def _seed_market(root: Path) -> None:
+def _seed_market(root: Path, payload: dict | None = None) -> None:
     write_raw_artifact(
         root=root,
         source="kalshi",
         logical_name="markets/KXBTC15M-TEST.json",
-        content=(json.dumps(_market_payload(), sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        content=(json.dumps(payload or _market_payload(), sort_keys=True, separators=(",", ":")) + "\n").encode(),
         metadata={"source_locator": "test"},
     )
 
@@ -109,6 +109,28 @@ def test_backfill_binance_derives_utc_dates_from_kalshi_markets_and_is_increment
     assert report_second.normalized_archives == 0
     assert fake_second.urls == []
     assert converted_second == []
+
+
+def test_backfill_binance_includes_previous_utc_day_for_900s_feature_lookback(tmp_path: Path) -> None:
+    payload = _market_payload()
+    payload["market"].update(
+        open_time="2026-08-02T00:05:00Z",
+        close_time="2026-08-02T00:20:00Z",
+        settlement_ts="2026-08-02T00:21:00Z",
+    )
+    _seed_market(tmp_path, payload)
+    fake = _FakeBinanceClient()
+
+    def converter(source: Path, target: Path) -> int:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"PAR1-test")
+        return 1
+
+    report = backfill_binance(BootstrapSettings(bootstrap_dir=tmp_path), client=fake, parquet_converter=converter)
+
+    assert report.dates == ("2026-08-01", "2026-08-02")
+    assert fake.urls[0].endswith("BTCUSDT-1s-2026-08-01.zip")
+    assert fake.urls[1].endswith("BTCUSDT-1s-2026-08-02.zip")
 
 
 def test_backfill_binance_requires_verified_kalshi_market_universe(tmp_path: Path) -> None:
