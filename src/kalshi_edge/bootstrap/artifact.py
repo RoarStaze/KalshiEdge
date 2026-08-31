@@ -121,6 +121,9 @@ class ModelBundle(BaseModel):
     excluded_components: tuple[str, ...] = ()
     serialized_pipeline_b64: str
     serialized_pipeline_sha256: str
+    source_experiment_sha256: str | None = None
+    promotion_rule: str | None = None
+    promotion_reason_codes: tuple[str, ...] = ()
     bundle_sha256: str | None = None
 
     @field_validator("git_sha")
@@ -149,9 +152,9 @@ class ModelBundle(BaseModel):
             raise ValueError("feature names must be non-empty and unique")
         return value
 
-    @field_validator("bundle_sha256")
+    @field_validator("source_experiment_sha256", "bundle_sha256")
     @classmethod
-    def valid_bundle_sha(cls, value: str | None) -> str | None:
+    def valid_optional_sha(cls, value: str | None) -> str | None:
         return None if value is None else _validated_sha256(value)
 
 
