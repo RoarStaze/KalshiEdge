@@ -1,0 +1,24 @@
+# Phase 1 dependency lock captured 2026-08-31 from the verified test environment.
+annotated-types==0.7.0
+anyio==4.13.0
+certifi==2026.5.20
+cffi==2.0.0
+cryptography==46.0.4
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.17
+iniconfig==2.3.0
+packaging==25.0
+pluggy==1.6.0
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+pydantic-settings==2.14.1
+Pygments==2.20.0
+pytest==9.0.2
+python-dotenv==1.2.2
+setuptools==82.0.1
+typing_extensions==4.16.0
+typing-inspection==0.4.2
+websockets==16.0
