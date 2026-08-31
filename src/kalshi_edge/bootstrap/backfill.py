@@ -21,6 +21,9 @@ from .labels import LabelNormalizationError, normalize_market_label
 from .provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact
 
 
+FEATURE_LOOKBACK_SECONDS = 900
+
+
 class KalshiBackfillReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -189,7 +192,10 @@ def _dates_for_valid_kalshi_markets(root: Path) -> list[date]:
         except LabelNormalizationError:
             continue
         valid_markets += 1
-        first = datetime.fromtimestamp(label.open_ts_ns // 1_000_000_000, tz=timezone.utc).date()
+        first = datetime.fromtimestamp(
+            label.open_ts_ns // 1_000_000_000 - FEATURE_LOOKBACK_SECONDS,
+            tz=timezone.utc,
+        ).date()
         last = datetime.fromtimestamp(label.close_ts_ns // 1_000_000_000, tz=timezone.utc).date()
         current = first
         while current <= last:
