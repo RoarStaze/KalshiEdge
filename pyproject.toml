@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalshi-edge"
+version = "0.1.0"
+description = "KXBTC15M empirical edge research and data integrity engine"
+requires-python = ">=3.12"
+dependencies = [
+  "cryptography>=46,<47",
+  "httpx>=0.28,<0.29",
+  "pydantic>=2.13,<3",
+  "pydantic-settings>=2.14,<3",
+  "websockets>=16,<17",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10", "pytest-asyncio>=1.2,<2"]
+research = ["duckdb>=1.4,<2", "pyarrow>=21,<22"]
+
+[project.scripts]
+kalshi-edge = "kalshi_edge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

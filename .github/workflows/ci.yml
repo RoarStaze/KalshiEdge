@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install locked dependencies
+        run: pip install -r requirements.lock
+      - name: Install package
+        run: pip install --no-deps --no-build-isolation -e .
+      - name: Validate dependency environment
+        run: pip check
+      - name: Compile
+        run: python -m compileall -q src
+      - name: CLI smoke test
+        run: kalshi-edge --help
+      - name: Test
+        run: pytest -q
+      - name: Build production container
+        run: docker build --build-arg BUILD_GIT_SHA=${GITHUB_SHA} -t kalshi-edge:ci .
