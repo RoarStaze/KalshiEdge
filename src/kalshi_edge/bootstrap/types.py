@@ -9,12 +9,17 @@ class MarketLabel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ticker: str
+    event_ticker: str | None = None
     strike: float
+    strike_type: str | None = None
+    yes_is_above: bool | None = None
     result: Literal["yes", "no"]
     settlement_value: float
     open_ts_ns: int
     close_ts_ns: int
     settlement_ts_ns: int | None = None
+    rules_primary: str | None = None
+    rules_secondary: str | None = None
 
 
 class FeedQuality(BaseModel):
