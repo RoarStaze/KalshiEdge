@@ -323,11 +323,20 @@ class LivePredictor:
         pipeline: object,
         settings: BootstrapSettings,
     ) -> None:
+        if bundle.stage != "promoted":
+            raise LiveModelError("live predictor accepts promoted model bundles only")
+        if bundle.source_experiment_sha256 is None or bundle.promotion_rule is None:
+            raise LiveModelError("promoted bundle lacks Task-8 promotion provenance")
+        if bundle.bundle_sha256 is None:
+            raise LiveModelError("promoted bundle is not hash-sealed")
+        if artifact.bundle_sha256(bundle) != bundle.bundle_sha256:
+            raise LiveModelError("promoted bundle failed content-hash verification")
+
         self.state = state
         self.bundle = bundle
         self.pipeline = pipeline
         self.settings = settings
-        self.model_hash = bundle.bundle_sha256 or artifact.bundle_sha256(bundle)
+        self.model_hash = bundle.bundle_sha256
         self._model_feature_mismatch = tuple(bundle.feature_names) != tuple(getattr(pipeline, "required_feature_names", ()))
 
     def _quality(self, now_ns: int, reasons: Sequence[str] = ()) -> FeedQuality:
