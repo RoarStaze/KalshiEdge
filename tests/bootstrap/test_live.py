@@ -87,7 +87,7 @@ class DummyPipeline:
 
 def _bundle(feature_names, *, stage="promoted", payload=b"pipeline") -> artifact.ModelBundle:
     digest = hashlib.sha256(payload).hexdigest()
-    return artifact.ModelBundle(
+    bundle = artifact.ModelBundle(
         stage=stage,
         model_version="bootstrap-hybrid-v1",
         git_sha="a" * 40,
@@ -114,6 +114,7 @@ def _bundle(feature_names, *, stage="promoted", payload=b"pipeline") -> artifact
         source_experiment_sha256="d" * 64 if stage == "promoted" else None,
         promotion_rule="test-rule" if stage == "promoted" else None,
     )
+    return bundle.model_copy(update={"bundle_sha256": artifact.bundle_sha256(bundle)})
 
 
 def _healthy_state(now_ns: int, *, final_minute: bool = False):
@@ -178,6 +179,39 @@ def test_live_feature_state_reuses_causal_historical_feature_semantics() -> None
     assert row.features["kalshi_mid"] == 0.60
     assert row.features["btc_close"] > 0.0
     assert max(row.source_max_ts_ns.values()) <= now
+
+
+def test_predictor_constructor_rejects_unpromoted_unsealed_or_hash_mismatched_bundle() -> None:
+    from kalshi_edge.bootstrap.live import LiveModelError, LivePredictor
+
+    state = _healthy_state(CLOSE - 120 * NS)
+    pipeline = DummyPipeline()
+    settings = BootstrapSettings()
+    promoted = _bundle(pipeline.required_feature_names)
+
+    with pytest.raises(LiveModelError):
+        LivePredictor(
+            state=state,
+            bundle=_bundle(pipeline.required_feature_names, stage="experiment"),
+            pipeline=pipeline,
+            settings=settings,
+        )
+
+    with pytest.raises(LiveModelError):
+        LivePredictor(
+            state=state,
+            bundle=promoted.model_copy(update={"bundle_sha256": None}),
+            pipeline=pipeline,
+            settings=settings,
+        )
+
+    with pytest.raises(LiveModelError):
+        LivePredictor(
+            state=state,
+            bundle=promoted.model_copy(update={"bundle_sha256": "0" * 64}),
+            pipeline=pipeline,
+            settings=settings,
+        )
 
 
 def test_predictor_fails_closed_for_required_live_health_and_schema_errors() -> None:
