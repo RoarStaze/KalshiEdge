@@ -40,13 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_backfill.add_argument("--source", choices=("kalshi", "binance", "all"), default="all")
     sub.add_parser("bootstrap-build-dataset", help="build point-in-time bootstrap feature dataset")
 
-    bootstrap_train = sub.add_parser("bootstrap-train", help="train bootstrap probability models")
+    bootstrap_train = sub.add_parser("bootstrap-train", help="train a development-only bootstrap experiment")
     bootstrap_train.add_argument("--git-sha", default=None, help="explicit 40-character Git SHA for reproducible host runs")
 
-    bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate bootstrap models")
+    bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate the untouched lockbox and promote an eligible bootstrap model")
     bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
 
-    sub.add_parser("predict-live", help="run the read-only live bootstrap predictor")
+    sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
     return parser
 
 
