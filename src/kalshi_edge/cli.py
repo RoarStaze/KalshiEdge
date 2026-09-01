@@ -112,7 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         run = run_lockbox_evaluation(bootstrap.bootstrap_dir, args.bundle)
         print(json.dumps(run.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0 if run.decision.promoted else 2
-    raise AssertionError("live bootstrap prediction execution is wired by Task 9")
+    if args.command == "predict-live":
+        from .bootstrap.live import run_live
+
+        return run_live()
+    raise AssertionError(f"unhandled command: {args.command}")
 
 
 if __name__ == "__main__":
