@@ -167,21 +167,31 @@ def _sha256_file(path: Path) -> str:
 def _verified_context(root: Path) -> DatasetContext:
     dataset_path, manifest_path, provenance_path = _dataset_paths(root)
     try:
-        manifest = verify_artifact(dataset_path, manifest_path)
+        verified = verify_artifact(dataset_path, manifest_path)
     except Exception as exc:  # provenance module exposes domain-specific integrity errors
         raise TrainingError("feature dataset failed manifest verification") from exc
-    metadata = dict(manifest.metadata or {})
+    if not verified:
+        raise TrainingError("feature dataset failed manifest verification")
+
+    manifest = _read_json(manifest_path)
+    metadata_value = manifest.get("metadata")
+    if not isinstance(metadata_value, dict):
+        raise TrainingError("dataset manifest lacks metadata")
+    metadata = dict(metadata_value)
     feature_names = tuple(str(value) for value in metadata.get("feature_names", ()))
     if not feature_names:
         raise TrainingError("dataset manifest lacks exact feature-name order")
+    manifest_sha = str(manifest.get("sha256", "")).lower()
+    if len(manifest_sha) != 64 or any(character not in "0123456789abcdef" for character in manifest_sha):
+        raise TrainingError("dataset manifest lacks a valid SHA-256")
 
     provenance = _read_json(provenance_path)
-    if str(provenance.get("dataset_sha256", "")).lower() != manifest.sha256.lower():
+    if str(provenance.get("dataset_sha256", "")).lower() != manifest_sha:
         raise TrainingError("dataset provenance hash does not match verified parquet")
     inputs = provenance.get("inputs")
     if not isinstance(inputs, list):
         raise TrainingError("dataset provenance lacks input hash list")
-    input_hashes: dict[str, str] = {"derived/features.parquet": manifest.sha256.lower()}
+    input_hashes: dict[str, str] = {"derived/features.parquet": manifest_sha}
     for item in inputs:
         if not isinstance(item, dict) or "path" not in item or "sha256" not in item:
             raise TrainingError("dataset provenance contains malformed input hash")
