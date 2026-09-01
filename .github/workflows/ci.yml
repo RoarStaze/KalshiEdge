@@ -19,14 +19,20 @@ jobs:
           cache: pip
       - name: Install locked dependencies
         run: pip install -r requirements.lock
+      - name: Install research test dependencies
+        run: pip install -r requirements.research.lock
       - name: Install package
         run: pip install --no-deps --no-build-isolation -e .
       - name: Validate dependency environment
         run: pip check
       - name: Compile
-        run: python -m compileall -q src
+        run: python -m compileall -q src tests
       - name: CLI smoke test
         run: kalshi-edge --help
+      - name: Task 10 end-to-end
+        run: pytest -q tests/bootstrap/test_end_to_end.py
+      - name: Bootstrap tests
+        run: pytest -q tests/bootstrap
       - name: Test
         run: pytest -q
       - name: Build production container

@@ -14,7 +14,7 @@ from .validation import evaluate_phase1_gate, verify_dataset
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="kalshi-edge", description="KXBTC15M Phase 1 empirical data foundation")
+    parser = argparse.ArgumentParser(prog="kalshi-edge", description="KXBTC15M empirical data and prediction engine")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("collect", help="run the read-only Kalshi/BRTI collector")
 
@@ -35,6 +35,18 @@ def build_parser() -> argparse.ArgumentParser:
     replay_all = sub.add_parser("replay-dataset", help="deterministically replay one market across all WS segments")
     replay_all.add_argument("data_dir", type=Path)
     replay_all.add_argument("market_ticker")
+
+    bootstrap_backfill = sub.add_parser("bootstrap-backfill", help="backfill bootstrap historical data")
+    bootstrap_backfill.add_argument("--source", choices=("kalshi", "binance", "all"), default="all")
+    sub.add_parser("bootstrap-build-dataset", help="build point-in-time bootstrap feature dataset")
+
+    bootstrap_train = sub.add_parser("bootstrap-train", help="train a development-only bootstrap experiment")
+    bootstrap_train.add_argument("--git-sha", default=None, help="explicit 40-character Git SHA for reproducible host runs")
+
+    bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate the untouched lockbox and promote an eligible bootstrap model")
+    bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
+
+    sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
     return parser
 
 
@@ -64,7 +76,47 @@ def main(argv: list[str] | None = None) -> int:
         result = replay_dataset(args.data_dir, args.market_ticker)
         print(json.dumps(result.__dict__, indent=2, sort_keys=True))
         return 0
-    raise AssertionError("unreachable")
+    if args.command == "bootstrap-backfill":
+        from .bootstrap.backfill import backfill_binance, backfill_kalshi
+        from .bootstrap.config import BootstrapSettings
+
+        bootstrap = BootstrapSettings()
+        reports: dict[str, object] = {}
+        if args.source in {"kalshi", "all"}:
+            reports["kalshi"] = backfill_kalshi(CollectorSettings(), bootstrap).model_dump(mode="json")
+        if args.source in {"binance", "all"}:
+            reports["binance"] = backfill_binance(bootstrap).model_dump(mode="json")
+        print(json.dumps(reports, indent=2, sort_keys=True))
+        return 0
+    if args.command == "bootstrap-build-dataset":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.dataset import build_dataset
+
+        bootstrap = BootstrapSettings()
+        report = build_dataset(bootstrap.bootstrap_dir, bootstrap)
+        print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0
+    if args.command == "bootstrap-train":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.evaluate import train_experiment
+
+        bootstrap = BootstrapSettings()
+        report = train_experiment(bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha)
+        print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0
+    if args.command == "bootstrap-evaluate":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.evaluate import run_lockbox_evaluation
+
+        bootstrap = BootstrapSettings()
+        run = run_lockbox_evaluation(bootstrap.bootstrap_dir, args.bundle)
+        print(json.dumps(run.model_dump(mode="json"), indent=2, sort_keys=True))
+        return 0 if run.decision.promoted else 2
+    if args.command == "predict-live":
+        from .bootstrap.live import run_live
+
+        return run_live()
+    raise AssertionError(f"unhandled command: {args.command}")
 
 
 if __name__ == "__main__":
