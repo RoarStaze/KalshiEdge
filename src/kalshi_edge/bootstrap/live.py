@@ -282,7 +282,7 @@ class LiveFeatureState:
         final_start = market.close_ts_ns - FINAL_MINUTE_SECONDS * NS
         if now_ns < final_start or now_ns > market.close_ts_ns:
             raise LiveStateError("final-minute state requested outside final minute")
-        elapsed = min(60, max(0, int((now_ns - final_start) // NS)))
+        elapsed = min(60, max(0, math.ceil((now_ns - final_start) / NS)))
         by_second: dict[int, list[BRTIObservation]] = {}
         for observation in self.brti_observations:
             if not (final_start <= observation.source_ts_ns < now_ns):
