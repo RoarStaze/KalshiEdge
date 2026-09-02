@@ -46,7 +46,7 @@ def normalize_market_label(payload: dict[str, Any]) -> MarketLabel:
         raise LabelNormalizationError("missing settlement value")
     if strike_raw is None:
         raise LabelNormalizationError("missing floor strike")
-    if strike_type != "greater":
+    if strike_type not in {"greater", "greater_or_equal"}:
         raise LabelNormalizationError(f"unsupported or ambiguous strike_type: {strike_type or '<missing>'}")
 
     try:
