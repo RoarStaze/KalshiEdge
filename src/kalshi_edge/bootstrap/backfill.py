@@ -56,7 +56,15 @@ def _artifact_paths(root: Path, source: str, logical_name: str) -> tuple[Path, P
 
 def _verified_existing(root: Path, source: str, logical_name: str) -> bool:
     data_path, manifest_path = _artifact_paths(root, source, logical_name)
-    return data_path.exists() and manifest_path.exists() and verify_artifact(data_path, manifest_path)
+    data_exists = data_path.exists()
+    manifest_exists = manifest_path.exists()
+    if not data_exists and not manifest_exists:
+        return False
+    if data_exists != manifest_exists:
+        raise RuntimeError(f"provenance is incomplete for existing {source}/{logical_name}")
+    if not verify_artifact(data_path, manifest_path):
+        raise RuntimeError(f"provenance verification failed for existing {source}/{logical_name}")
+    return True
 
 
 def _required_kalshi_history_available(root: Path, ticker: str) -> bool:
