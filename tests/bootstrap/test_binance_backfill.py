@@ -64,12 +64,30 @@ class _FakeBinanceClient:
         pass
 
 
-def _seed_market(root: Path, payload: dict | None = None) -> None:
+def _seed_market(root: Path, payload: dict | None = None, *, include_history: bool = True) -> None:
+    market = payload or _market_payload()
+    ticker = str(market["market"]["ticker"])
     write_raw_artifact(
         root=root,
         source="kalshi",
-        logical_name="markets/KXBTC15M-TEST.json",
-        content=(json.dumps(payload or _market_payload(), sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        logical_name=f"markets/{ticker}.json",
+        content=(json.dumps(market, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        metadata={"source_locator": "test"},
+    )
+    if not include_history:
+        return
+    write_raw_artifact(
+        root=root,
+        source="kalshi",
+        logical_name=f"trades/{ticker}.json",
+        content=(json.dumps({"ticker": ticker, "trades": []}, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        metadata={"source_locator": "test"},
+    )
+    write_raw_artifact(
+        root=root,
+        source="kalshi",
+        logical_name=f"candlesticks/{ticker}.json",
+        content=(json.dumps({"ticker": ticker, "candlesticks": []}, sort_keys=True, separators=(",", ":")) + "\n").encode(),
         metadata={"source_locator": "test"},
     )
 
@@ -135,6 +153,45 @@ def test_backfill_binance_includes_previous_utc_day_for_900s_feature_lookback(tm
 
 def test_backfill_binance_requires_verified_kalshi_market_universe(tmp_path: Path) -> None:
     with pytest.raises(BinanceDataError, match="Kalshi"):
+        backfill_binance(BootstrapSettings(bootstrap_dir=tmp_path), client=_FakeBinanceClient(), parquet_converter=lambda *_: 0)
+
+
+def test_backfill_binance_skips_dates_from_market_missing_required_history(tmp_path: Path) -> None:
+    complete = _market_payload(ticker="KXBTC15M-COMPLETE")
+    complete["market"].update(
+        open_time="2026-08-01T12:00:00Z",
+        close_time="2026-08-01T12:15:00Z",
+        settlement_ts="2026-08-01T12:16:00Z",
+    )
+    incomplete = _market_payload(ticker="KXBTC15M-INCOMPLETE")
+    incomplete["market"].update(
+        open_time="2026-08-03T12:00:00Z",
+        close_time="2026-08-03T12:15:00Z",
+        settlement_ts="2026-08-03T12:16:00Z",
+    )
+    _seed_market(tmp_path, complete, include_history=True)
+    _seed_market(tmp_path, incomplete, include_history=False)
+    fake = _FakeBinanceClient()
+
+    def converter(source: Path, target: Path) -> int:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"PAR1-test")
+        return 1
+
+    report = backfill_binance(BootstrapSettings(bootstrap_dir=tmp_path), client=fake, parquet_converter=converter)
+
+    assert report.dates == ("2026-08-01",)
+    assert len(fake.urls) == 1
+    assert fake.urls[0].endswith("BTCUSDT-1s-2026-08-01.zip")
+
+
+def test_backfill_binance_fails_hard_on_partial_required_history_provenance(tmp_path: Path) -> None:
+    payload = _market_payload()
+    _seed_market(tmp_path, payload, include_history=True)
+    ticker = payload["market"]["ticker"]
+    (tmp_path / f"raw/kalshi/candlesticks/{ticker}.json").unlink()
+
+    with pytest.raises(BinanceDataError, match="provenance"):
         backfill_binance(BootstrapSettings(bootstrap_dir=tmp_path), client=_FakeBinanceClient(), parquet_converter=lambda *_: 0)
 
 
