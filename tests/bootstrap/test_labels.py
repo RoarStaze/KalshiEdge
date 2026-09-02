@@ -45,6 +45,29 @@ def test_normalize_no_label_preserves_official_result() -> None:
     assert label.yes_is_above is True
 
 
+def test_normalize_greater_or_equal_label_preserves_contract_semantics() -> None:
+    payload = _payload(result="yes", settlement="100100.2500")
+    payload["market"]["strike_type"] = "greater_or_equal"
+
+    label = normalize_market_label(payload)
+
+    assert label.strike_type == "greater_or_equal"
+    assert label.strike == 100000.0
+    assert label.result == "yes"
+    assert label.yes_is_above is True
+
+
+def test_normalize_greater_or_equal_equality_boundary_is_above_semantics() -> None:
+    payload = _payload(result="yes", settlement="100000.0000")
+    payload["market"]["strike_type"] = "greater_or_equal"
+
+    label = normalize_market_label(payload)
+
+    assert label.settlement_value == label.strike == 100000.0
+    assert label.result == "yes"
+    assert label.yes_is_above is True
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
