@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+import httpx
 from pydantic import BaseModel, ConfigDict
 
 from ..config import CollectorSettings
@@ -55,7 +56,35 @@ def _artifact_paths(root: Path, source: str, logical_name: str) -> tuple[Path, P
 
 def _verified_existing(root: Path, source: str, logical_name: str) -> bool:
     data_path, manifest_path = _artifact_paths(root, source, logical_name)
-    return data_path.exists() and manifest_path.exists() and verify_artifact(data_path, manifest_path)
+    data_exists = data_path.exists()
+    manifest_exists = manifest_path.exists()
+    if not data_exists and not manifest_exists:
+        return False
+    if data_exists != manifest_exists:
+        raise RuntimeError(f"provenance is incomplete for existing {source}/{logical_name}")
+    if not verify_artifact(data_path, manifest_path):
+        raise RuntimeError(f"provenance verification failed for existing {source}/{logical_name}")
+    return True
+
+
+def _required_kalshi_history_available(root: Path, ticker: str) -> bool:
+    complete = True
+    for kind in ("trades", "candlesticks"):
+        data_path, manifest_path = _artifact_paths(root, "kalshi", f"{kind}/{ticker}.json")
+        data_exists = data_path.exists()
+        manifest_exists = manifest_path.exists()
+        if not data_exists and not manifest_exists:
+            complete = False
+            continue
+        if data_exists != manifest_exists:
+            raise BinanceDataError(
+                f"Kalshi required history provenance is incomplete for {ticker}: {kind}"
+            )
+        if not verify_artifact(data_path, manifest_path):
+            raise BinanceDataError(
+                f"Kalshi required history failed provenance verification for {ticker}: {kind}"
+            )
+    return complete
 
 
 def _read_existing_json(root: Path, source: str, logical_name: str) -> dict[str, Any]:
@@ -148,12 +177,18 @@ def backfill_kalshi(
             if _verified_existing(root, "kalshi", candles_name):
                 skipped += 1
             else:
-                candles = history.fetch_candlesticks(
-                    ticker,
-                    start_ts=label.open_ts_ns // 1_000_000_000,
-                    end_ts=label.close_ts_ns // 1_000_000_000,
-                    period_interval=1,
-                )
+                try:
+                    candles = history.fetch_candlesticks(
+                        ticker,
+                        start_ts=label.open_ts_ns // 1_000_000_000,
+                        end_ts=label.close_ts_ns // 1_000_000_000,
+                        period_interval=1,
+                    )
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 404:
+                        excluded.append(ticker)
+                        continue
+                    raise
                 _write(
                     root,
                     candles_name,
@@ -190,6 +225,8 @@ def _dates_for_valid_kalshi_markets(root: Path) -> list[date]:
         try:
             label = normalize_market_label(payload)
         except LabelNormalizationError:
+            continue
+        if not _required_kalshi_history_available(root, label.ticker):
             continue
         valid_markets += 1
         first = datetime.fromtimestamp(

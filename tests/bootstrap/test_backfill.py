@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
+import pytest
+
 from kalshi_edge.bootstrap.backfill import backfill_kalshi
 from kalshi_edge.bootstrap.config import BootstrapSettings
 from kalshi_edge.bootstrap.provenance import verify_artifact
@@ -115,3 +118,73 @@ def test_backfill_persists_but_excludes_ambiguous_market(tmp_path: Path) -> None
     assert report.excluded_markets == ("KXBTC15M-TEST",)
     raw = bootstrap.bootstrap_dir / "raw/kalshi/markets/KXBTC15M-TEST.json"
     assert json.loads(raw.read_text(encoding="utf-8"))["market"]["strike_type"] == "custom"
+
+
+def _http_error(status_code: int, ticker: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", f"https://example.test/historical/markets/{ticker}/candlesticks")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+def test_backfill_excludes_only_market_whose_historical_candlesticks_are_404(tmp_path: Path) -> None:
+    market_a = dict(MARKET)
+    market_a["ticker"] = "KXBTC15M-A"
+    market_b = dict(MARKET)
+    market_b["ticker"] = "KXBTC15M-B"
+
+    class MissingCandleClient(FakeClient):
+        def discover_markets(self):
+            return [market_a, market_b]
+
+        def fetch_market(self, ticker: str):
+            self.market_fetches += 1
+            return {"market": market_a if ticker == market_a["ticker"] else market_b}
+
+        def fetch_candlesticks(self, ticker: str, *, start_ts: int, end_ts: int, period_interval: int = 1):
+            self.candle_fetches += 1
+            if ticker == market_b["ticker"]:
+                raise _http_error(404, ticker)
+            return super().fetch_candlesticks(
+                ticker,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                period_interval=period_interval,
+            )
+
+    bootstrap = BootstrapSettings(bootstrap_dir=tmp_path / "data" / "bootstrap")
+    report = backfill_kalshi(CollectorSettings(), bootstrap, client=MissingCandleClient())
+
+    assert report.market_count == 2
+    assert report.excluded_markets == (market_b["ticker"],)
+    assert (bootstrap.bootstrap_dir / f"raw/kalshi/candlesticks/{market_a['ticker']}.json").exists()
+    assert (bootstrap.bootstrap_dir / f"raw/kalshi/trades/{market_b['ticker']}.json").exists()
+    assert not (bootstrap.bootstrap_dir / f"raw/kalshi/candlesticks/{market_b['ticker']}.json").exists()
+    assert not (
+        bootstrap.bootstrap_dir
+        / f"manifests/kalshi/candlesticks/{market_b['ticker']}.json.manifest.json"
+    ).exists()
+
+
+def test_backfill_does_not_suppress_non_404_candlestick_failure(tmp_path: Path) -> None:
+    class ServerErrorClient(FakeClient):
+        def fetch_candlesticks(self, ticker: str, *, start_ts: int, end_ts: int, period_interval: int = 1):
+            raise _http_error(500, ticker)
+
+    bootstrap = BootstrapSettings(bootstrap_dir=tmp_path / "data" / "bootstrap")
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        backfill_kalshi(CollectorSettings(), bootstrap, client=ServerErrorClient())
+    assert exc_info.value.response.status_code == 500
+
+
+def test_backfill_fails_hard_on_corrupt_existing_candlestick_provenance_even_if_refetch_would_404(tmp_path: Path) -> None:
+    bootstrap = BootstrapSettings(bootstrap_dir=tmp_path / "data" / "bootstrap")
+    backfill_kalshi(CollectorSettings(), bootstrap, client=FakeClient())
+    candle_path = bootstrap.bootstrap_dir / "raw/kalshi/candlesticks/KXBTC15M-TEST.json"
+    candle_path.write_text(candle_path.read_text(encoding="utf-8") + "corrupt", encoding="utf-8")
+
+    class MissingCandleClient(FakeClient):
+        def fetch_candlesticks(self, ticker: str, *, start_ts: int, end_ts: int, period_interval: int = 1):
+            raise _http_error(404, ticker)
+
+    with pytest.raises(RuntimeError, match="provenance"):
+        backfill_kalshi(CollectorSettings(), bootstrap, client=MissingCandleClient())

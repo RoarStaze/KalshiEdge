@@ -98,6 +98,18 @@ def _read_verified_json(root: Path, source: str, logical_name: str) -> tuple[dic
     return payload, {"path": path.relative_to(root).as_posix(), "sha256": str(manifest["sha256"])}
 
 
+def _required_json_available(root: Path, source: str, logical_name: str) -> bool:
+    path = root / "raw" / source / logical_name
+    manifest_path = root / "manifests" / source / f"{logical_name}.manifest.json"
+    data_exists = path.exists()
+    manifest_exists = manifest_path.exists()
+    if not data_exists and not manifest_exists:
+        return False
+    if data_exists != manifest_exists or not verify_artifact(path, manifest_path):
+        raise DatasetBuildError(f"provenance verification failed for {source}/{logical_name}: {path}")
+    return True
+
+
 def _iso_to_ns(value: Any) -> int:
     if not isinstance(value, str) or not value.strip():
         raise DatasetBuildError(f"invalid ISO timestamp: {value!r}")
@@ -366,9 +378,17 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
 
     btc_cache = _DailyBinanceCache(root, settings, provenance)
     rows: list[FeatureRow] = []
+    included_market_count = 0
     for label in labels:
-        trades_payload, trades_identity = _read_verified_json(root, "kalshi", f"trades/{label.ticker}.json")
-        candles_payload, candles_identity = _read_verified_json(root, "kalshi", f"candlesticks/{label.ticker}.json")
+        trades_name = f"trades/{label.ticker}.json"
+        candles_name = f"candlesticks/{label.ticker}.json"
+        trades_available = _required_json_available(root, "kalshi", trades_name)
+        candles_available = _required_json_available(root, "kalshi", candles_name)
+        if not trades_available or not candles_available:
+            excluded.append(label.ticker)
+            continue
+        trades_payload, trades_identity = _read_verified_json(root, "kalshi", trades_name)
+        candles_payload, candles_identity = _read_verified_json(root, "kalshi", candles_name)
         provenance[trades_identity["path"]] = trades_identity["sha256"]
         provenance[candles_identity["path"]] = candles_identity["sha256"]
         kalshi = HistoricalKalshiState(
@@ -376,14 +396,17 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
             candles=_parse_candles(candles_payload),
         )
         btc = btc_cache.window(label)
-        rows.extend(
-            build_market_feature_rows(
-                label,
-                kalshi,
-                btc,
-                checkpoint_seconds=settings.checkpoint_seconds,
-            )
+        market_rows = build_market_feature_rows(
+            label,
+            kalshi,
+            btc,
+            checkpoint_seconds=settings.checkpoint_seconds,
         )
+        rows.extend(market_rows)
+        included_market_count += 1
+
+    if included_market_count == 0 or not rows:
+        raise DatasetBuildError("no markets with complete required history are available for dataset build")
 
     audit = audit_dataset_rows(rows)
     if not audit.passed:
@@ -405,7 +428,7 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
         metadata={
             "schema_version": DATASET_SCHEMA_VERSION,
             "row_count": len(rows),
-            "market_count": len(labels),
+            "market_count": included_market_count,
             "checkpoint_seconds": list(settings.checkpoint_seconds),
             "feature_names": sorted(rows[0].features),
             "target_column": "label_yes",
@@ -420,7 +443,7 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
         "schema_version": DATASET_SCHEMA_VERSION,
         "dataset_path": dataset_path.relative_to(root).as_posix(),
         "dataset_sha256": dataset_sha,
-        "market_count": len(labels),
+        "market_count": included_market_count,
         "row_count": len(rows),
         "checkpoint_seconds": list(settings.checkpoint_seconds),
         "leakage_finding_count": audit.finding_count,
@@ -432,7 +455,7 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
     _atomic_write_bytes(provenance_path, _canonical_json_bytes(provenance_payload))
 
     return DatasetBuildReport(
-        market_count=len(labels),
+        market_count=included_market_count,
         row_count=len(rows),
         excluded_markets=tuple(sorted(excluded)),
         leakage_finding_count=audit.finding_count,
