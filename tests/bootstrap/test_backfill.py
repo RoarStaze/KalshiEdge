@@ -174,3 +174,17 @@ def test_backfill_does_not_suppress_non_404_candlestick_failure(tmp_path: Path) 
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
         backfill_kalshi(CollectorSettings(), bootstrap, client=ServerErrorClient())
     assert exc_info.value.response.status_code == 500
+
+
+def test_backfill_fails_hard_on_corrupt_existing_candlestick_provenance_even_if_refetch_would_404(tmp_path: Path) -> None:
+    bootstrap = BootstrapSettings(bootstrap_dir=tmp_path / "data" / "bootstrap")
+    backfill_kalshi(CollectorSettings(), bootstrap, client=FakeClient())
+    candle_path = bootstrap.bootstrap_dir / "raw/kalshi/candlesticks/KXBTC15M-TEST.json"
+    candle_path.write_text(candle_path.read_text(encoding="utf-8") + "corrupt", encoding="utf-8")
+
+    class MissingCandleClient(FakeClient):
+        def fetch_candlesticks(self, ticker: str, *, start_ts: int, end_ts: int, period_interval: int = 1):
+            raise _http_error(404, ticker)
+
+    with pytest.raises(RuntimeError, match="provenance"):
+        backfill_kalshi(CollectorSettings(), bootstrap, client=MissingCandleClient())
