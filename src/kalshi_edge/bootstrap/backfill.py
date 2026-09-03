@@ -10,6 +10,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from ..config import CollectorSettings
+from .binance_availability import record_daily_availability_snapshot
 from .binance_history import (
     BinanceArchiveClient,
     BinanceDataError,
@@ -42,6 +43,8 @@ class BinanceBackfillReport(BaseModel):
     skipped_archives: int
     normalized_archives: int
     dates: tuple[str, ...]
+    archive_available_through_date: str
+    unavailable_dates: tuple[str, ...]
 
 
 def _canonical_json(payload: Any) -> bytes:
@@ -253,7 +256,15 @@ def _normalized_paths(root: Path, filename: str) -> tuple[Path, Path]:
 
 def _normalized_verified(root: Path, filename: str) -> bool:
     data_path, manifest_path = _normalized_paths(root, filename)
-    return data_path.exists() and manifest_path.exists() and verify_artifact(data_path, manifest_path)
+    data_exists = data_path.exists()
+    manifest_exists = manifest_path.exists()
+    if not data_exists and not manifest_exists:
+        return False
+    if data_exists != manifest_exists:
+        raise RuntimeError(f"provenance is incomplete for existing normalized Binance artifact: {filename}")
+    if not verify_artifact(data_path, manifest_path):
+        raise RuntimeError(f"provenance verification failed for existing normalized Binance artifact: {filename}")
+    return True
 
 
 def _write_normalized_manifest(root: Path, filename: str, raw_artifact: RawArtifact, row_count: int) -> None:
@@ -308,11 +319,20 @@ def backfill_binance(
     *,
     client: BinanceArchiveClient | Any | None = None,
     parquet_converter: Callable[[Path, Path], int] = convert_spot_1s_to_parquet,
+    as_of_utc: datetime | None = None,
 ) -> BinanceBackfillReport:
     root = bootstrap.bootstrap_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
+    effective_as_of = as_of_utc or datetime.now(timezone.utc)
+    if effective_as_of.tzinfo is None:
+        raise ValueError("Binance archive availability as_of_utc must be timezone-aware")
+    effective_as_of = effective_as_of.astimezone(timezone.utc)
+    availability = record_daily_availability_snapshot(root, effective_as_of.date())
+
     dates = _dates_for_valid_kalshi_markets(root)
-    urls = archive_urls(bootstrap.binance_symbol, dates, dataset="klines", interval="1s")
+    available_dates = [day for day in dates if day <= availability.available_through_date]
+    unavailable_dates = [day for day in dates if day > availability.available_through_date]
+    urls = archive_urls(bootstrap.binance_symbol, available_dates, dataset="klines", interval="1s")
     own_client = client is None
     history = client or BinanceArchiveClient()
     downloaded = 0
@@ -346,6 +366,8 @@ def backfill_binance(
             skipped_archives=skipped,
             normalized_archives=normalized,
             dates=tuple(day.isoformat() for day in dates),
+            archive_available_through_date=availability.available_through_date.isoformat(),
+            unavailable_dates=tuple(day.isoformat() for day in unavailable_dates),
         )
     finally:
         if own_client:
