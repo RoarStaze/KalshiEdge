@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict
 
+from .binance_availability import BinanceAvailabilitySnapshot, latest_daily_availability_snapshot
 from .binance_history import BinanceBar
 from .config import BootstrapSettings
 from .features import (
@@ -211,6 +212,40 @@ def _date_range(start_ns: int, end_ns: int) -> Iterable[date]:
         current += timedelta(days=1)
 
 
+def _required_binance_day_available(
+    root: Path,
+    settings: BootstrapSettings,
+    day: date,
+    availability: BinanceAvailabilitySnapshot | None,
+) -> bool:
+    stem = f"{settings.binance_symbol.upper()}-1s-{day.isoformat()}"
+    normalized_path = root / "normalized" / "binance" / "1s" / f"{stem}.parquet"
+    normalized_manifest = root / "manifests" / "binance_normalized" / "1s" / f"{stem}.parquet.manifest.json"
+    normalized_exists = normalized_path.exists()
+    normalized_manifest_exists = normalized_manifest.exists()
+    if normalized_exists != normalized_manifest_exists:
+        raise DatasetBuildError(f"Binance normalized provenance is incomplete for {day}")
+    if normalized_exists:
+        if not verify_artifact(normalized_path, normalized_manifest):
+            raise DatasetBuildError(f"Binance normalized provenance verification failed for {day}")
+        return True
+
+    raw_path = root / "raw" / "binance" / "archive" / f"{stem}.zip"
+    raw_manifest = root / "manifests" / "binance" / "archive" / f"{stem}.zip.manifest.json"
+    raw_exists = raw_path.exists()
+    raw_manifest_exists = raw_manifest.exists()
+    if raw_exists != raw_manifest_exists:
+        raise DatasetBuildError(f"Binance raw provenance is incomplete for {day}")
+    if raw_exists:
+        if not verify_artifact(raw_path, raw_manifest):
+            raise DatasetBuildError(f"Binance raw provenance verification failed for {day}")
+        raise DatasetBuildError(f"Binance normalized history is missing for verified raw archive {day}")
+
+    if availability is not None and day > availability.available_through_date:
+        return False
+    raise DatasetBuildError(f"required Binance history is missing for {day}")
+
+
 class _DailyBinanceCache:
     def __init__(self, root: Path, settings: BootstrapSettings, provenance: dict[str, str], max_days: int = 3) -> None:
         self.root = root
@@ -376,6 +411,10 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
     if not labels:
         raise DatasetBuildError("no valid settled KXBTC15M markets are available for dataset build")
 
+    availability = latest_daily_availability_snapshot(root)
+    if availability is not None:
+        provenance[availability.path.as_posix()] = availability.sha256
+
     btc_cache = _DailyBinanceCache(root, settings, provenance)
     rows: list[FeatureRow] = []
     included_market_count = 0
@@ -387,6 +426,17 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
         if not trades_available or not candles_available:
             excluded.append(label.ticker)
             continue
+
+        required_days = tuple(
+            _date_range(
+                label.open_ts_ns - MAX_FEATURE_LOOKBACK_SECONDS * NS,
+                label.close_ts_ns,
+            )
+        )
+        if not all(_required_binance_day_available(root, settings, day, availability) for day in required_days):
+            excluded.append(label.ticker)
+            continue
+
         trades_payload, trades_identity = _read_verified_json(root, "kalshi", trades_name)
         candles_payload, candles_identity = _read_verified_json(root, "kalshi", candles_name)
         provenance[trades_identity["path"]] = trades_identity["sha256"]
