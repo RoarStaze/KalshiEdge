@@ -373,7 +373,7 @@ def _write_parquet_atomic(path: Path, records: list[dict[str, Any]]) -> None:
     try:
         table = pa.Table.from_pylist(records)
         pq.write_table(table, temp_path, compression="zstd")
-        with temp_path.open("rb") as handle:
+        with temp_path.open("rb+") as handle:
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
     finally:
