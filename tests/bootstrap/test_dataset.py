@@ -9,7 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from kalshi_edge.bootstrap.config import BootstrapSettings
-from kalshi_edge.bootstrap.dataset import DatasetBuildError, build_dataset
+from kalshi_edge.bootstrap.dataset import DatasetBuildError, _write_parquet_atomic, build_dataset
 from kalshi_edge.bootstrap.provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact
 
 
@@ -91,3 +91,22 @@ def test_build_dataset_rejects_partial_candlestick_provenance_when_manifest_exis
 
     with pytest.raises(DatasetBuildError,match="provenance"):
         build_dataset(root,BootstrapSettings(bootstrap_dir=root))
+
+
+def test_write_parquet_atomic_opens_completed_temp_file_read_write_before_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output = tmp_path / "features.parquet"
+    opened_modes: list[str] = []
+    original_open = Path.open
+
+    def recording_open(self: Path, mode: str = "r", *args, **kwargs):
+        if self.name.startswith(".features.parquet.") and self.suffix == ".tmp":
+            opened_modes.append(mode)
+        return original_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", recording_open)
+
+    _write_parquet_atomic(output, [{"value": 1}])
+
+    assert "r+b" in opened_modes
+    assert pq.read_table(output).to_pylist() == [{"value": 1}]
+    assert not list(tmp_path.glob(".features.parquet.*.tmp"))
