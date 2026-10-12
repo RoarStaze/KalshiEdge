@@ -91,3 +91,31 @@ def test_build_dataset_rejects_partial_candlestick_provenance_when_manifest_exis
 
     with pytest.raises(DatasetBuildError,match="provenance"):
         build_dataset(root,BootstrapSettings(bootstrap_dir=root))
+
+
+def test_write_parquet_atomic_fsync_uses_a_writable_file_handle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from kalshi_edge.bootstrap import dataset as dataset_module
+
+    target = tmp_path / "features.parquet"
+    temporary_modes: list[str] = []
+    original_open = Path.open
+
+    def recording_open(self: Path, mode: str = "r", *args, **kwargs):
+        if self.name.startswith(".features.parquet.") and self.suffix == ".tmp":
+            temporary_modes.append(mode)
+        return original_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", recording_open)
+
+    dataset_module._write_parquet_atomic(
+        target,
+        [{"market_ticker": "KXBTC15M-TEST", "label_yes": 1}],
+    )
+
+    assert target.exists()
+    assert temporary_modes, "expected the temporary Parquet file to be opened for fsync"
+    assert all("+" in mode or "w" in mode or "a" in mode for mode in temporary_modes), (
+        "fsync must use a writable file descriptor for Windows compatibility"
+    )
