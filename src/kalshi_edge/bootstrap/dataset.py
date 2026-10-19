@@ -381,6 +381,93 @@ def _write_parquet_atomic(path: Path, records: list[dict[str, Any]]) -> None:
             temp_path.unlink()
 
 
+
+
+def _dataset_checkpoint_path(root: Path) -> Path:
+    return root / "checkpoints" / "dataset-build.jsonl"
+
+
+def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[str, dict[str, Any]]:
+    """Load durable per-market rows only when every recorded input still matches."""
+    path = _dataset_checkpoint_path(root)
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    valid_end = 0
+    for line in raw.splitlines(keepends=True):
+        next_end = valid_end + len(line)
+        try:
+            item = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # A process may have been interrupted while appending the last line.
+            if next_end == len(raw) and not line.endswith(b"\n"):
+                try:
+                    with path.open("rb+") as handle:
+                        handle.truncate(valid_end)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                except OSError:
+                    return {}
+                break
+            path.unlink(missing_ok=True)
+            return {}
+        if (
+            not isinstance(item, dict)
+            or item.get("schema") != 1
+            or item.get("checkpoint_seconds") != list(settings.checkpoint_seconds)
+            or item.get("binance_symbol") != settings.binance_symbol
+            or not isinstance(item.get("ticker"), str)
+            or not isinstance(item.get("rows"), list)
+            or not isinstance(item.get("inputs"), dict)
+        ):
+            path.unlink(missing_ok=True)
+            return {}
+        for relative, expected_sha in item["inputs"].items():
+            if not isinstance(relative, str) or not isinstance(expected_sha, str):
+                path.unlink(missing_ok=True)
+                return {}
+            source = (root / relative).resolve()
+            try:
+                source.relative_to(root.resolve())
+            except ValueError:
+                path.unlink(missing_ok=True)
+                return {}
+            if not source.is_file() or sha256_file(source) != expected_sha:
+                # Never reuse partial work against changed/missing source data.
+                path.unlink(missing_ok=True)
+                return {}
+        records[item["ticker"]] = item
+        valid_end = next_end
+    return records
+
+
+def _append_dataset_checkpoint(
+    root: Path,
+    settings: BootstrapSettings,
+    ticker: str,
+    rows: list[FeatureRow] | tuple[FeatureRow, ...],
+    inputs: dict[str, str],
+) -> None:
+    path = _dataset_checkpoint_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    item = {
+        "schema": 1,
+        "ticker": ticker,
+        "checkpoint_seconds": list(settings.checkpoint_seconds),
+        "binance_symbol": settings.binance_symbol,
+        "inputs": dict(sorted(inputs.items())),
+        "rows": [row.model_dump(mode="json") for row in rows],
+    }
+    with path.open("ab") as handle:
+        handle.write(_canonical_json_bytes(item))
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def build_dataset(
     root: Path,
     settings: BootstrapSettings | None = None,
@@ -421,14 +508,25 @@ def build_dataset(
         provenance[availability.path.as_posix()] = availability.sha256
 
     btc_cache = _DailyBinanceCache(root, settings, provenance)
-    rows: list[FeatureRow] = []
-    included_market_count = 0
+    saved = _load_dataset_checkpoints(root, settings)
+    for item in saved.values():
+        provenance.update({str(key): str(value) for key, value in item["inputs"].items()})
+    rows: list[FeatureRow] = [
+        FeatureRow.model_validate(row)
+        for label in labels
+        for row in saved.get(label.ticker, {}).get("rows", [])
+    ]
+    included_market_count = len(saved)
     total_markets = len(labels)
     def report_progress(completed: int, ticker: str) -> None:
         if progress_callback is not None:
             progress_callback(completed, total_markets, ticker, "markets")
 
     for market_index, label in enumerate(labels, start=1):
+        if label.ticker in saved:
+            report_progress(market_index, label.ticker)
+            continue
+        provenance_before_market = set(provenance)
         trades_name = f"trades/{label.ticker}.json"
         candles_name = f"candlesticks/{label.ticker}.json"
         trades_available = _required_json_available(root, "kalshi", trades_name)
@@ -466,6 +564,14 @@ def build_dataset(
         )
         rows.extend(market_rows)
         included_market_count += 1
+        market_input = root / "raw" / "kalshi" / "markets" / f"{label.ticker}.json"
+        market_input_relative = market_input.relative_to(root).as_posix()
+        market_inputs = {
+            key: value for key, value in provenance.items()
+            if key not in provenance_before_market
+        }
+        market_inputs[market_input_relative] = sha256_file(market_input)
+        _append_dataset_checkpoint(root, settings, label.ticker, market_rows, market_inputs)
         report_progress(market_index, label.ticker)
 
     if progress_callback is not None:
@@ -519,6 +625,7 @@ def build_dataset(
         ],
     }
     _atomic_write_bytes(provenance_path, _canonical_json_bytes(provenance_payload))
+    _dataset_checkpoint_path(root).unlink(missing_ok=True)
 
     return DatasetBuildReport(
         market_count=included_market_count,
