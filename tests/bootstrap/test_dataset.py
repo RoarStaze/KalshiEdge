@@ -9,8 +9,11 @@ import pyarrow.parquet as pq
 import pytest
 
 from kalshi_edge.bootstrap.config import BootstrapSettings
-from kalshi_edge.bootstrap.dataset import (\n    DatasetBuildError, build_dataset, _append_dataset_checkpoint, _load_dataset_checkpoints,\n)
-from kalshi_edge.bootstrap.provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact\nfrom kalshi_edge.bootstrap.types import FeatureRow
+from kalshi_edge.bootstrap.dataset import (
+    DatasetBuildError, build_dataset, _append_dataset_checkpoint, _load_dataset_checkpoints,
+)
+from kalshi_edge.bootstrap.provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact
+from kalshi_edge.bootstrap.types import FeatureRow
 
 
 def _market_payload(ticker: str) -> dict:
