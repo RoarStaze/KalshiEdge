@@ -81,6 +81,16 @@ class ControlCenter(QMainWindow):
         self.live_process.readyReadStandardError.connect(lambda: self._append_log(bytes(self.live_process.readAllStandardError()).decode("utf-8", "replace")))
         self.live_process.finished.connect(self._live_finished)
 
+        # Explicitly request the native Windows top-level frame and system controls.
+        # This keeps the app movable/resizable and exposes minimize, maximize, and close.
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
         self.setWindowTitle(APP_TITLE)
         self.resize(1240, 820)
         self.setMinimumSize(980, 680)
