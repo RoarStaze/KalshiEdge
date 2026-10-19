@@ -262,11 +262,16 @@ class ControlCenter(QMainWindow):
                 try:
                     event = json.loads(line.partition(" ")[2])
                     current, total = int(event["completed"]), int(event["total"])
-                    if total > 0 and self.active_stage is not None:
-                        self.stage_bar.setRange(0, total)
-                        self.stage_bar.setValue(max(0, min(current, total)))
-                        unit = str(event.get("unit", "items"))
-                        self.runtime_label.setText(f"{current:,} of {total:,} {unit} processed")
+                    if self.active_stage is not None:
+                        if event.get("phase") == "finalizing":
+                            self.stage_bar.setRange(0, 0)
+                            self.runtime_label.setText("Markets processed; validating leakage and writing verified artifacts…")
+                        elif total > 0:
+                            self.stage_bar.setRange(0, total)
+                            self.stage_bar.setValue(max(0, min(current, total)))
+                            unit = str(event.get("unit", "items"))
+                            item = str(event.get("item", ""))
+                            self.runtime_label.setText(f"{current:,} of {total:,} {unit} processed" + (f" · {item}" if item else ""))
                     continue
                 except (ValueError, KeyError, TypeError, json.JSONDecodeError):
                     pass
