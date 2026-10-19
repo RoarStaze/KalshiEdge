@@ -74,6 +74,7 @@ class ControlCenter(QMainWindow):
         self.process.errorOccurred.connect(self._process_error)
         self.active_stage: int | None = None
         self.stop_after_stage = False
+        self.user_stopping = False
         self.live_process = QProcess(self)
         self.live_process.setWorkingDirectory(str(root))
         self.live_process.readyReadStandardOutput.connect(lambda: self._append_log(bytes(self.live_process.readAllStandardOutput()).decode("utf-8", "replace")))
@@ -289,7 +290,11 @@ class ControlCenter(QMainWindow):
         if index is None:
             return
         key = STAGES[index][0]
-        if self.stop_after_stage:
+        if self.user_stopping:
+            self.state["statuses"][key] = "interrupted; resume restarts this stage"
+            self.user_stopping = False
+            self._append_log("Stage interrupted. Resume will restart this stage from its beginning.")
+        elif self.stop_after_stage:
             self.state["statuses"][key] = "stopped after stage"
             self.stop_after_stage = False
             self._append_log("Pipeline stopped at a safe stage boundary.")
@@ -375,8 +380,8 @@ class ControlCenter(QMainWindow):
         if index == 2 and not (self.data_root / "derived" / "features.parquet").exists():
             QMessageBox.warning(self, "Dataset required", "Build the dataset before verifying it.")
             return
-        if index >= 3 and not (self.data_root / "derived" / "features.parquet").exists():
-            QMessageBox.warning(self, "Verified dataset required", "Build and verify the dataset before training.")
+        if index >= 3 and "verify" not in set(self.state.get("completed", [])):
+            QMessageBox.warning(self, "Verified dataset required", "Run the dataset verification stage successfully before training.")
             return
         if index == 4 and not (self.data_root / "models" / "experiments").exists():
             QMessageBox.warning(self, "Experiment required", "Train an experiment before evaluation.")
@@ -431,6 +436,7 @@ class ControlCenter(QMainWindow):
             return
         self._pipeline_requested = False
         self.stop_after_stage = False
+        self.user_stopping = True
         self.process.terminate()
         if not self.process.waitForFinished(4000):
             self.process.kill()
