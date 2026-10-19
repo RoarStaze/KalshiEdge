@@ -367,6 +367,15 @@ class ControlCenter(QMainWindow):
 
     def _command(self, index: int) -> tuple[str, list[str]]:
         key, _title, _description, command = STAGES[index]
+        if key == "train":
+            git_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return sys.executable, ["-m", "kalshi_edge.cli", "bootstrap-train", "--git-sha", git_result.stdout.strip()]
         if command[0] == "__verify_dataset__":
             code = (
                 "from pathlib import Path; "
