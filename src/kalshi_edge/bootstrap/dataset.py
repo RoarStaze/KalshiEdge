@@ -6,7 +6,7 @@ import tempfile
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -381,7 +381,12 @@ def _write_parquet_atomic(path: Path, records: list[dict[str, Any]]) -> None:
             temp_path.unlink()
 
 
-def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> DatasetBuildReport:
+def build_dataset(
+    root: Path,
+    settings: BootstrapSettings | None = None,
+    *,
+    progress_callback: Callable[[int, int, str, str], None] | None = None,
+) -> DatasetBuildReport:
     root = root.resolve()
     settings = settings or BootstrapSettings(bootstrap_dir=root)
     if settings.bootstrap_dir.resolve() != root:
@@ -418,13 +423,19 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
     btc_cache = _DailyBinanceCache(root, settings, provenance)
     rows: list[FeatureRow] = []
     included_market_count = 0
-    for label in labels:
+    total_markets = len(labels)
+    def report_progress(completed: int, ticker: str) -> None:
+        if progress_callback is not None:
+            progress_callback(completed, total_markets, ticker, "markets")
+
+    for market_index, label in enumerate(labels, start=1):
         trades_name = f"trades/{label.ticker}.json"
         candles_name = f"candlesticks/{label.ticker}.json"
         trades_available = _required_json_available(root, "kalshi", trades_name)
         candles_available = _required_json_available(root, "kalshi", candles_name)
         if not trades_available or not candles_available:
             excluded.append(label.ticker)
+            report_progress(market_index, label.ticker)
             continue
 
         required_days = tuple(
@@ -435,6 +446,7 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
         )
         if not all(_required_binance_day_available(root, settings, day, availability) for day in required_days):
             excluded.append(label.ticker)
+            report_progress(market_index, label.ticker)
             continue
 
         trades_payload, trades_identity = _read_verified_json(root, "kalshi", trades_name)
@@ -454,6 +466,10 @@ def build_dataset(root: Path, settings: BootstrapSettings | None = None) -> Data
         )
         rows.extend(market_rows)
         included_market_count += 1
+        report_progress(market_index, label.ticker)
+
+    if progress_callback is not None:
+        progress_callback(total_markets, total_markets, "validating leakage and writing artifacts", "finalizing")
 
     if included_market_count == 0 or not rows:
         raise DatasetBuildError("no markets with complete required history are available for dataset build")
