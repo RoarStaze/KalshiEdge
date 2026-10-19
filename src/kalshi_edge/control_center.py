@@ -86,15 +86,39 @@ def _ensure_native_windows_frame(window: QMainWindow) -> None:
         set_window_pos.restype = ctypes.c_int
 
         hwnd = ctypes.c_void_p(int(window.winId()))
-        style_index = -16  # GWL_STYLE
-        style = int(get_window_long(hwnd, style_index))
-        # Replace popup/frameless styling with the standard overlapped window frame.
-        style = (style & ~0x80000000) | 0x00CF0000  # WS_OVERLAPPEDWINDOW
-        set_window_long(hwnd, style_index, style)
-        # Ask Windows to recalculate the non-client frame without moving/resizing.
+        # GWL_STYLE / GWL_EXSTYLE and the standard Win32 styles.
+        GWL_STYLE, GWL_EXSTYLE = -16, -20
+        WS_CHILD, WS_POPUP = 0x40000000, 0x80000000
+        WS_OVERLAPPEDWINDOW = 0x00CF0000
+        WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = 0x00000080, 0x00040000
+
+        style = int(get_window_long(hwnd, GWL_STYLE))
+        # Strip child/popup styles, then explicitly add caption, system menu,
+        # thick resize border, minimize box and maximize box.
+        style = (style & ~(WS_CHILD | WS_POPUP)) | WS_OVERLAPPEDWINDOW
+        prior_style = set_window_long(hwnd, GWL_STYLE, style)
+        if prior_style == 0 and ctypes.get_last_error():
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        exstyle = int(get_window_long(hwnd, GWL_EXSTYLE))
+        exstyle = (exstyle | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
+        prior_exstyle = set_window_long(hwnd, GWL_EXSTYLE, exstyle)
+        if prior_exstyle == 0 and ctypes.get_last_error():
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
         flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
         if not set_window_pos(hwnd, None, 0, 0, 0, 0, flags):
             raise ctypes.WinError(ctypes.get_last_error())
+
+        confirmed_style = int(get_window_long(hwnd, GWL_STYLE))
+        required = WS_OVERLAPPEDWINDOW
+        if confirmed_style & required != required:
+            print(
+                f"Warning: Windows did not retain all requested caption/resize bits "
+                f"(style=0x{confirmed_style:08X}).",
+                file=sys.stderr,
+            )
     except (AttributeError, OSError, ValueError) as exc:
         print(f"Warning: could not enforce the native Windows window frame: {exc}", file=sys.stderr)
 
@@ -561,9 +585,22 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_TITLE)
     window = ControlCenter(root)
+    # Explicitly clear frameless mode and request all standard caption controls.
+    window.setWindowFlags(
+        Qt.WindowType.Window
+        | Qt.WindowType.WindowTitleHint
+        | Qt.WindowType.WindowSystemMenuHint
+        | Qt.WindowType.WindowMinimizeButtonHint
+        | Qt.WindowType.WindowMaximizeButtonHint
+        | Qt.WindowType.WindowCloseButtonHint
+    )
     window.show()
-    # Apply after Qt has created/shown the HWND; Windows then supplies the real frame.
+
+    # Qt may adjust HWND styles during show; re-assert the native frame after
+    # creation and once more after Qt's first event/layout cycle.
     QTimer.singleShot(0, lambda: _ensure_native_windows_frame(window))
+    QTimer.singleShot(250, lambda: _ensure_native_windows_frame(window))
+    QTimer.singleShot(1000, lambda: _ensure_native_windows_frame(window))
     return app.exec()
 
 
