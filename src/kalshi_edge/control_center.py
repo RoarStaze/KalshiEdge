@@ -356,7 +356,7 @@ class ControlCenter(QMainWindow):
             return
         _key, title, description, _cmd = STAGES[row]
         self.detail_title.setText(title)
-        self.detail_text.setText(description + "\n\nResume behavior: verified completed stages are retained. If a process is interrupted mid-stage, that stage currently restarts from its beginning; internal exact checkpoints are being added separately and are not yet guaranteed for every command.")
+        self.detail_text.setText(description + "\n\nResume behavior: completed stages are retained. Dataset construction resumes at the last committed market after validating input hashes. Backfill verifies and skips existing artifacts. Training/evaluation currently restart at the beginning of the interrupted stage.")
 
     def _next_stage_index(self) -> int:
         completed = set(self.state.get("completed", []))
