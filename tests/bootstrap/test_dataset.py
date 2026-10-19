@@ -9,8 +9,8 @@ import pyarrow.parquet as pq
 import pytest
 
 from kalshi_edge.bootstrap.config import BootstrapSettings
-from kalshi_edge.bootstrap.dataset import DatasetBuildError, build_dataset
-from kalshi_edge.bootstrap.provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact
+from kalshi_edge.bootstrap.dataset import (\n    DatasetBuildError, build_dataset, _append_dataset_checkpoint, _load_dataset_checkpoints,\n)
+from kalshi_edge.bootstrap.provenance import RawArtifact, sha256_file, verify_artifact, write_manifest, write_raw_artifact\nfrom kalshi_edge.bootstrap.types import FeatureRow
 
 
 def _market_payload(ticker: str) -> dict:
@@ -119,3 +119,34 @@ def test_write_parquet_atomic_fsync_uses_a_writable_file_handle(
     assert all("+" in mode or "w" in mode or "a" in mode for mode in temporary_modes), (
         "fsync must use a writable file descriptor for Windows compatibility"
     )
+
+
+
+def test_dataset_checkpoint_is_reused_only_when_input_hashes_match(tmp_path: Path) -> None:
+    settings = BootstrapSettings(bootstrap_dir=tmp_path)
+    source = tmp_path / "raw" / "sample.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"stable":true}', encoding="utf-8")
+    row = FeatureRow(
+        market_ticker="KXBTC15M-CHECKPOINT",
+        market_date="2026-08-01",
+        split_group_id="KXBTC15M-CHECKPOINT",
+        checkpoint_ts_ns=1785585900000000000,
+        label_yes=1,
+        features={"btc_close": 100.0},
+        source_max_ts_ns={"binance": 1785585900000000000},
+    )
+    _append_dataset_checkpoint(
+        tmp_path,
+        settings,
+        row.market_ticker,
+        [row],
+        {"raw/sample.json": sha256_file(source)},
+    )
+
+    loaded = _load_dataset_checkpoints(tmp_path, settings)
+    assert loaded[row.market_ticker]["rows"][0]["features"]["btc_close"] == 100.0
+
+    source.write_text('{"stable":false}', encoding="utf-8")
+    assert _load_dataset_checkpoints(tmp_path, settings) == {}
+    assert not (tmp_path / "checkpoints" / "dataset-build.jsonl").exists()
