@@ -33,11 +33,11 @@ The GUI does not automatically start read-only live inference at the end of the 
 
 The overall bar is a count of configured stages whose commands returned success, not an estimate of elapsed time. The per-stage bar remains indeterminate unless the command emits a structured `KALSHI_EDGE_PROGRESS {"completed": n, "total": n, "unit": "..."}` line. No percentage is invented when a worker does not expose measurable progress.
 
-The existing dataset builder currently does not emit this progress event, so its activity is shown as indeterminate until that worker is instrumented. This is intentional and more accurate than an estimated percentage.
+The dataset builder emits an exact count of markets processed out of the discovered settled-market list. Once the market loop finishes, the UI switches back to indeterminate activity while the leakage audit, Parquet write, manifest, and provenance finalization run. That is deliberate: market-loop completion is not the same as dataset completion.
 
 ## Stop and resume limitations
 
-The GUI persists completed stages and the last stage state. Completed stages remain complete across GUI restarts. If a process is interrupted mid-stage, that stage currently restarts from its beginning when retried. It is **not yet correct to claim exact mid-stage resume for every command**. Exact resumption requires durable per-item checkpoints inside the backfill, dataset, training, and evaluation workers, plus input-fingerprint validation before reusing a checkpoint. Those workers must be instrumented before the GUI can guarantee resuming at the exact point of interruption.
+The GUI persists completed stages and the last stage state. Completed stages remain complete across GUI restarts. The dataset builder now writes a durable per-market checkpoint after each completed market and validates every recorded input hash before reusing rows; if the process stops mid-market, it recomputes that market and resumes from the last committed market boundary. A partial final checkpoint line is discarded safely. The historical backfill already skips existing artifacts after verifying their manifests. Training and evaluation do not yet expose internal resumable checkpoints, so an interruption in either of those stages restarts that stage from its beginning. The whole-program requirement for exact mid-stage resume is therefore **partially implemented, not complete**; do not represent it as guaranteed for every stage until those workers also support durable checkpoints and recovery tests.
 
 The stop control terminates only a process launched by this GUI. It never sends commands to Windows Scheduled Tasks. In particular, it does not stop, restart, or reconfigure the independent `KalshiEdge Phase1 Collector` task.
 
