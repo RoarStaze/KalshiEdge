@@ -7,7 +7,6 @@ completions. A stage-specific bar is indeterminate unless the worker emits a
 structured KALSHI_EDGE_PROGRESS event. This avoids invented percentages.
 """
 
-import ctypes
 import json
 import os
 import subprocess
@@ -58,97 +57,6 @@ def find_project_root(start: Path | None = None) -> Path:
         if (candidate / "pyproject.toml").exists() and (candidate / "src" / "kalshi_edge").is_dir():
             return candidate
     raise FileNotFoundError("Open KalshiEdge Control Center from inside the KalshiEdge repository.")
-
-
-def _ensure_native_windows_frame(window: QMainWindow) -> None:
-    """Ensure a standard movable/resizable native frame on Windows."""
-    if sys.platform != "win32":
-        return
-
-    try:
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        if ctypes.sizeof(ctypes.c_void_p) == 8:
-            get_window_long = user32.GetWindowLongPtrW
-            set_window_long = user32.SetWindowLongPtrW
-        else:  # pragma: no cover - Windows 32-bit compatibility
-            get_window_long = user32.GetWindowLongW
-            set_window_long = user32.SetWindowLongW
-
-        get_window_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        get_window_long.restype = ctypes.c_ssize_t
-        set_window_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-        set_window_long.restype = ctypes.c_ssize_t
-        set_window_pos = user32.SetWindowPos
-        set_window_pos.argtypes = [
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
-            ctypes.c_int, ctypes.c_int, ctypes.c_uint,
-        ]
-        set_window_pos.restype = ctypes.c_int
-        send_message = user32.SendMessageW
-        send_message.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
-        send_message.restype = ctypes.c_ssize_t
-        redraw_window = user32.RedrawWindow
-        redraw_window.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
-        redraw_window.restype = ctypes.c_int
-        draw_menu_bar = user32.DrawMenuBar
-        draw_menu_bar.argtypes = [ctypes.c_void_p]
-        draw_menu_bar.restype = ctypes.c_int
-
-        hwnd = ctypes.c_void_p(int(window.winId()))
-        # GWL_STYLE / GWL_EXSTYLE and the standard Win32 styles.
-        GWL_STYLE, GWL_EXSTYLE = -16, -20
-        WS_CHILD, WS_POPUP = 0x40000000, 0x80000000
-        WS_OVERLAPPEDWINDOW = 0x00CF0000
-        WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = 0x00000080, 0x00040000
-
-        style = int(get_window_long(hwnd, GWL_STYLE))
-        # Strip child/popup styles, then explicitly add caption, system menu,
-        # thick resize border, minimize box and maximize box.
-        style = (style & ~(WS_CHILD | WS_POPUP)) | WS_OVERLAPPEDWINDOW
-        prior_style = set_window_long(hwnd, GWL_STYLE, style)
-        if prior_style == 0 and ctypes.get_last_error():
-            raise ctypes.WinError(ctypes.get_last_error())
-
-        exstyle = int(get_window_long(hwnd, GWL_EXSTYLE))
-        exstyle = (exstyle | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
-        prior_exstyle = set_window_long(hwnd, GWL_EXSTYLE, exstyle)
-        if prior_exstyle == 0 and ctypes.get_last_error():
-            raise ctypes.WinError(ctypes.get_last_error())
-
-        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
-        flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
-        if not set_window_pos(hwnd, None, 0, 0, 0, 0, flags):
-            raise ctypes.WinError(ctypes.get_last_error())
-
-        # Force a non-client frame repaint. Qt can retain cached frame layout
-        # after native style changes, so request redraw through Win32 as well.
-        draw_menu_bar(hwnd)
-        send_message(hwnd, 0x0086, 1, 0)  # WM_NCACTIVATE
-        send_message(hwnd, 0x0085, 1, 0)  # WM_NCPAINT
-        if not redraw_window(hwnd, None, None, 0x0001 | 0x0100 | 0x0400):
-            raise ctypes.WinError(ctypes.get_last_error())
-
-        confirmed_style = int(get_window_long(hwnd, GWL_STYLE))
-        required = WS_OVERLAPPEDWINDOW
-        if confirmed_style & required != required:
-            print(
-                f"Warning: Windows did not retain all requested caption/resize bits "
-                f"(style=0x{confirmed_style:08X}).",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "Windows native frame check: "
-                f"HWND=0x{int(hwnd.value):X}, "
-                f"caption={bool(confirmed_style & 0x00C00000)}, "
-                f"system_menu={bool(confirmed_style & 0x00080000)}, "
-                f"resizable={bool(confirmed_style & 0x00040000)}, "
-                f"minimize={bool(confirmed_style & 0x00020000)}, "
-                f"maximize={bool(confirmed_style & 0x00010000)}",
-                flush=True,
-            )
-    except (AttributeError, OSError, ValueError) as exc:
-        print(f"Warning: could not enforce the native Windows window frame: {exc}", file=sys.stderr)
 
 
 class ControlCenter(QMainWindow):
@@ -613,14 +521,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_TITLE)
     window = ControlCenter(root)
-    # Explicitly disable translucent/frameless presentation before the native
-    # window is created; Windows must own the non-client title-bar area.
+    # Let Qt's Windows platform plugin create and manage the non-client frame.
+    # CustomizeWindowHint makes every requested caption control explicit.
     window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-    window.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-    window.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
-    # Explicitly clear frameless mode and request all standard caption controls.
     window.setWindowFlags(
         Qt.WindowType.Window
+        | Qt.WindowType.CustomizeWindowHint
         | Qt.WindowType.WindowTitleHint
         | Qt.WindowType.WindowSystemMenuHint
         | Qt.WindowType.WindowMinimizeButtonHint
@@ -628,12 +534,8 @@ def main() -> int:
         | Qt.WindowType.WindowCloseButtonHint
     )
     window.show()
-
-    # Qt may adjust HWND styles during show; re-assert the native frame after
-    # creation and once more after Qt's first event/layout cycle.
-    QTimer.singleShot(0, lambda: _ensure_native_windows_frame(window))
-    QTimer.singleShot(250, lambda: _ensure_native_windows_frame(window))
-    QTimer.singleShot(1000, lambda: _ensure_native_windows_frame(window))
+    window.raise_()
+    window.activateWindow()
     return app.exec()
 
 
