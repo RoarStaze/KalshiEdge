@@ -119,6 +119,17 @@ def _ensure_native_windows_frame(window: QMainWindow) -> None:
                 f"(style=0x{confirmed_style:08X}).",
                 file=sys.stderr,
             )
+        else:
+            print(
+                "Windows native frame check: "
+                f"HWND=0x{int(hwnd.value):X}, "
+                f"caption={bool(confirmed_style & 0x00C00000)}, "
+                f"system_menu={bool(confirmed_style & 0x00080000)}, "
+                f"resizable={bool(confirmed_style & 0x00040000)}, "
+                f"minimize={bool(confirmed_style & 0x00020000)}, "
+                f"maximize={bool(confirmed_style & 0x00010000)}",
+                flush=True,
+            )
     except (AttributeError, OSError, ValueError) as exc:
         print(f"Warning: could not enforce the native Windows window frame: {exc}", file=sys.stderr)
 
