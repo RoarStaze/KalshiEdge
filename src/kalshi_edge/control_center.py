@@ -84,6 +84,15 @@ def _ensure_native_windows_frame(window: QMainWindow) -> None:
             ctypes.c_int, ctypes.c_int, ctypes.c_uint,
         ]
         set_window_pos.restype = ctypes.c_int
+        send_message = user32.SendMessageW
+        send_message.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+        send_message.restype = ctypes.c_ssize_t
+        redraw_window = user32.RedrawWindow
+        redraw_window.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+        redraw_window.restype = ctypes.c_int
+        draw_menu_bar = user32.DrawMenuBar
+        draw_menu_bar.argtypes = [ctypes.c_void_p]
+        draw_menu_bar.restype = ctypes.c_int
 
         hwnd = ctypes.c_void_p(int(window.winId()))
         # GWL_STYLE / GWL_EXSTYLE and the standard Win32 styles.
@@ -109,6 +118,14 @@ def _ensure_native_windows_frame(window: QMainWindow) -> None:
         # SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
         flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
         if not set_window_pos(hwnd, None, 0, 0, 0, 0, flags):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        # Force a non-client frame repaint. Qt can retain cached frame layout
+        # after native style changes, so request redraw through Win32 as well.
+        draw_menu_bar(hwnd)
+        send_message(hwnd, 0x0086, 1, 0)  # WM_NCACTIVATE
+        send_message(hwnd, 0x0085, 1, 0)  # WM_NCPAINT
+        if not redraw_window(hwnd, None, None, 0x0001 | 0x0100 | 0x0400):
             raise ctypes.WinError(ctypes.get_last_error())
 
         confirmed_style = int(get_window_long(hwnd, GWL_STYLE))
@@ -596,6 +613,11 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_TITLE)
     window = ControlCenter(root)
+    # Explicitly disable translucent/frameless presentation before the native
+    # window is created; Windows must own the non-client title-bar area.
+    window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+    window.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+    window.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
     # Explicitly clear frameless mode and request all standard caption controls.
     window.setWindowFlags(
         Qt.WindowType.Window
