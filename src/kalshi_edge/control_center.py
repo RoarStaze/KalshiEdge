@@ -7,6 +7,7 @@ completions. A stage-specific bar is indeterminate unless the worker emits a
 structured KALSHI_EDGE_PROGRESS event. This avoids invented percentages.
 """
 
+import ctypes
 import json
 import os
 import subprocess
@@ -59,6 +60,45 @@ def find_project_root(start: Path | None = None) -> Path:
     raise FileNotFoundError("Open KalshiEdge Control Center from inside the KalshiEdge repository.")
 
 
+def _ensure_native_windows_frame(window: QMainWindow) -> None:
+    """Ensure a standard movable/resizable native frame on Windows."""
+    if sys.platform != "win32":
+        return
+
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            get_window_long = user32.GetWindowLongPtrW
+            set_window_long = user32.SetWindowLongPtrW
+        else:  # pragma: no cover - Windows 32-bit compatibility
+            get_window_long = user32.GetWindowLongW
+            set_window_long = user32.SetWindowLongW
+
+        get_window_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        get_window_long.restype = ctypes.c_ssize_t
+        set_window_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+        set_window_long.restype = ctypes.c_ssize_t
+        set_window_pos = user32.SetWindowPos
+        set_window_pos.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+        ]
+        set_window_pos.restype = ctypes.c_int
+
+        hwnd = ctypes.c_void_p(int(window.winId()))
+        style_index = -16  # GWL_STYLE
+        style = int(get_window_long(hwnd, style_index))
+        # Replace popup/frameless styling with the standard overlapped window frame.
+        style = (style & ~0x80000000) | 0x00CF0000  # WS_OVERLAPPEDWINDOW
+        set_window_long(hwnd, style_index, style)
+        # Ask Windows to recalculate the non-client frame without moving/resizing.
+        flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
+        if not set_window_pos(hwnd, None, 0, 0, 0, 0, flags):
+            raise ctypes.WinError(ctypes.get_last_error())
+    except (AttributeError, OSError, ValueError) as exc:
+        print(f"Warning: could not enforce the native Windows window frame: {exc}", file=sys.stderr)
+
+
 class ControlCenter(QMainWindow):
     def __init__(self, root: Path):
         super().__init__()
@@ -81,16 +121,9 @@ class ControlCenter(QMainWindow):
         self.live_process.readyReadStandardError.connect(lambda: self._append_log(bytes(self.live_process.readAllStandardError()).decode("utf-8", "replace")))
         self.live_process.finished.connect(self._live_finished)
 
-        # Explicitly request the native Windows top-level frame and system controls.
-        # This keeps the app movable/resizable and exposes minimize, maximize, and close.
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
+        # Keep Qt on its ordinary top-level window type; Windows chrome is reinforced
+        # after show() so the OS provides a real title bar and resize frame.
+        self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle(APP_TITLE)
         self.resize(1240, 820)
         self.setMinimumSize(980, 680)
@@ -529,6 +562,8 @@ def main() -> int:
     app.setApplicationName(APP_TITLE)
     window = ControlCenter(root)
     window.show()
+    # Apply after Qt has created/shown the HWND; Windows then supplies the real frame.
+    QTimer.singleShot(0, lambda: _ensure_native_windows_frame(window))
     return app.exec()
 
 
