@@ -93,7 +93,17 @@ def main(argv: list[str] | None = None) -> int:
         from .bootstrap.dataset import build_dataset
 
         bootstrap = BootstrapSettings()
-        report = build_dataset(bootstrap.bootstrap_dir, bootstrap)
+        def progress(completed: int, total: int, item: str, phase: str) -> None:
+            print(
+                "KALSHI_EDGE_PROGRESS "
+                + json.dumps(
+                    {"completed": completed, "total": total, "item": item, "unit": "markets", "phase": phase},
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+        report = build_dataset(bootstrap.bootstrap_dir, bootstrap, progress_callback=progress)
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
     if args.command == "bootstrap-train":
