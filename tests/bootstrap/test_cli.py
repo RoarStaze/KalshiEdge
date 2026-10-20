@@ -32,7 +32,7 @@ def test_dataset_build_command_executes_builder(monkeypatch, capsys) -> None:
 
     called: list[Path] = []
 
-    def fake_build(root, settings):
+    def fake_build(root, settings, *, progress_callback=None):
         called.append(root)
         return DatasetBuildReport(
             market_count=2,

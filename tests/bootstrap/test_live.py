@@ -344,6 +344,24 @@ def test_default_loader_accepts_only_hash_verified_promoted_bundle(tmp_path: Pat
     assert loaded.bundle_sha256 == sealed.bundle_sha256
     assert loaded.stage == "promoted"
 
+    legacy = _bundle(("btc_close",), stage="promoted").model_copy(
+        update={
+            "model_version": "bootstrap-hybrid-v1",
+            "feature_schema_version": 1,
+            "promotion_rule": "kalshi-lockbox-v1:both-nonworse-one-improves-ece-bounded",
+            "bundle_sha256": None,
+        }
+    )
+    legacy = legacy.model_copy(update={"bundle_sha256": artifact.bundle_sha256(legacy)})
+    legacy_path = artifact.save_model_bundle(legacy, root / "models" / "promoted")
+    legacy_sealed = artifact.load_model_bundle(legacy_path)
+    default.write_text(
+        json.dumps({"bundle_sha256": legacy_sealed.bundle_sha256, "path": legacy_path.relative_to(root).as_posix()}),
+        encoding="utf-8",
+    )
+    with pytest.raises(LiveModelError, match="obsolete"):
+        load_default_bundle(root)
+
     experiment = _bundle(("btc_close",), stage="experiment")
     experiment_path = artifact.save_model_bundle(experiment, root / "models" / "experiments")
     default.write_text(
