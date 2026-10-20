@@ -28,7 +28,7 @@ from .types import FeatureRow, MarketLabel
 
 NS = 1_000_000_000
 MAX_FEATURE_LOOKBACK_SECONDS = 900
-DATASET_SCHEMA_VERSION = 1
+DATASET_SCHEMA_VERSION = 2
 
 
 class DatasetBuildError(RuntimeError):
@@ -417,7 +417,7 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
             return {}
         if (
             not isinstance(item, dict)
-            or item.get("schema") != 1
+            or item.get("schema") != 2
             or item.get("checkpoint_seconds") != list(settings.checkpoint_seconds)
             or item.get("binance_symbol") != settings.binance_symbol
             or not isinstance(item.get("ticker"), str)
@@ -455,7 +455,7 @@ def _append_dataset_checkpoint(
     path = _dataset_checkpoint_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     item = {
-        "schema": 1,
+        "schema": 2,
         "ticker": ticker,
         "checkpoint_seconds": list(settings.checkpoint_seconds),
         "binance_symbol": settings.binance_symbol,

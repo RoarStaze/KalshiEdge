@@ -86,6 +86,18 @@ def test_promotion_requires_conservative_lockbox_superiority_to_kalshi() -> None
     assert "NO_PREDECLARED_KALSHI_IMPROVEMENT" in no_improvement.reason_codes
 
 
+def test_promotion_fails_closed_when_kalshi_prior_is_degenerate() -> None:
+    degenerate_prior = _metric(
+        brier=0.4968,
+        log_loss=17.1603,
+        ece=0.4968,
+    ).model_copy(update={"sharpness": 0.0})
+    decision = evaluate.promotion_decision(_report(prior=degenerate_prior))
+    assert decision.promoted is False
+    assert decision.superior_to_kalshi is False
+    assert "KALSHI_PRIOR_DEGENERATE" in decision.reason_codes
+
+
 def test_promotion_fails_closed_on_leakage_schema_ablation_or_calibration_regression() -> None:
     assert evaluate.promotion_decision(_report(leakage_passed=False)).promoted is False
     assert evaluate.promotion_decision(_report(schema_match=False)).promoted is False

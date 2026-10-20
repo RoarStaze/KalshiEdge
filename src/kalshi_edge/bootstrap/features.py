@@ -193,18 +193,26 @@ def build_feature_row(
             features[f"kalshi_trade_return_{horizon}s"] = 0.0
 
     last_candle = completed_candles[-1] if completed_candles else None
-    features["kalshi_quote_available"] = 1.0 if last_candle else 0.0
+    # A candle's existence does not imply that it contains a usable YES price.
+    # Prefer a quoted midpoint; otherwise use the candle close when explicitly present.
+    # If both are missing, leave the numeric feature at zero but mark it unavailable so
+    # the benchmark can correctly fall back to the latest trade or neutral prior.
+    features["kalshi_quote_available"] = 0.0
     if last_candle:
         bid = last_candle.yes_bid_close
         ask = last_candle.yes_ask_close
-        mid = (bid + ask) / 2.0 if bid is not None and ask is not None else (last_candle.price_close or 0.0)
+        price_close = last_candle.price_close
+        has_two_sided_quote = bid is not None and ask is not None
+        has_close_price = price_close is not None
+        mid = (bid + ask) / 2.0 if has_two_sided_quote else (price_close if has_close_price else 0.0)
+        features["kalshi_quote_available"] = 1.0 if (has_two_sided_quote or has_close_price) else 0.0
         features.update(
             {
                 "kalshi_yes_bid": bid if bid is not None else 0.0,
                 "kalshi_yes_ask": ask if ask is not None else 0.0,
                 "kalshi_mid": mid,
                 "kalshi_spread": (ask - bid) if bid is not None and ask is not None else 0.0,
-                "kalshi_candle_price_close": last_candle.price_close or 0.0,
+                "kalshi_candle_price_close": price_close if price_close is not None else 0.0,
                 "kalshi_candle_price_high": last_candle.price_high or 0.0,
                 "kalshi_candle_price_low": last_candle.price_low or 0.0,
                 "kalshi_candle_volume": last_candle.volume,

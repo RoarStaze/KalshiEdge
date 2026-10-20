@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kalshi_edge.bootstrap import artifact
+from kalshi_edge.bootstrap import artifact, evaluate, training
 from kalshi_edge.bootstrap.binance_history import BinanceBar
 from kalshi_edge.bootstrap.config import BootstrapSettings
 from kalshi_edge.bootstrap.live_kalshi import BRTIObservation, LiveMarket, LiveQuote, LiveTrade
@@ -89,10 +89,10 @@ def _bundle(feature_names, *, stage="promoted", payload=b"pipeline") -> artifact
     digest = hashlib.sha256(payload).hexdigest()
     bundle = artifact.ModelBundle(
         stage=stage,
-        model_version="bootstrap-hybrid-v1",
+        model_version=training.MODEL_VERSION,
         git_sha="a" * 40,
         random_seed=73115,
-        feature_schema_version=1,
+        feature_schema_version=training.FEATURE_SCHEMA_VERSION,
         feature_names=tuple(feature_names),
         boundaries=artifact.SplitBoundaries(
             train_start_ts_ns=1,
@@ -112,7 +112,7 @@ def _bundle(feature_names, *, stage="promoted", payload=b"pipeline") -> artifact
         serialized_pipeline_b64=base64.b64encode(payload).decode("ascii"),
         serialized_pipeline_sha256=digest,
         source_experiment_sha256="d" * 64 if stage == "promoted" else None,
-        promotion_rule="test-rule" if stage == "promoted" else None,
+        promotion_rule=evaluate.PROMOTION_RULE_ID if stage == "promoted" else None,
     )
     return bundle.model_copy(update={"bundle_sha256": artifact.bundle_sha256(bundle)})
 
@@ -283,7 +283,7 @@ def test_pre_final_minute_prediction_contains_full_diagnostics() -> None:
     assert 0.0 <= result.confidence <= 1.0
     assert result.component_disagreement is not None
     assert result.model_hash is not None
-    assert result.model_version == "bootstrap-hybrid-v1"
+    assert result.model_version == "bootstrap-hybrid-v2"
     assert result.feed_quality.healthy is True
 
 
@@ -370,7 +370,7 @@ def test_prediction_jsonl_writer_is_bootstrap_only_and_canonical(tmp_path: Path)
     assert path.name == "predictions.jsonl"
     payload = json.loads(path.read_text(encoding="utf-8").strip())
     assert payload["status"] == "OK"
-    assert payload["model_version"] == "bootstrap-hybrid-v1"
+    assert payload["model_version"] == "bootstrap-hybrid-v2"
     assert payload["final_probability"] == pytest.approx(0.66)
 
     with pytest.raises(ValueError):

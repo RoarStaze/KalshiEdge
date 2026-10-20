@@ -108,6 +108,44 @@ def test_build_feature_row_excludes_every_observation_after_checkpoint() -> None
     assert max(row.source_max_ts_ns.values()) <= checkpoint
 
 
+def test_candle_without_quote_prices_does_not_claim_quote_availability() -> None:
+    label = _label()
+    checkpoint = label.open_ts_ns + 600 * NS
+    btc = HistoricalBTCState(bars=(_bar(checkpoint, 100.0),))
+    trade = HistoricalKalshiTrade(
+        ts_ns=checkpoint - NS,
+        yes_price=0.42,
+        count=1.0,
+        taker_side="yes",
+    )
+
+    missing_price = build_feature_row(
+        label,
+        checkpoint,
+        HistoricalKalshiState(
+            trades=(trade,),
+            candles=(HistoricalKalshiCandle(end_ts_ns=checkpoint - NS),),
+        ),
+        btc,
+    )
+    assert missing_price.features["kalshi_quote_available"] == 0.0
+    assert missing_price.features["kalshi_mid"] == 0.0
+    assert missing_price.features["kalshi_trade_available"] == 1.0
+    assert missing_price.features["kalshi_last_trade_yes"] == 0.42
+
+    candle_close = build_feature_row(
+        label,
+        checkpoint,
+        HistoricalKalshiState(
+            trades=(trade,),
+            candles=(HistoricalKalshiCandle(end_ts_ns=checkpoint - NS, price_close=0.61),),
+        ),
+        btc,
+    )
+    assert candle_close.features["kalshi_quote_available"] == 1.0
+    assert candle_close.features["kalshi_mid"] == 0.61
+
+
 def test_build_feature_row_uses_only_past_values_for_rolling_statistics() -> None:
     label = _label()
     checkpoint = label.open_ts_ns + 300 * NS
