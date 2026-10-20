@@ -346,6 +346,48 @@ def train_experiment(
     return report
 
 
+def _require_untouched_lockbox_interval(root: Path, start_ts_ns: int, end_ts_ns: int) -> None:
+    """Reject any lockbox interval that overlaps an earlier evaluation report."""
+    if start_ts_ns <= 0 or end_ts_ns < start_ts_ns:
+        raise EvaluationError("invalid lockbox interval")
+
+    report_dir = root.resolve() / "reports"
+    if not report_dir.exists():
+        return
+
+    for previous_path in sorted(report_dir.glob("evaluation-*.json")):
+        try:
+            payload = json.loads(previous_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation report is unreadable: {previous_path.name}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation report is malformed: {previous_path.name}"
+            )
+        previous_report = payload.get("report", payload)
+        if not isinstance(previous_report, dict):
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation report is malformed: {previous_path.name}"
+            )
+        try:
+            previous_start = int(previous_report["lockbox_start_ts_ns"])
+            previous_end = int(previous_report["lockbox_end_ts_ns"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation interval is missing: {previous_path.name}"
+            ) from exc
+        if previous_start <= 0 or previous_end < previous_start:
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation interval is invalid: {previous_path.name}"
+            )
+        if start_ts_ns <= previous_end and previous_start <= end_ts_ns:
+            raise EvaluationError(
+                f"proposed lockbox interval overlaps a previously evaluated lockbox: {previous_path.name}"
+            )
+
+
 def finalize_evaluation(
     root: Path,
     experiment_path: Path,
@@ -362,6 +404,7 @@ def finalize_evaluation(
     report_path = root / "reports" / f"evaluation-{experiment.bundle_sha256}.json"
     if report_path.exists():
         raise EvaluationError("this experiment has already been evaluated against the lockbox")
+    _require_untouched_lockbox_interval(root, report.lockbox_start_ts_ns, report.lockbox_end_ts_ns)
 
     decision = promotion_decision(report)
     _atomic_json(
@@ -438,6 +481,11 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
     report_path = root / "reports" / f"evaluation-{experiment.bundle_sha256}.json"
     if report_path.exists():
         raise EvaluationError("this experiment has already been evaluated against the lockbox")
+    _require_untouched_lockbox_interval(
+        root,
+        experiment.boundaries.lockbox_start_ts_ns,
+        experiment.boundaries.lockbox_end_ts_ns,
+    )
     try:
         lockbox_rows = training.load_lockbox_rows(root, experiment.boundaries)
     except Exception as exc:

@@ -89,7 +89,11 @@ kalshi-edge bootstrap-train --git-sha $GitSha
 
 Training writes experiment bundles under `data\bootstrap\models\experiments\` and reports under `data\bootstrap\reports\`. The training path does not evaluate the untouched lockbox and cannot create `models\default.json` by itself.
 
-## 6. Evaluate the untouched lockbox and apply the promotion gate
+## 6. Evaluate a genuinely untouched lockbox and apply the promotion gate
+
+**Lockbox use is interval-scoped, not just model-hash-scoped.** The evaluator refuses to score a proposed lockbox interval that overlaps any previously recorded evaluation interval, even when a retrained model or rebuilt dataset has a different hash. Collect/ingest a later, non-overlapping holdout period before evaluating another candidate. Do not delete reports to bypass this safeguard.
+
+The former `bootstrap-hybrid-v1` evaluation exposed a degenerate Kalshi prior: `kalshi_quote_available` was marked true when a candle existed even when no usable price existed, forcing `kalshi_mid` to zero and bypassing the trade fallback. That promotion is not valid evidence of superiority. The corrected source uses dataset/model schema version 2, a stricter promotion rule, and the live loader rejects legacy promoted bundles. Rebuild the bootstrap dataset from verified inputs after updating the code; **do not retrain/evaluate against the previously consumed timestamp interval**.
 
 ```powershell
 kalshi-edge bootstrap-evaluate

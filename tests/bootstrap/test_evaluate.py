@@ -215,6 +215,19 @@ def test_evaluate_lockbox_filters_before_prediction_and_uses_same_rows_for_bench
     assert report.leakage_audit.passed is True
 
 
+def test_run_lockbox_evaluation_rejects_overlapping_previously_used_lockbox(tmp_path: Path) -> None:
+    experiment_path = artifact.save_model_bundle(_bundle(), tmp_path / "models" / "experiments")
+    prior_path = tmp_path / "reports" / "evaluation-prior.json"
+    prior_path.parent.mkdir(parents=True)
+    prior_path.write_text(
+        json.dumps({"report": {"lockbox_start_ts_ns": 350, "lockbox_end_ts_ns": 450}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(evaluate.EvaluationError, match="overlaps a previously evaluated lockbox"):
+        evaluate.run_lockbox_evaluation(tmp_path, experiment_path)
+
+
 def test_evaluate_lockbox_rejects_promoted_bundle_or_feature_schema_mismatch(monkeypatch) -> None:
     rows = (_row(320, 0, 0.4, "LOCK-A"), _row(350, 1, 0.6, "LOCK-B"))
     promoted = _bundle().model_copy(update={"stage": "promoted"})
