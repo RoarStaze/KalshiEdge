@@ -220,6 +220,11 @@ def evaluate_lockbox(bundle: artifact.ModelBundle, dataset: Sequence[FeatureRow]
     """Evaluate exactly the predeclared, causally evaluable lockbox scope."""
     if bundle.stage != "experiment":
         raise EvaluationError("lockbox evaluation accepts experiment bundles only")
+    if (
+        bundle.model_version != training.MODEL_VERSION
+        or bundle.feature_schema_version != training.FEATURE_SCHEMA_VERSION
+    ):
+        raise EvaluationError("lockbox evaluation rejects an obsolete model or feature schema; retrain the candidate")
     if not bundle.leakage_audit.passed:
         raise EvaluationError("experiment development leakage audit did not pass")
     rows = tuple(dataset)
@@ -399,6 +404,11 @@ def finalize_evaluation(
     experiment = artifact.load_model_bundle(experiment_path)
     if experiment.stage != "experiment":
         raise EvaluationError("only experiment bundles can be finalized")
+    if (
+        experiment.model_version != training.MODEL_VERSION
+        or experiment.feature_schema_version != training.FEATURE_SCHEMA_VERSION
+    ):
+        raise EvaluationError("cannot finalize an obsolete experiment model or feature schema")
     if report.bundle_sha256 != experiment.bundle_sha256:
         raise EvaluationError("evaluation report bundle hash does not match experiment")
     report_path = root / "reports" / f"evaluation-{experiment.bundle_sha256}.json"
