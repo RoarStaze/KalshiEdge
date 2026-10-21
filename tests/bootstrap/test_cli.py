@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 from kalshi_edge.cli import build_parser, main
@@ -13,7 +14,15 @@ def test_cli_exposes_bootstrap_predictor_commands() -> None:
 
     assert backfill.command == "bootstrap-backfill"
     assert backfill.source == "all"
-    assert build.command == "bootstrap-build-dataset"
+    bounded = parser.parse_args([
+        "bootstrap-backfill", "--source", "all",
+        "--since-date", "2026-10-11", "--until-date", "2026-10-19",
+        "--max-markets", "900",
+    ])
+    assert bounded.since_date == date(2026, 10, 11)
+    assert bounded.until_date == date(2026, 10, 19)
+    assert bounded.max_markets == 900
+    build = parser.parse_args(["bootstrap-build-dataset"])
     assert train.command == "bootstrap-train"
     assert train.git_sha == "a" * 40
     assert evaluate.command == "bootstrap-evaluate"
