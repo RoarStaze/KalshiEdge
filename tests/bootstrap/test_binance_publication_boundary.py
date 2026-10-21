@@ -178,7 +178,7 @@ def _seed_valid_binance_day(root: Path, day: int) -> None:
     write_manifest(root, artifact)
 
 
-def test_backfill_skips_current_utc_date_and_records_reproducible_publication_cutoff(tmp_path: Path) -> None:
+def test_backfill_uses_two_day_utc_publication_grace_and_records_cutoff(tmp_path: Path) -> None:
     _seed_market(tmp_path, "KXBTC15M-OLD", 1)
     _seed_market(tmp_path, "KXBTC15M-CURRENT", 2)
     client = _ArchiveClient()
@@ -304,7 +304,7 @@ def test_versioned_availability_policy_preserves_legacy_snapshot_and_prefers_v2(
         root=tmp_path,
         source="binance_availability",
         logical_name="daily/2026-08-03.json",
-        content=(json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")) + "\\n").encode(),
+        content=(json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")) + "\n").encode(),
         metadata={"source_locator": "test", "publication_policy": legacy_payload["publication_policy"]},
     )
 
