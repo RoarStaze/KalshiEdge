@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -61,6 +62,49 @@ class FakeClient:
 
     def close(self):
         pass
+
+
+
+
+def test_market_selection_uses_inclusive_utc_dates_and_caps_to_newest() -> None:
+    from kalshi_edge.bootstrap.backfill import _select_market_tickers
+
+    discovered = []
+    for day in range(1, 11):
+        market = dict(MARKET)
+        market["ticker"] = f"KXBTC15M-202610{day:02d}"
+        market["open_time"] = f"2026-10-{day:02d}T12:00:00Z"
+        discovered.append(market)
+    discovered.append({"ticker": "KXBTC15M-UNDATED"})
+
+    selected = _select_market_tickers(
+        discovered,
+        since_date=date(2026, 10, 4),
+        until_date=date(2026, 10, 9),
+        max_markets=3,
+    )
+
+    assert selected == [
+        "KXBTC15M-20261007",
+        "KXBTC15M-20261008",
+        "KXBTC15M-20261009",
+    ]
+
+
+def test_market_selection_without_dates_still_honors_hard_market_cap() -> None:
+    from kalshi_edge.bootstrap.backfill import _select_market_tickers
+
+    discovered = []
+    for day in range(1, 5):
+        market = dict(MARKET)
+        market["ticker"] = f"KXBTC15M-202610{day:02d}"
+        market["open_time"] = f"2026-10-{day:02d}T12:00:00Z"
+        discovered.append(market)
+
+    assert _select_market_tickers(discovered, max_markets=2) == [
+        "KXBTC15M-20261003",
+        "KXBTC15M-20261004",
+    ]
 
 
 def test_backfill_kalshi_writes_verified_isolated_artifacts(tmp_path: Path) -> None:
