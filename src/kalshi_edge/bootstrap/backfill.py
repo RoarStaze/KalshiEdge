@@ -120,11 +120,68 @@ def _write(
     )
 
 
+def _market_open_date(market: dict[str, Any]) -> date | None:
+    """Return a discovered market's open date in UTC; unknown dates fail closed."""
+    raw = market.get("open_time")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc).date()
+
+
+def _select_market_tickers(
+    discovered: list[dict[str, Any]],
+    *,
+    since_date: date | None = None,
+    until_date: date | None = None,
+    max_markets: int | None = None,
+) -> list[str]:
+    """Select markets by inclusive UTC open date and cap to the newest markets."""
+    if (since_date is None) != (until_date is None):
+        raise ValueError("--since-date and --until-date must be supplied together")
+    if since_date is not None and until_date is not None and since_date > until_date:
+        raise ValueError("--since-date cannot be later than --until-date")
+    if max_markets is not None and max_markets < 1:
+        raise ValueError("--max-markets must be a positive integer")
+
+    bounded = since_date is not None or until_date is not None or max_markets is not None
+    if not bounded:
+        return sorted({str(market["ticker"]) for market in discovered if market.get("ticker")})
+
+    by_ticker: dict[str, date] = {}
+    for market in discovered:
+        raw_ticker = market.get("ticker")
+        if not raw_ticker:
+            continue
+        ticker = str(raw_ticker)
+        opened = _market_open_date(market)
+        if opened is None:
+            continue
+        if since_date is not None and opened < since_date:
+            continue
+        if until_date is not None and opened > until_date:
+            continue
+        by_ticker[ticker] = opened
+
+    ordered = sorted((opened, ticker) for ticker, opened in by_ticker.items())
+    if max_markets is not None:
+        ordered = ordered[-max_markets:]
+    return [ticker for _, ticker in ordered]
+
+
 def backfill_kalshi(
     settings: CollectorSettings,
     bootstrap: BootstrapSettings,
     *,
     client: KalshiHistoricalClient | Any | None = None,
+    since_date: date | None = None,
+    until_date: date | None = None,
+    max_markets: int | None = None,
 ) -> KalshiBackfillReport:
     root = bootstrap.bootstrap_dir
     root.mkdir(parents=True, exist_ok=True)
@@ -144,7 +201,12 @@ def backfill_kalshi(
             downloaded += 1
 
         discovered = history.discover_markets()
-        tickers = sorted({str(market["ticker"]) for market in discovered if market.get("ticker")})
+        tickers = _select_market_tickers(
+            discovered,
+            since_date=since_date,
+            until_date=until_date,
+            max_markets=max_markets,
+        )
 
         for ticker in tickers:
             market_name = f"markets/{ticker}.json"
