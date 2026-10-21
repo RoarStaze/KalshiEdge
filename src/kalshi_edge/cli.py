@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+from datetime import date
 from pathlib import Path
 
 from .collector import KalshiCollector
@@ -38,6 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap_backfill = sub.add_parser("bootstrap-backfill", help="backfill bootstrap historical data")
     bootstrap_backfill.add_argument("--source", choices=("kalshi", "binance", "all"), default="all")
+    bootstrap_backfill.add_argument(
+        "--since-date", type=date.fromisoformat, default=None,
+        help="inclusive UTC market-open date (requires --until-date)",
+    )
+    bootstrap_backfill.add_argument(
+        "--until-date", type=date.fromisoformat, default=None,
+        help="inclusive UTC market-open date (requires --since-date)",
+    )
+    bootstrap_backfill.add_argument(
+        "--max-markets", type=int, default=None,
+        help="hard cap; when capped, select the most recent markets in the selected range",
+    )
     sub.add_parser("bootstrap-build-dataset", help="build point-in-time bootstrap feature dataset")
 
     bootstrap_train = sub.add_parser("bootstrap-train", help="train a development-only bootstrap experiment")
@@ -51,7 +64,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "bootstrap-backfill":
+        has_since = args.since_date is not None
+        has_until = args.until_date is not None
+        if has_since != has_until:
+            parser.error("--since-date and --until-date must be supplied together")
+        if has_since and args.since_date > args.until_date:
+            parser.error("--since-date cannot be later than --until-date")
+        if args.max_markets is not None and args.max_markets < 1:
+            parser.error("--max-markets must be a positive integer")
+        if args.source == "binance" and (has_since or args.max_markets is not None):
+            parser.error("date and market limits apply only when --source includes kalshi")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if args.command == "collect":
         asyncio.run(KalshiCollector(CollectorSettings()).run_forever())
@@ -83,7 +108,13 @@ def main(argv: list[str] | None = None) -> int:
         bootstrap = BootstrapSettings()
         reports: dict[str, object] = {}
         if args.source in {"kalshi", "all"}:
-            reports["kalshi"] = backfill_kalshi(CollectorSettings(), bootstrap).model_dump(mode="json")
+            reports["kalshi"] = backfill_kalshi(
+                CollectorSettings(),
+                bootstrap,
+                since_date=args.since_date,
+                until_date=args.until_date,
+                max_markets=args.max_markets,
+            ).model_dump(mode="json")
         if args.source in {"binance", "all"}:
             reports["binance"] = backfill_binance(bootstrap).model_dump(mode="json")
         print(json.dumps(reports, indent=2, sort_keys=True))
