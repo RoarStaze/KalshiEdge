@@ -59,6 +59,8 @@ kalshi-edge bootstrap-backfill --source all --since-date 2026-10-11 --until-date
 - `--since-date` and `--until-date` filter on the market's UTC open date, inclusive.
 - `--max-markets` is a hard cap; when the cap is reached, the newest eligible markets are selected.
 - When bounds or a cap are supplied, discovered markets with a missing/invalid open timestamp are skipped rather than bypassing the bound.
+- Binance availability snapshots use a conservative two-UTC-day publication grace because a daily archive may still return 404 shortly after midnight UTC; schema-v2 snapshots are versioned separately so prior snapshots remain intact.
+- A 404 for an older Binance date that falls inside the recorded available window remains an integrity/data-availability failure; do not suppress it or build a dataset that requires the missing archive.
 - Avoid an unbounded full-history run unless you explicitly intend to collect the full archive and have checked available disk space.
 
 For isolated troubleshooting, the supported source selections are:
