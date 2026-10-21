@@ -14,6 +14,45 @@ def _row(features: dict[str, float]) -> FeatureRow:
     )
 
 
+
+
+def test_partition_after_prior_evaluation_uses_only_strictly_new_market_groups(monkeypatch, tmp_path) -> None:
+    ordered = [
+        (f"KXBTC15M-{index:03d}", index * 100 + 10, index * 100 + 50)
+        for index in range(30)
+    ]
+    monkeypatch.setattr(training, "_metadata_groups", lambda _path: ordered)
+
+    plan = training._partition_plan(
+        tmp_path / "features.parquet",
+        previous_lockbox_end_ts_ns=1950,
+    )
+
+    assert plan.boundaries.train_end_ts_ns <= 1950
+    assert plan.boundaries.calibration_end_ts_ns <= 1950
+    assert plan.boundaries.lockbox_start_ts_ns == 2010
+    assert plan.boundaries.lockbox_end_ts_ns == 2950
+    assert all(
+        int(name.rsplit("-", 1)[1]) >= 20
+        for name in plan.lockbox_groups
+    )
+
+
+def test_partition_after_prior_evaluation_fails_when_no_new_markets_exist(monkeypatch, tmp_path) -> None:
+    ordered = [
+        (f"KXBTC15M-{index:03d}", index * 100 + 10, index * 100 + 50)
+        for index in range(30)
+    ]
+    monkeypatch.setattr(training, "_metadata_groups", lambda _path: ordered)
+
+    import pytest
+    with pytest.raises(training.TrainingError, match="genuinely new markets"):
+        training._partition_plan(
+            tmp_path / "features.parquet",
+            previous_lockbox_end_ts_ns=5000,
+        )
+
+
 def test_kalshi_prior_uses_actual_feature_builder_availability_names() -> None:
     quote = _row(
         {
