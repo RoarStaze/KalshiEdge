@@ -50,14 +50,21 @@ git status --short
 
 ## 3. Backfill official historical data
 
+Prefer a bounded Kalshi backfill after an evaluation has consumed a lockbox interval. The UTC dates below are an example; choose an inclusive date range that is newer than the last evaluated lockbox and no later than the available Binance archive date.
+
 ```powershell
-kalshi-edge bootstrap-backfill --source all
+kalshi-edge bootstrap-backfill --source all --since-date 2026-10-11 --until-date 2026-10-19 --max-markets 900
 ```
 
-The command separately executes the official Kalshi and official Binance history paths. For isolated troubleshooting, the supported source selections are:
+- `--since-date` and `--until-date` filter on the market's UTC open date, inclusive.
+- `--max-markets` is a hard cap; when the cap is reached, the newest eligible markets are selected.
+- When bounds or a cap are supplied, discovered markets with a missing/invalid open timestamp are skipped rather than bypassing the bound.
+- Avoid an unbounded full-history run unless you explicitly intend to collect the full archive and have checked available disk space.
+
+For isolated troubleshooting, the supported source selections are:
 
 ```powershell
-kalshi-edge bootstrap-backfill --source kalshi
+kalshi-edge bootstrap-backfill --source kalshi --since-date 2026-10-11 --until-date 2026-10-19 --max-markets 900
 kalshi-edge bootstrap-backfill --source binance
 ```
 
@@ -87,7 +94,7 @@ $GitSha = (git rev-parse HEAD).Trim()
 kalshi-edge bootstrap-train --git-sha $GitSha
 ```
 
-Training writes experiment bundles under `data\bootstrap\models\experiments\` and reports under `data\bootstrap\reports\`. The training path does not evaluate the untouched lockbox and cannot create `models\default.json` by itself.
+Training writes experiment bundles under `data\bootstrap\models\experiments\` and reports under `data\bootstrap\reports\`. The training path does not evaluate the untouched lockbox and cannot create `models\default.json` by itself. If evaluation reports already exist, training now reserves only complete market groups strictly after the latest previously evaluated lockbox endpoint for the next lockbox; older groups are eligible for chronological development/calibration. If no markets exist after that endpoint, training fails rather than reusing a consumed interval.
 
 ## 6. Evaluate a genuinely untouched lockbox and apply the promotion gate
 
