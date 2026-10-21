@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict
 from .provenance import sha256_file, verify_artifact, write_raw_artifact
 
 
-AVAILABILITY_SCHEMA_VERSION = 1
-PUBLICATION_POLICY = "daily archives become available the next UTC day"
+AVAILABILITY_SCHEMA_VERSION = 2
+LEGACY_AVAILABILITY_SCHEMA_VERSION = 1
+LEGACY_PUBLICATION_POLICY = "daily archives become available the next UTC day"
+PUBLICATION_POLICY = "daily archives are treated as available through two UTC calendar dates before the snapshot date"
 PUBLICATION_POLICY_SOURCE = "https://github.com/binance/binance-public-data#readme"
 
 
@@ -21,10 +23,17 @@ class BinanceAvailabilitySnapshot(BaseModel):
     available_through_date: date
     path: Path
     sha256: str
+    schema_version: int
 
 
-def _snapshot_paths(root: Path, as_of_utc_date: date) -> tuple[Path, Path]:
-    logical_name = f"daily/{as_of_utc_date.isoformat()}.json"
+def _snapshot_paths(
+    root: Path,
+    as_of_utc_date: date,
+    *,
+    schema_version: int = AVAILABILITY_SCHEMA_VERSION,
+) -> tuple[Path, Path]:
+    suffix = "" if schema_version == LEGACY_AVAILABILITY_SCHEMA_VERSION else f"-v{schema_version}"
+    logical_name = f"daily/{as_of_utc_date.isoformat()}{suffix}.json"
     data_path = root / "raw" / "binance_availability" / logical_name
     manifest_path = root / "manifests" / "binance_availability" / f"{logical_name}.manifest.json"
     return data_path, manifest_path
@@ -45,22 +54,30 @@ def _load_snapshot(root: Path, data_path: Path, manifest_path: Path) -> BinanceA
         raise RuntimeError(f"Binance availability snapshot is unreadable: {data_path}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"Binance availability snapshot is invalid: {data_path}")
-    if int(payload.get("schema_version", -1)) != AVAILABILITY_SCHEMA_VERSION:
+    schema_version = int(payload.get("schema_version", -1))
+    if schema_version not in {LEGACY_AVAILABILITY_SCHEMA_VERSION, AVAILABILITY_SCHEMA_VERSION}:
         raise RuntimeError(f"unsupported Binance availability snapshot schema: {data_path}")
-    if payload.get("publication_policy") != PUBLICATION_POLICY:
+    expected_policy = (
+        LEGACY_PUBLICATION_POLICY
+        if schema_version == LEGACY_AVAILABILITY_SCHEMA_VERSION
+        else PUBLICATION_POLICY
+    )
+    publication_lag_days = 1 if schema_version == LEGACY_AVAILABILITY_SCHEMA_VERSION else 2
+    if payload.get("publication_policy") != expected_policy:
         raise RuntimeError(f"unexpected Binance availability publication policy: {data_path}")
     try:
         as_of_utc_date = date.fromisoformat(str(payload["as_of_utc_date"]))
         available_through_date = date.fromisoformat(str(payload["available_through_date"]))
     except (KeyError, ValueError) as exc:
         raise RuntimeError(f"Binance availability snapshot has invalid dates: {data_path}") from exc
-    if available_through_date != as_of_utc_date - timedelta(days=1):
-        raise RuntimeError(f"Binance availability snapshot violates next-day publication rule: {data_path}")
+    if available_through_date != as_of_utc_date - timedelta(days=publication_lag_days):
+        raise RuntimeError(f"Binance availability snapshot violates its publication policy: {data_path}")
     return BinanceAvailabilitySnapshot(
         as_of_utc_date=as_of_utc_date,
         available_through_date=available_through_date,
         path=data_path.relative_to(root),
         sha256=sha256_file(data_path),
+        schema_version=schema_version,
     )
 
 
@@ -70,7 +87,7 @@ def record_daily_availability_snapshot(root: Path, as_of_utc_date: date) -> Bina
     if data_path.exists() or manifest_path.exists():
         return _load_snapshot(root, data_path, manifest_path)
 
-    available_through_date = as_of_utc_date - timedelta(days=1)
+    available_through_date = as_of_utc_date - timedelta(days=2)
     payload = {
         "schema_version": AVAILABILITY_SCHEMA_VERSION,
         "as_of_utc_date": as_of_utc_date.isoformat(),
@@ -82,7 +99,7 @@ def record_daily_availability_snapshot(root: Path, as_of_utc_date: date) -> Bina
     artifact = write_raw_artifact(
         root=root,
         source="binance_availability",
-        logical_name=f"daily/{as_of_utc_date.isoformat()}.json",
+        logical_name=f"daily/{as_of_utc_date.isoformat()}-v{AVAILABILITY_SCHEMA_VERSION}.json",
         content=content,
         metadata={
             "source_locator": PUBLICATION_POLICY_SOURCE,
@@ -94,6 +111,7 @@ def record_daily_availability_snapshot(root: Path, as_of_utc_date: date) -> Bina
         available_through_date=available_through_date,
         path=artifact.path,
         sha256=artifact.sha256,
+        schema_version=AVAILABILITY_SCHEMA_VERSION,
     )
 
 
@@ -108,13 +126,15 @@ def latest_daily_availability_snapshot(root: Path) -> BinanceAvailabilitySnapsho
 
     data_paths = sorted(daily_root.glob("*.json"))
     manifest_paths = sorted(manifest_root.glob("*.json.manifest.json")) if manifest_root.exists() else []
-    data_dates = {path.stem for path in data_paths}
-    manifest_dates = {path.name.removesuffix(".json.manifest.json") for path in manifest_paths}
-    if data_dates != manifest_dates:
+    data_names = {path.name for path in data_paths}
+    manifest_names = {path.name.removesuffix(".manifest.json") for path in manifest_paths}
+    if data_names != manifest_names:
         raise RuntimeError("Binance availability snapshot provenance is incomplete")
     if not data_paths:
         return None
 
-    data_path = data_paths[-1]
-    manifest_path = manifest_root / f"{data_path.name}.manifest.json"
-    return _load_snapshot(root, data_path, manifest_path)
+    snapshots: list[BinanceAvailabilitySnapshot] = []
+    for data_path in data_paths:
+        manifest_path = manifest_root / f"{data_path.name}.manifest.json"
+        snapshots.append(_load_snapshot(root, data_path, manifest_path))
+    return max(snapshots, key=lambda item: (item.as_of_utc_date, item.schema_version))
