@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: kalshi-edge
+Version: 0.1.0
+Summary: KXBTC15M empirical edge research and data integrity engine
+Requires-Python: >=3.12
+Requires-Dist: cryptography<47,>=46
+Requires-Dist: httpx<0.29,>=0.28
+Requires-Dist: pydantic<3,>=2.13
+Requires-Dist: pydantic-settings<3,>=2.14
+Requires-Dist: websockets<17,>=16
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=9; extra == "dev"
+Requires-Dist: pytest-asyncio<2,>=1.2; extra == "dev"
+Provides-Extra: gui
+Requires-Dist: PySide6<7,>=6.8; extra == "gui"
+Provides-Extra: research
+Requires-Dist: duckdb<2,>=1.5; extra == "research"
+Requires-Dist: numpy<3,>=2.5; extra == "research"
+Requires-Dist: pyarrow<22,>=21; extra == "research"
+Requires-Dist: scikit-learn<2,>=1.9; extra == "research"
+Requires-Dist: scipy<2,>=1.18; extra == "research"
+Requires-Dist: xgboost-cpu<4,>=3.4; extra == "research"

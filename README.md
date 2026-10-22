@@ -83,6 +83,17 @@ kalshi-edge predict-live
 
 `bootstrap-evaluate` is the only path that may promote an experiment to the live default. `predict-live` accepts only a promoted/default hash-verified model bundle.
 
+## Desktop Control Center
+
+An optional Windows desktop GUI is available for the bootstrap workflow. Install and launch it from the repository root:
+
+```powershell
+python -m pip install -e ".[gui,research]"
+kalshi-edge-gui
+```
+
+The UI shows the full bootstrap pipeline, persists stage state locally, and avoids invented progress percentages when a command does not report measurable progress. See [the Control Center runbook](docs/RUNBOOK_CONTROL_CENTER.md) for its current capabilities and resume limitations.
+
 ## Runbook and project state
 
 For exact Windows commands, artifact locations, model/provenance verification, predictor start/stop instructions, and the independent Phase 1 collector safety boundary, read [`docs/RUNBOOK_BOOTSTRAP_PREDICTOR.md`](docs/RUNBOOK_BOOTSTRAP_PREDICTOR.md).

@@ -28,8 +28,8 @@ from .splits import MarketIndex, WalkForwardSplit, make_walk_forward_splits
 from .types import FeatureRow
 
 
-MODEL_VERSION = "bootstrap-hybrid-v1"
-FEATURE_SCHEMA_VERSION = 1
+MODEL_VERSION = "bootstrap-hybrid-v2"
+FEATURE_SCHEMA_VERSION = 2
 STRUCTURAL_SIMULATIONS = 512
 MIN_HISTORICAL_EVALUATION_SECONDS = 60.0
 KALSHI_FLOW_PREFIXES = (
@@ -199,7 +199,8 @@ def _verified_context(root: Path) -> DatasetContext:
     input_hashes["derived/features.provenance.json"] = _sha256_file(provenance_path)
     input_hashes["manifests/dataset/features.parquet.manifest.json"] = _sha256_file(manifest_path)
 
-    plan = _partition_plan(dataset_path)
+    previous_lockbox_end = _previous_lockbox_end_ts_ns(root)
+    plan = _partition_plan(dataset_path, previous_lockbox_end_ts_ns=previous_lockbox_end)
     return DatasetContext(
         dataset_path=dataset_path,
         manifest_path=manifest_path,
@@ -235,18 +236,68 @@ def _metadata_groups(dataset_path: Path) -> list[tuple[str, int, int]]:
     return ordered
 
 
-def _partition_plan(dataset_path: Path) -> PartitionPlan:
-    ordered = _metadata_groups(dataset_path)
-    count = len(ordered)
-    lockbox_count = max(2, count // 10)
-    calibration_count = max(2, count // 10)
-    development_count = count - lockbox_count - calibration_count
-    if development_count < 8:
-        raise TrainingError("insufficient development markets after reserving calibration and lockbox")
+def _previous_lockbox_end_ts_ns(root: Path) -> int | None:
+    """Return the latest previously consumed lockbox endpoint, failing closed on bad reports."""
+    report_dir = root.resolve() / "reports"
+    if not report_dir.exists():
+        return None
 
-    development = ordered[:development_count]
-    calibration_groups = ordered[development_count : development_count + calibration_count]
-    lockbox = ordered[development_count + calibration_count :]
+    endpoints: list[int] = []
+    for path in sorted(report_dir.glob("evaluation-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise TrainingError(f"cannot establish an untouched lockbox: unreadable report {path.name}") from exc
+        if not isinstance(payload, dict):
+            raise TrainingError(f"cannot establish an untouched lockbox: malformed report {path.name}")
+        report = payload.get("report", payload)
+        if not isinstance(report, dict):
+            raise TrainingError(f"cannot establish an untouched lockbox: malformed report {path.name}")
+        try:
+            start_ns = int(report["lockbox_start_ts_ns"])
+            end_ns = int(report["lockbox_end_ts_ns"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TrainingError(f"cannot establish an untouched lockbox: missing interval in {path.name}") from exc
+        if start_ns <= 0 or end_ns < start_ns:
+            raise TrainingError(f"cannot establish an untouched lockbox: invalid interval in {path.name}")
+        endpoints.append(end_ns)
+
+    return max(endpoints) if endpoints else None
+
+
+def _partition_plan(
+    dataset_path: Path,
+    *,
+    previous_lockbox_end_ts_ns: int | None = None,
+) -> PartitionPlan:
+    """Build chronological splits, reserving only genuinely new groups after any used lockbox."""
+    ordered = _metadata_groups(dataset_path)
+
+    if previous_lockbox_end_ts_ns is None:
+        count = len(ordered)
+        lockbox_count = max(2, count // 10)
+        calibration_count = max(2, count // 10)
+        development_count = count - lockbox_count - calibration_count
+        if development_count < 8:
+            raise TrainingError("insufficient development markets after reserving calibration and lockbox")
+        development = ordered[:development_count]
+        calibration_groups = ordered[development_count : development_count + calibration_count]
+        lockbox = ordered[development_count + calibration_count :]
+    else:
+        # A previous evaluation consumes its full interval. Old groups may enter
+        # development/calibration, but only whole market groups strictly after
+        # the latest consumed endpoint may form the next lockbox.
+        historical = [item for item in ordered if item[2] <= previous_lockbox_end_ts_ns]
+        lockbox = [item for item in ordered if item[1] > previous_lockbox_end_ts_ns]
+        if len(lockbox) < 2:
+            raise TrainingError("insufficient genuinely new markets after the previously evaluated lockbox")
+        calibration_count = max(2, len(historical) // 10)
+        development_count = len(historical) - calibration_count
+        if development_count < 8:
+            raise TrainingError("insufficient historical development markets before the new lockbox")
+        development = historical[:development_count]
+        calibration_groups = historical[development_count:]
+
     boundaries = artifact.SplitBoundaries(
         train_start_ts_ns=min(item[1] for item in development),
         train_end_ts_ns=max(item[2] for item in development),

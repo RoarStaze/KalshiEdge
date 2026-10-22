@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import Field
 
 from ..config import CollectorSettings
-from . import artifact, features, structural, training
+from . import artifact, evaluate, features, structural, training
 from .binance_history import BinanceBar
 from .config import BootstrapSettings
 from .live_binance import BinanceLiveFeed
@@ -80,6 +80,12 @@ def load_default_bundle(root: Path) -> artifact.ModelBundle:
         raise LiveModelError("default pointer hash does not match promoted bundle")
     if bundle.source_experiment_sha256 is None or bundle.promotion_rule is None:
         raise LiveModelError("promoted bundle lacks Task-8 promotion provenance")
+    if bundle.model_version != training.MODEL_VERSION:
+        raise LiveModelError("promoted model version is obsolete; rebuild the dataset and train a new experiment")
+    if bundle.feature_schema_version != training.FEATURE_SCHEMA_VERSION:
+        raise LiveModelError("promoted feature schema is obsolete; rebuild the dataset and train a new experiment")
+    if bundle.promotion_rule != evaluate.PROMOTION_RULE_ID:
+        raise LiveModelError("promoted model uses an obsolete promotion rule and cannot be used for live inference")
     return bundle
 
 

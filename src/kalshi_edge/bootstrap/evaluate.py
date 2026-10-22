@@ -32,10 +32,11 @@ REQUIRED_ABLATIONS = (
     "xgboost_vs_lower_variance",
 )
 
-PROMOTION_RULE_ID = "kalshi-lockbox-v1:both-nonworse-one-improves-ece-bounded"
+PROMOTION_RULE_ID = "kalshi-lockbox-v2:nondegenerate-prior-both-nonworse-one-improves-ece-bounded"
 PROMOTION_MIN_IMPROVEMENT = 1e-6
 PROMOTION_NONWORSE_TOLERANCE = 1e-12
 PROMOTION_MAX_ECE_DEGRADATION = 0.02
+PROMOTION_MIN_KALSHI_PRIOR_SHARPNESS = 1e-6
 
 
 class BootstrapTrainingReport(BaseModel):
@@ -149,6 +150,8 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         ece_change = 0.0
         superior = False
     else:
+        if prior.sharpness <= PROMOTION_MIN_KALSHI_PRIOR_SHARPNESS:
+            reasons.append("KALSHI_PRIOR_DEGENERATE")
         nonworse, improved, brier_improvement, log_loss_improvement = _dominates(candidate, prior)
         ece_change = candidate.ece - prior.ece
         if not nonworse:
@@ -217,6 +220,11 @@ def evaluate_lockbox(bundle: artifact.ModelBundle, dataset: Sequence[FeatureRow]
     """Evaluate exactly the predeclared, causally evaluable lockbox scope."""
     if bundle.stage != "experiment":
         raise EvaluationError("lockbox evaluation accepts experiment bundles only")
+    if (
+        bundle.model_version != training.MODEL_VERSION
+        or bundle.feature_schema_version != training.FEATURE_SCHEMA_VERSION
+    ):
+        raise EvaluationError("lockbox evaluation rejects an obsolete model or feature schema; retrain the candidate")
     if not bundle.leakage_audit.passed:
         raise EvaluationError("experiment development leakage audit did not pass")
     rows = tuple(dataset)
@@ -343,6 +351,48 @@ def train_experiment(
     return report
 
 
+def _require_untouched_lockbox_interval(root: Path, start_ts_ns: int, end_ts_ns: int) -> None:
+    """Reject any lockbox interval that overlaps an earlier evaluation report."""
+    if start_ts_ns <= 0 or end_ts_ns < start_ts_ns:
+        raise EvaluationError("invalid lockbox interval")
+
+    report_dir = root.resolve() / "reports"
+    if not report_dir.exists():
+        return
+
+    for previous_path in sorted(report_dir.glob("evaluation-*.json")):
+        try:
+            payload = json.loads(previous_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation report is unreadable: {previous_path.name}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation report is malformed: {previous_path.name}"
+            )
+        previous_report = payload.get("report", payload)
+        if not isinstance(previous_report, dict):
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation report is malformed: {previous_path.name}"
+            )
+        try:
+            previous_start = int(previous_report["lockbox_start_ts_ns"])
+            previous_end = int(previous_report["lockbox_end_ts_ns"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation interval is missing: {previous_path.name}"
+            ) from exc
+        if previous_start <= 0 or previous_end < previous_start:
+            raise EvaluationError(
+                f"cannot verify lockbox independence because evaluation interval is invalid: {previous_path.name}"
+            )
+        if start_ts_ns <= previous_end and previous_start <= end_ts_ns:
+            raise EvaluationError(
+                f"proposed lockbox interval overlaps a previously evaluated lockbox: {previous_path.name}"
+            )
+
+
 def finalize_evaluation(
     root: Path,
     experiment_path: Path,
@@ -354,11 +404,17 @@ def finalize_evaluation(
     experiment = artifact.load_model_bundle(experiment_path)
     if experiment.stage != "experiment":
         raise EvaluationError("only experiment bundles can be finalized")
+    if (
+        experiment.model_version != training.MODEL_VERSION
+        or experiment.feature_schema_version != training.FEATURE_SCHEMA_VERSION
+    ):
+        raise EvaluationError("cannot finalize an obsolete experiment model or feature schema")
     if report.bundle_sha256 != experiment.bundle_sha256:
         raise EvaluationError("evaluation report bundle hash does not match experiment")
     report_path = root / "reports" / f"evaluation-{experiment.bundle_sha256}.json"
     if report_path.exists():
         raise EvaluationError("this experiment has already been evaluated against the lockbox")
+    _require_untouched_lockbox_interval(root, report.lockbox_start_ts_ns, report.lockbox_end_ts_ns)
 
     decision = promotion_decision(report)
     _atomic_json(
@@ -435,6 +491,11 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
     report_path = root / "reports" / f"evaluation-{experiment.bundle_sha256}.json"
     if report_path.exists():
         raise EvaluationError("this experiment has already been evaluated against the lockbox")
+    _require_untouched_lockbox_interval(
+        root,
+        experiment.boundaries.lockbox_start_ts_ns,
+        experiment.boundaries.lockbox_end_ts_ns,
+    )
     try:
         lockbox_rows = training.load_lockbox_rows(root, experiment.boundaries)
     except Exception as exc:

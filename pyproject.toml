@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9,<10", "pytest-asyncio>=1.2,<2"]
+gui = ["PySide6>=6.8,<7"]
 research = [
   "duckdb>=1.5,<2",
   "numpy>=2.5,<3",
@@ -28,6 +29,7 @@ research = [
 
 [project.scripts]
 kalshi-edge = "kalshi_edge.cli:main"
+kalshi-edge-gui = "kalshi_edge.control_center:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

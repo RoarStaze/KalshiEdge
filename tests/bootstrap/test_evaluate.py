@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from kalshi_edge.bootstrap import artifact, evaluate
+from kalshi_edge.bootstrap import artifact, evaluate, training
 from kalshi_edge.bootstrap.config import BootstrapSettings
 from kalshi_edge.bootstrap.types import FeatureRow
 
@@ -43,7 +43,7 @@ def _report(
     return evaluate.BootstrapEvaluationReport(
         bundle_sha256=bundle_sha256,
         dataset_sha256="b" * 64,
-        model_version="bootstrap-hybrid-v1",
+        model_version=training.MODEL_VERSION,
         lockbox_start_ts_ns=300,
         lockbox_end_ts_ns=400,
         evaluated_rows=20,
@@ -84,6 +84,18 @@ def test_promotion_requires_conservative_lockbox_superiority_to_kalshi() -> None
     )
     assert no_improvement.promoted is False
     assert "NO_PREDECLARED_KALSHI_IMPROVEMENT" in no_improvement.reason_codes
+
+
+def test_promotion_fails_closed_when_kalshi_prior_is_degenerate() -> None:
+    degenerate_prior = _metric(
+        brier=0.4968,
+        log_loss=17.1603,
+        ece=0.4968,
+    ).model_copy(update={"sharpness": 0.0})
+    decision = evaluate.promotion_decision(_report(prior=degenerate_prior))
+    assert decision.promoted is False
+    assert decision.superior_to_kalshi is False
+    assert "KALSHI_PRIOR_DEGENERATE" in decision.reason_codes
 
 
 def test_promotion_fails_closed_on_leakage_schema_ablation_or_calibration_regression() -> None:
@@ -131,10 +143,10 @@ def _bundle() -> artifact.ModelBundle:
     )
     return artifact.ModelBundle(
         stage="experiment",
-        model_version="bootstrap-hybrid-v1",
+        model_version=training.MODEL_VERSION,
         git_sha="a" * 40,
         random_seed=73115,
-        feature_schema_version=1,
+        feature_schema_version=training.FEATURE_SCHEMA_VERSION,
         feature_names=("btc_distance_bps", "kalshi_mid", "seconds_remaining"),
         boundaries=artifact.SplitBoundaries(
             train_start_ts_ns=100,
@@ -201,6 +213,27 @@ def test_evaluate_lockbox_filters_before_prediction_and_uses_same_rows_for_bench
     assert report.metrics["candidate"].brier < report.metrics["kalshi_prior"].brier
     assert report.feature_schema_match is True
     assert report.leakage_audit.passed is True
+
+
+def test_evaluate_lockbox_rejects_obsolete_model_and_feature_schema() -> None:
+    legacy = _bundle().model_copy(
+        update={"model_version": "bootstrap-hybrid-v1", "feature_schema_version": 1}
+    )
+    with pytest.raises(evaluate.EvaluationError, match="obsolete model or feature schema"):
+        evaluate.evaluate_lockbox(legacy, (_row(320, 0, 0.4, "LOCK-A"),))
+
+
+def test_run_lockbox_evaluation_rejects_overlapping_previously_used_lockbox(tmp_path: Path) -> None:
+    experiment_path = artifact.save_model_bundle(_bundle(), tmp_path / "models" / "experiments")
+    prior_path = tmp_path / "reports" / "evaluation-prior.json"
+    prior_path.parent.mkdir(parents=True)
+    prior_path.write_text(
+        json.dumps({"report": {"lockbox_start_ts_ns": 350, "lockbox_end_ts_ns": 450}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(evaluate.EvaluationError, match="overlaps a previously evaluated lockbox"):
+        evaluate.run_lockbox_evaluation(tmp_path, experiment_path)
 
 
 def test_evaluate_lockbox_rejects_promoted_bundle_or_feature_schema_mismatch(monkeypatch) -> None:

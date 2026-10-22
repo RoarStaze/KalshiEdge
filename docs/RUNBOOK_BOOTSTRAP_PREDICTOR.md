@@ -50,14 +50,23 @@ git status --short
 
 ## 3. Backfill official historical data
 
+Prefer a bounded Kalshi backfill after an evaluation has consumed a lockbox interval. The UTC dates below are an example; choose an inclusive date range that is newer than the last evaluated lockbox and no later than the available Binance archive date.
+
 ```powershell
-kalshi-edge bootstrap-backfill --source all
+kalshi-edge bootstrap-backfill --source all --since-date 2026-10-11 --until-date 2026-10-19 --max-markets 900
 ```
 
-The command separately executes the official Kalshi and official Binance history paths. For isolated troubleshooting, the supported source selections are:
+- `--since-date` and `--until-date` filter on the market's UTC open date, inclusive.
+- `--max-markets` is a hard cap; when the cap is reached, the newest eligible markets are selected.
+- When bounds or a cap are supplied, discovered markets with a missing/invalid open timestamp are skipped rather than bypassing the bound.
+- Binance availability snapshots use a conservative two-UTC-day publication grace because a daily archive may still return 404 shortly after midnight UTC; schema-v2 snapshots are versioned separately so prior snapshots remain intact.
+- A 404 for an older Binance date that falls inside the recorded available window remains an integrity/data-availability failure; do not suppress it or build a dataset that requires the missing archive.
+- Avoid an unbounded full-history run unless you explicitly intend to collect the full archive and have checked available disk space.
+
+For isolated troubleshooting, the supported source selections are:
 
 ```powershell
-kalshi-edge bootstrap-backfill --source kalshi
+kalshi-edge bootstrap-backfill --source kalshi --since-date 2026-10-11 --until-date 2026-10-19 --max-markets 900
 kalshi-edge bootstrap-backfill --source binance
 ```
 
@@ -87,9 +96,13 @@ $GitSha = (git rev-parse HEAD).Trim()
 kalshi-edge bootstrap-train --git-sha $GitSha
 ```
 
-Training writes experiment bundles under `data\bootstrap\models\experiments\` and reports under `data\bootstrap\reports\`. The training path does not evaluate the untouched lockbox and cannot create `models\default.json` by itself.
+Training writes experiment bundles under `data\bootstrap\models\experiments\` and reports under `data\bootstrap\reports\`. The training path does not evaluate the untouched lockbox and cannot create `models\default.json` by itself. If evaluation reports already exist, training now reserves only complete market groups strictly after the latest previously evaluated lockbox endpoint for the next lockbox; older groups are eligible for chronological development/calibration. If no markets exist after that endpoint, training fails rather than reusing a consumed interval.
 
-## 6. Evaluate the untouched lockbox and apply the promotion gate
+## 6. Evaluate a genuinely untouched lockbox and apply the promotion gate
+
+**Lockbox use is interval-scoped, not just model-hash-scoped.** The evaluator refuses to score a proposed lockbox interval that overlaps any previously recorded evaluation interval, even when a retrained model or rebuilt dataset has a different hash. Collect/ingest a later, non-overlapping holdout period before evaluating another candidate. Do not delete reports to bypass this safeguard.
+
+The former `bootstrap-hybrid-v1` evaluation exposed a degenerate Kalshi prior: `kalshi_quote_available` was marked true when a candle existed even when no usable price existed, forcing `kalshi_mid` to zero and bypassing the trade fallback. That promotion is not valid evidence of superiority. The corrected source uses dataset/model schema version 2, a stricter promotion rule, and the live loader rejects legacy promoted bundles. Rebuild the bootstrap dataset from verified inputs after updating the code; **do not retrain/evaluate against the previously consumed timestamp interval**.
 
 ```powershell
 kalshi-edge bootstrap-evaluate

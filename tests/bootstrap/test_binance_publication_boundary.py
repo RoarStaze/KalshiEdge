@@ -13,6 +13,10 @@ import pyarrow.parquet as pq
 import pytest
 
 from kalshi_edge.bootstrap.backfill import backfill_binance
+from kalshi_edge.bootstrap.binance_availability import (
+    latest_daily_availability_snapshot,
+    record_daily_availability_snapshot,
+)
 from kalshi_edge.bootstrap.binance_history import BinanceDataError
 from kalshi_edge.bootstrap.config import BootstrapSettings
 from kalshi_edge.bootstrap.dataset import DatasetBuildError, build_dataset
@@ -174,7 +178,7 @@ def _seed_valid_binance_day(root: Path, day: int) -> None:
     write_manifest(root, artifact)
 
 
-def test_backfill_skips_current_utc_date_and_records_reproducible_publication_cutoff(tmp_path: Path) -> None:
+def test_backfill_uses_two_day_utc_publication_grace_and_records_cutoff(tmp_path: Path) -> None:
     _seed_market(tmp_path, "KXBTC15M-OLD", 1)
     _seed_market(tmp_path, "KXBTC15M-CURRENT", 2)
     client = _ArchiveClient()
@@ -183,7 +187,7 @@ def test_backfill_skips_current_utc_date_and_records_reproducible_publication_cu
         BootstrapSettings(bootstrap_dir=tmp_path),
         client=client,
         parquet_converter=_fake_converter,
-        as_of_utc=datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc),
+        as_of_utc=datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc),
     )
 
     assert report.archive_available_through_date == "2026-08-01"
@@ -191,8 +195,8 @@ def test_backfill_skips_current_utc_date_and_records_reproducible_publication_cu
     assert report.dates == ("2026-08-01", "2026-08-02")
     assert len(client.urls) == 1
     assert client.urls[0].endswith("BTCUSDT-1s-2026-08-01.zip")
-    snapshot = tmp_path / "raw/binance_availability/daily/2026-08-02.json"
-    snapshot_manifest = tmp_path / "manifests/binance_availability/daily/2026-08-02.json.manifest.json"
+    snapshot = tmp_path / "raw/binance_availability/daily/2026-08-03-v2.json"
+    snapshot_manifest = tmp_path / "manifests/binance_availability/daily/2026-08-03-v2.json.manifest.json"
     assert snapshot.exists() and snapshot_manifest.exists()
 
 
@@ -254,7 +258,7 @@ def test_dataset_excludes_market_requiring_not_yet_published_binance_day(tmp_pat
         BootstrapSettings(bootstrap_dir=tmp_path),
         client=_ArchiveClient(),
         parquet_converter=_fake_converter,
-        as_of_utc=datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc),
+        as_of_utc=datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc),
     )
 
     report = build_dataset(tmp_path, BootstrapSettings(bootstrap_dir=tmp_path))
@@ -272,7 +276,7 @@ def test_dataset_fails_if_required_binance_day_is_missing_at_or_before_recorded_
         BootstrapSettings(bootstrap_dir=tmp_path),
         client=_ArchiveClient(),
         parquet_converter=_fake_converter,
-        as_of_utc=datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc),
+        as_of_utc=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
     )
 
     raw = tmp_path / "raw/binance/archive/BTCUSDT-1s-2026-08-02.zip"
@@ -285,3 +289,31 @@ def test_dataset_fails_if_required_binance_day_is_missing_at_or_before_recorded_
 
     with pytest.raises(DatasetBuildError, match="Binance"):
         build_dataset(tmp_path, BootstrapSettings(bootstrap_dir=tmp_path))
+
+
+
+def test_versioned_availability_policy_preserves_legacy_snapshot_and_prefers_v2(tmp_path: Path) -> None:
+    legacy_payload = {
+        "schema_version": 1,
+        "as_of_utc_date": "2026-08-03",
+        "available_through_date": "2026-08-02",
+        "publication_policy": "daily archives become available the next UTC day",
+        "publication_policy_source": "https://github.com/binance/binance-public-data#readme",
+    }
+    legacy = write_raw_artifact(
+        root=tmp_path,
+        source="binance_availability",
+        logical_name="daily/2026-08-03.json",
+        content=(json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        metadata={"source_locator": "test", "publication_policy": legacy_payload["publication_policy"]},
+    )
+
+    current = record_daily_availability_snapshot(tmp_path, datetime(2026, 8, 3).date())
+    latest = latest_daily_availability_snapshot(tmp_path)
+
+    assert current.schema_version == 2
+    assert current.available_through_date.isoformat() == "2026-08-01"
+    assert latest is not None
+    assert latest.schema_version == 2
+    assert latest.available_through_date.isoformat() == "2026-08-01"
+    assert (tmp_path / legacy.path).exists()
