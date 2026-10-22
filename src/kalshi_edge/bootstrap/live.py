@@ -180,16 +180,16 @@ class LiveFeatureState:
 
     def update_binance(self, bar: BinanceBar) -> None:
         if self.latest_binance_ts_ns is not None:
-            if bar.ts_ns < self.latest_binance_ts_ns:
+            if bar.completed_ts_ns < self.latest_binance_ts_ns:
                 self.invalid_reason = "OUT_OF_ORDER_BINANCE"
                 return
-            if bar.ts_ns == self.latest_binance_ts_ns:
+            if bar.completed_ts_ns == self.latest_binance_ts_ns:
                 if bar != self.binance_bars[-1]:
                     self.invalid_reason = "AMBIGUOUS_BINANCE_BAR"
                 return
         self.binance_bars.append(bar)
         self.binance_bars = self.binance_bars[-1800:]
-        self.latest_binance_ts_ns = bar.ts_ns
+        self.latest_binance_ts_ns = bar.completed_ts_ns
 
     def update_brti(self, observation: BRTIObservation) -> None:
         if self.latest_brti_ts_ns is not None and observation.source_ts_ns <= self.latest_brti_ts_ns:
@@ -276,7 +276,7 @@ class LiveFeatureState:
                     trades=historical_trades,
                     candles=self._completed_candles(now_ns),
                 ),
-                features.HistoricalBTCState(bars=tuple(bar for bar in self.binance_bars if bar.ts_ns <= now_ns)),
+                features.HistoricalBTCState(bars=tuple(bar for bar in self.binance_bars if bar.completed_ts_ns <= now_ns)),
             )
         except Exception as exc:
             raise LiveStateError("could not construct causal live feature row") from exc
