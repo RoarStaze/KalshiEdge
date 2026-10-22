@@ -68,6 +68,22 @@ def test_finished_ohlcv_is_unavailable_during_its_own_second() -> None:
     assert completed.source_max_ts_ns["binance"] == checkpoint + NS
 
 
+def test_preopen_candle_does_not_contaminate_market_excursion() -> None:
+    label = _label()
+    checkpoint = label.open_ts_ns + NS
+    state = HistoricalBTCState(
+        bars=(
+            _bar(label.open_ts_ns - NS, 10000.0),
+            _bar(label.open_ts_ns, 101.0),
+        )
+    )
+
+    row = build_feature_row(label, checkpoint, HistoricalKalshiState(), state)
+
+    assert row.features["btc_close"] == 101.0
+    assert row.features["btc_market_high_excursion_bps"] == pytest.approx(100.0)
+
+
 @pytest.mark.parametrize("timestamp_multiplier,close_offset", [(1, 999), (1000, 999_999)])
 def test_archive_and_live_candles_share_open_and_completion_boundaries(
     tmp_path: Path, timestamp_multiplier: int, close_offset: int
