@@ -77,7 +77,7 @@ def test_archive_and_live_candles_share_open_and_completion_boundaries(
     close_time = opening + close_offset
     file = tmp_path / "BTCUSDT-1s.csv"
     file.write_text(
-        f"{opening},60000,60002,59999,60001,1.5,{close_time},90000,4,0.8,48000,0\\n",
+        f"{opening},60000,60002,59999,60001,1.5,{close_time},90000,4,0.8,48000,0\n",
         encoding="utf-8",
     )
     archived = list(parse_spot_1s(file))[0]
