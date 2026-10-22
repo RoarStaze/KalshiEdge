@@ -283,7 +283,7 @@ def test_pre_final_minute_prediction_contains_full_diagnostics() -> None:
     assert 0.0 <= result.confidence <= 1.0
     assert result.component_disagreement is not None
     assert result.model_hash is not None
-    assert result.model_version == "bootstrap-hybrid-v2"
+    assert result.model_version == "bootstrap-hybrid-v3"
     assert result.feed_quality.healthy is True
 
 
@@ -388,7 +388,7 @@ def test_prediction_jsonl_writer_is_bootstrap_only_and_canonical(tmp_path: Path)
     assert path.name == "predictions.jsonl"
     payload = json.loads(path.read_text(encoding="utf-8").strip())
     assert payload["status"] == "OK"
-    assert payload["model_version"] == "bootstrap-hybrid-v2"
+    assert payload["model_version"] == "bootstrap-hybrid-v3"
     assert payload["final_probability"] == pytest.approx(0.66)
 
     with pytest.raises(ValueError):
