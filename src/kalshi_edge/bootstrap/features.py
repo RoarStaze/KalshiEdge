@@ -56,20 +56,20 @@ class HistoricalBTCState(BaseModel):
 
 
 def _sorted_past_bars(bars: Sequence[BinanceBar], checkpoint_ts_ns: int) -> list[BinanceBar]:
-    return sorted((bar for bar in bars if bar.ts_ns <= checkpoint_ts_ns), key=lambda bar: bar.ts_ns)
+    return sorted((bar for bar in bars if bar.completed_ts_ns <= checkpoint_ts_ns), key=lambda bar: bar.completed_ts_ns)
 
 
 def _bar_at_or_before(bars: Sequence[BinanceBar], ts_ns: int) -> BinanceBar | None:
     candidate: BinanceBar | None = None
     for bar in bars:
-        if bar.ts_ns <= ts_ns and (candidate is None or bar.ts_ns > candidate.ts_ns):
+        if bar.completed_ts_ns <= ts_ns and (candidate is None or bar.completed_ts_ns > candidate.completed_ts_ns):
             candidate = bar
     return candidate
 
 
 def _realized_volatility(bars: Sequence[BinanceBar], start_ts_ns: int, checkpoint_ts_ns: int) -> float:
-    selected = [bar for bar in bars if start_ts_ns <= bar.ts_ns <= checkpoint_ts_ns and bar.close > 0]
-    selected.sort(key=lambda bar: bar.ts_ns)
+    selected = [bar for bar in bars if start_ts_ns <= bar.completed_ts_ns <= checkpoint_ts_ns and bar.close > 0]
+    selected.sort(key=lambda bar: bar.completed_ts_ns)
     if len(selected) < 2:
         return 0.0
     returns = [math.log(current.close / previous.close) for previous, current in zip(selected, selected[1:]) if previous.close > 0]
@@ -82,7 +82,7 @@ def _realized_volatility(bars: Sequence[BinanceBar], start_ts_ns: int, checkpoin
 
 def _window_bars(bars: Sequence[BinanceBar], checkpoint_ts_ns: int, seconds: int) -> list[BinanceBar]:
     lower = checkpoint_ts_ns - seconds * NS
-    return [bar for bar in bars if lower <= bar.ts_ns <= checkpoint_ts_ns]
+    return [bar for bar in bars if lower <= bar.completed_ts_ns <= checkpoint_ts_ns]
 
 
 def _window_trades(trades: Sequence[HistoricalKalshiTrade], checkpoint_ts_ns: int, seconds: int) -> list[HistoricalKalshiTrade]:
@@ -145,7 +145,7 @@ def build_feature_row(
             checkpoint_ts_ns,
         )
 
-    market_bars = [bar for bar in past_bars if bar.ts_ns >= label.open_ts_ns]
+    market_bars = [bar for bar in past_bars if bar.completed_ts_ns >= label.open_ts_ns]
     if market_bars:
         high = max(bar.high for bar in market_bars)
         low = min(bar.low for bar in market_bars)
@@ -237,7 +237,7 @@ def build_feature_row(
         ):
             features[name] = 0.0
 
-    source_max: dict[str, int] = {"binance": current.ts_ns}
+    source_max: dict[str, int] = {"binance": current.completed_ts_ns}
     if last_trade:
         source_max["kalshi_trades"] = last_trade.ts_ns
     if last_candle:
