@@ -42,6 +42,16 @@ class BinanceBar(BaseModel):
     taker_buy_base: float
     taker_buy_quote: float
 
+    @property
+    def completed_ts_ns(self) -> int:
+        """Earliest complete-candle boundary for a finalized Binance 1s kline.
+
+        ts_ns is Binance's *opening* timestamp in both archived and live data.
+        Final OHLCV fields must not be consumed before the next second begins.
+        Actual network publication/receipt can be later than this boundary.
+        """
+        return self.ts_ns + _ONE_SECOND_NS
+
 
 class BinanceParseStats(BaseModel):
     model_config = ConfigDict(frozen=True)
