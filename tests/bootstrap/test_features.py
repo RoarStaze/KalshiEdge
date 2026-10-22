@@ -58,7 +58,7 @@ def test_build_feature_row_excludes_every_observation_after_checkpoint() -> None
         bars=(
             _bar(checkpoint - 60 * NS, 100.0),
             _bar(checkpoint - 10 * NS, 105.0),
-            _bar(checkpoint, 110.0, high=111.0, low=109.0),
+            _bar(checkpoint - NS, 110.0, high=111.0, low=109.0),
             _bar(checkpoint + 1, 9999.0, high=9999.0, low=9999.0),
         )
     )
@@ -111,7 +111,7 @@ def test_build_feature_row_excludes_every_observation_after_checkpoint() -> None
 def test_candle_without_quote_prices_does_not_claim_quote_availability() -> None:
     label = _label()
     checkpoint = label.open_ts_ns + 600 * NS
-    btc = HistoricalBTCState(bars=(_bar(checkpoint, 100.0),))
+    btc = HistoricalBTCState(bars=(_bar(checkpoint - NS, 100.0),))
     trade = HistoricalKalshiTrade(
         ts_ns=checkpoint - NS,
         yes_price=0.42,
@@ -155,8 +155,8 @@ def test_build_feature_row_uses_only_past_values_for_rolling_statistics() -> Non
 
     row = build_feature_row(label, checkpoint, kalshi, btc)
 
-    assert row.features["btc_close"] == pytest.approx(106.0)
-    assert row.features["btc_return_60s"] == pytest.approx(0.06)
+    assert row.features["btc_close"] == pytest.approx(105.9)
+    assert row.features["btc_return_60s"] == pytest.approx(0.059)
     assert row.features["btc_realized_vol_60s"] >= 0.0
     assert row.source_max_ts_ns["binance"] == checkpoint
 
