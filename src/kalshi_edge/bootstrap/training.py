@@ -28,8 +28,8 @@ from .splits import MarketIndex, WalkForwardSplit, make_walk_forward_splits
 from .types import FeatureRow
 
 
-MODEL_VERSION = "bootstrap-hybrid-v2"
-FEATURE_SCHEMA_VERSION = 2
+MODEL_VERSION = "bootstrap-hybrid-v3"
+FEATURE_SCHEMA_VERSION = 3
 STRUCTURAL_SIMULATIONS = 512
 MIN_HISTORICAL_EVALUATION_SECONDS = 60.0
 KALSHI_FLOW_PREFIXES = (
@@ -178,6 +178,8 @@ def _verified_context(root: Path) -> DatasetContext:
     if not isinstance(metadata_value, dict):
         raise TrainingError("dataset manifest lacks metadata")
     metadata = dict(metadata_value)
+    if metadata.get("schema_version") != 3:
+        raise TrainingError("obsolete feature dataset schema; rebuild the dataset before training")
     feature_names = tuple(str(value) for value in metadata.get("feature_names", ()))
     if not feature_names:
         raise TrainingError("dataset manifest lacks exact feature-name order")

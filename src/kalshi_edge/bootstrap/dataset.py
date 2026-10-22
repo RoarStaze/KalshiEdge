@@ -28,7 +28,7 @@ from .types import FeatureRow, MarketLabel
 
 NS = 1_000_000_000
 MAX_FEATURE_LOOKBACK_SECONDS = 900
-DATASET_SCHEMA_VERSION = 2
+DATASET_SCHEMA_VERSION = 3
 
 
 class DatasetBuildError(RuntimeError):
@@ -335,7 +335,7 @@ class _DailyBinanceCache:
         end_ns = label.close_ts_ns
         bars: list[BinanceBar] = []
         for day in _date_range(start_ns, end_ns):
-            bars.extend(bar for bar in self.day(day) if start_ns <= bar.ts_ns <= end_ns)
+            bars.extend(bar for bar in self.day(day) if start_ns <= bar.completed_ts_ns <= end_ns)
         bars.sort(key=lambda item: item.ts_ns)
         if not bars:
             raise DatasetBuildError(f"no Binance data overlaps market {label.ticker}")
@@ -417,7 +417,7 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
             return {}
         if (
             not isinstance(item, dict)
-            or item.get("schema") != 2
+            or item.get("schema") != DATASET_SCHEMA_VERSION
             or item.get("checkpoint_seconds") != list(settings.checkpoint_seconds)
             or item.get("binance_symbol") != settings.binance_symbol
             or not isinstance(item.get("ticker"), str)
@@ -455,7 +455,7 @@ def _append_dataset_checkpoint(
     path = _dataset_checkpoint_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     item = {
-        "schema": 2,
+        "schema": DATASET_SCHEMA_VERSION,
         "ticker": ticker,
         "checkpoint_seconds": list(settings.checkpoint_seconds),
         "binance_symbol": settings.binance_symbol,
