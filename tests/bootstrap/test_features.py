@@ -149,7 +149,7 @@ def test_candle_without_quote_prices_does_not_claim_quote_availability() -> None
 def test_build_feature_row_uses_only_past_values_for_rolling_statistics() -> None:
     label = _label()
     checkpoint = label.open_ts_ns + 300 * NS
-    bars = tuple(_bar(checkpoint - offset * NS, 100.0 + (60 - offset) * 0.1) for offset in range(60, -1, -1))
+    bars = (_bar(checkpoint - 61 * NS, 100.0),) + tuple(_bar(checkpoint - offset * NS, 100.0 + (60 - offset) * 0.1) for offset in range(60, -1, -1))
     btc = HistoricalBTCState(bars=bars + (_bar(checkpoint + 1, 10000.0),))
     kalshi = HistoricalKalshiState(trades=(), candles=())
 
