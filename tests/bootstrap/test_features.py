@@ -56,7 +56,7 @@ def test_build_feature_row_excludes_every_observation_after_checkpoint() -> None
     checkpoint = label.open_ts_ns + 600 * NS
     btc = HistoricalBTCState(
         bars=(
-            _bar(checkpoint - 60 * NS, 100.0),
+            _bar(checkpoint - 61 * NS, 100.0),
             _bar(checkpoint - 10 * NS, 105.0),
             _bar(checkpoint - NS, 110.0, high=111.0, low=109.0),
             _bar(checkpoint + 1, 9999.0, high=9999.0, low=9999.0),
