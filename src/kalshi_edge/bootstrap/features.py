@@ -145,7 +145,9 @@ def build_feature_row(
             checkpoint_ts_ns,
         )
 
-    market_bars = [bar for bar in past_bars if bar.completed_ts_ns >= label.open_ts_ns]
+    # Market excursions start with candles opened inside the market; a pre-open
+    # candle closing exactly at market open must not contaminate market extremes.
+    market_bars = [bar for bar in past_bars if bar.ts_ns >= label.open_ts_ns]
     if market_bars:
         high = max(bar.high for bar in market_bars)
         low = min(bar.low for bar in market_bars)
