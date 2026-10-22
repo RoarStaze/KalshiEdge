@@ -177,7 +177,8 @@ def _live_state(now_ns: int) -> live.LiveFeatureState:
         )
     )
     for offset in range(900, -1, -1):
-        ts_ns = now_ns - offset * NS
+        # Finalized candle at 'now' opened one second earlier.
+        ts_ns = now_ns - (offset + 1) * NS
         state.update_binance(
             BinanceBar(
                 ts_ns=ts_ns,
