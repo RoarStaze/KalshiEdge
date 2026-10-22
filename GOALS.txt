@@ -1,0 +1,69 @@
+Kalshi Prediction Bot Development Goals
+
+    1. Connect to Kalshi’s API for live data. Use Kalshi’s REST (or WebSocket) Predictions API to fetch real-time market data (prices, order books, probabilities) for the current 15-minute event. For example, Kalshi’s API provides REST and WebSocket endpoints for event-contract markets and access to public market data.
+    
+    2. Build a local dashboard to display live predictions. Create a local web app (e.g. using Python+Flask) to show the live “up/down” prediction probabilities. Flask is a lightweight Python web framework; use WebSockets or AJAX so the page updates continuously (WebSockets allow a two-way browser-server stream without polling).
+    
+    3. Implement final-forecast logic at 4 minutes remaining. When the remaining round time hits 4 minutes, compute the final forecast (either “Buy UP” or “Buy DOWN”). If the model’s confidence is below 69%, output SKIP instead. (This threshold rule and fixed time ensures we lock in a single decision per round.)
+   
+    4. Record and display forecast history with accuracy. After each round closes, log the forecast details (close time, predicted direction, probability, and whether it was correct). Show this forecast history on the webpage in a table, and compute the running accuracy percentage (correct forecasts ÷ total forecasts) at the top. For example, accuracy = (number of correct predictions / total predictions) × 100%.
+    
+    5. Improve the model and automate trading. Iteratively retrain/refine the prediction model (e.g. add more historical data or features) to increase its accuracy – remembering that “data quality drives model accuracy”. Once accuracy is satisfactory, implement a bot that automatically places a $0.10 trade (up or down) on each locked-in final forecast via the Kalshi trading API.
+
+
+
+So i have to both predict whether its going to go up or down,
+and i nee
+
+
+
+
+BUY UP Condition:
+
+Bitcoin price is BELOW - Yellow EMA line
+AND
+Bitcoin price is BELOW - Green RSI line (30 or less)
+
+
+BUY DOWN Condition:
+
+Bitcoin price is ABOVE - Yellow EMA line
+AND
+Bitcoin price is ABOVE - Green RSI line (70 or more)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

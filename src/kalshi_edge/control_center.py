@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import ctypes
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,10 +45,10 @@ STAGES = [
      ["bootstrap-evaluate"]),
 ]
 COLORS = {
-    "bg": "#0b1220", "panel": "#121d2e", "panel2": "#17263a",
-    "line": "#263851", "text": "#f0f5fb", "muted": "#a5b4c8",
-    "blue": "#65a9ff", "green": "#55d6a3", "amber": "#f3c969",
-    "red": "#ff7e8a",
+    "bg": "#02090c", "panel": "#031116", "panel2": "#04191d",
+    "line": "#07564f", "text": "#9cefff", "muted": "#53b9c6",
+    "blue": "#61d9ff", "green": "#00f5ad", "amber": "#f5cf62",
+    "red": "#ff687d", "lime": "#76ff78",
 }
 
 
@@ -73,8 +74,10 @@ class ControlCenter(QMainWindow):
         self.process.finished.connect(self._process_finished)
         self.process.errorOccurred.connect(self._process_error)
         self.active_stage: int | None = None
+        self.observed_training_pid: int | None = None
+        self.observed_training_started: datetime | None = None
+        self._last_log_signature: tuple[str, int, int] | None = None
         self.stop_after_stage = False
-        self.user_stopping = False
         self.live_process = QProcess(self)
         self.live_process.setWorkingDirectory(str(root))
         self.live_process.readyReadStandardOutput.connect(lambda: self._append_log(bytes(self.live_process.readAllStandardOutput()).decode("utf-8", "replace")))
@@ -85,13 +88,14 @@ class ControlCenter(QMainWindow):
         # after show() so the OS provides a real title bar and resize frame.
         self.setWindowFlags(Qt.WindowType.Window)
         self.setWindowTitle(APP_TITLE)
-        self.resize(1240, 820)
-        self.setMinimumSize(980, 680)
+        self.resize(1480, 940)
+        self.setMinimumSize(1120, 760)
         self._build_ui()
+        self._observe_external_training()
         self._refresh()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh_runtime)
-        self.timer.start(1500)
+        self.timer.start(1000)
 
     def _load_state(self) -> dict:
         default = {"schema": STATE_SCHEMA, "completed": [], "statuses": {}, "last_stage": None, "updated_at": None}
@@ -114,52 +118,71 @@ class ControlCenter(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setStyleSheet(f"""
-            QMainWindow, QWidget {{ background: {COLORS['bg']}; color: {COLORS['text']}; font-family: 'Segoe UI'; font-size: 10pt; }}
-            QFrame#panel {{ background: {COLORS['panel']}; border: 1px solid {COLORS['line']}; border-radius: 18px; }}
+            QMainWindow, QWidget {{ background: {COLORS['bg']}; color: {COLORS['text']}; font-family: Consolas, 'Segoe UI'; font-size: 10pt; }}
+            QFrame#panel {{ background: {COLORS['panel']}; border: 1px solid {COLORS['line']}; border-radius: 5px; }}
             QLabel#muted {{ color: {COLORS['muted']}; }}
-            QLabel#title {{ font-size: 25pt; font-weight: 700; }}
-            QLabel#section {{ font-size: 13pt; font-weight: 650; }}
-            QPushButton {{ background: {COLORS['panel2']}; border: 1px solid {COLORS['line']}; border-radius: 20px; padding: 13px 19px; font-weight: 650; }}
-            QPushButton:hover {{ border-color: {COLORS['blue']}; }}
-            QPushButton:disabled {{ color: #66758a; background: #111927; }}
-            QPushButton#primary {{ background: #1d5791; border: 1px solid #347fc3; }}
-            QPushButton#stop {{ background: #552832; border: 1px solid #87424e; }}
-            QProgressBar {{ border: 0; border-radius: 7px; background: #26354a; height: 14px; text-align: center; color: transparent; }}
-            QProgressBar::chunk {{ border-radius: 7px; background: {COLORS['green']}; }}
+            QLabel#title {{ color: {COLORS['green']}; font-size: 19pt; font-weight: 700; letter-spacing: 1px; }}
+            QLabel#section {{ color: {COLORS['green']}; font-size: 11pt; font-weight: 700; }}
+            QLabel#hero {{ color: {COLORS['lime']}; font-size: 21pt; font-weight: 700; }}
+            QLabel#value {{ color: {COLORS['blue']}; font-size: 12pt; }}
+            QPushButton {{ background: {COLORS['panel2']}; border: 1px solid {COLORS['line']}; border-radius: 3px; padding: 8px 12px; color: {COLORS['green']}; }}
+            QPushButton:hover {{ border-color: {COLORS['green']}; }}
+            QPushButton:disabled {{ color: #38726f; background: #071012; }}
+            QPushButton#primary {{ background: #06352e; border: 1px solid {COLORS['green']}; font-weight: 700; }}
+            QProgressBar {{ border: 1px solid {COLORS['line']}; background: #031013; height: 13px; text-align: center; color: transparent; }}
+            QProgressBar::chunk {{ background: {COLORS['green']}; }}
             QListWidget {{ background: transparent; border: 0; outline: 0; }}
-            QListWidget::item {{ background: {COLORS['panel2']}; border: 1px solid {COLORS['line']}; border-radius: 13px; padding: 12px; margin: 4px 0; }}
-            QListWidget::item:selected {{ border: 1px solid {COLORS['blue']}; background: #1b3049; }}
-            QPlainTextEdit {{ background: #080e18; color: #cbd8e8; border: 1px solid {COLORS['line']}; border-radius: 12px; padding: 10px; font-family: Consolas; }}
+            QListWidget::item {{ background: {COLORS['panel2']}; border: 1px solid {COLORS['line']}; padding: 9px; margin: 3px 0; }}
+            QListWidget::item:selected {{ border: 1px solid {COLORS['green']}; background: #062321; }}
+            QPlainTextEdit {{ background: #02090c; color: {COLORS['blue']}; border: 0; padding: 8px; font-family: Consolas; font-size: 10pt; selection-background-color: #07564f; }}
         """)
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(24, 22, 24, 20)
-        outer.setSpacing(16)
+        outer.setContentsMargins(22, 14, 22, 12)
+        outer.setSpacing(10)
 
         header = QHBoxLayout()
-        brand = QVBoxLayout()
-        title = QLabel("KalshiEdge")
+        brand = QHBoxLayout()
+        brand.setSpacing(14)
+        mark = QLabel("K")
+        mark.setStyleSheet(f"color:{COLORS['green']};font-size:30pt;font-weight:700;")
+        brand.addWidget(mark)
+        titlebox = QVBoxLayout()
+        title = QLabel("KALSHIEDGE  //  TRAINING")
         title.setObjectName("title")
-        subtitle = QLabel("CONTROL CENTER  /  BTC 15-MINUTE PREDICTION PIPELINE")
+        subtitle = QLabel("BETTER SIGNALS.  SHARPER EDGE.  /  BTC 15-MINUTE RESEARCH")
         subtitle.setObjectName("muted")
-        brand.addWidget(title)
-        brand.addWidget(subtitle)
+        titlebox.addWidget(title)
+        titlebox.addWidget(subtitle)
+        brand.addLayout(titlebox)
         header.addLayout(brand, 1)
-        self.health = QLabel("LOCAL WORKSPACE")
-        self.health.setStyleSheet(f"color: {COLORS['green']}; background: #143b35; border-radius: 13px; padding: 9px 13px; font-weight: 700;")
-        header.addWidget(self.health, 0, Qt.AlignmentFlag.AlignTop)
+        self.model_badge = QLabel("ENV: LOCAL   |   MODEL: bootstrap-hybrid-v2   |   SCHEMA: v2   |   RULE: KXBTC15M")
+        self.model_badge.setStyleSheet(f"border:1px solid {COLORS['line']};padding:9px;color:{COLORS['blue']};")
+        header.addWidget(self.model_badge)
+        self.health = QLabel("●  IDLE")
+        self.health.setStyleSheet(f"color: {COLORS['green']}; padding: 8px 12px; font-weight: 700;")
+        header.addWidget(self.health)
         outer.addLayout(header)
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(f"background:{COLORS['line']};border:0;")
+        outer.addWidget(divider)
 
         top = QGridLayout()
-        top.setSpacing(14)
+        top.setSpacing(10)
         self.pipeline_panel = self._panel()
         p = QVBoxLayout(self.pipeline_panel)
-        p.setContentsMargins(18, 16, 18, 16)
-        p.addWidget(self._section_label("Overall pipeline"))
-        self.overall_label = QLabel("0 of 5 stages verified")
+        p.setContentsMargins(15, 12, 15, 12)
+        p.addWidget(self._section_label("›  TRAINING STATUS"))
+        hero_row = QHBoxLayout()
+        self.hero_status = QLabel("READY")
+        self.hero_status.setObjectName("hero")
+        hero_row.addWidget(self.hero_status, 1)
+        self.overall_label = QLabel("0 / 5 stages")
         self.overall_label.setObjectName("muted")
-        p.addWidget(self.overall_label)
+        hero_row.addWidget(self.overall_label, 0, Qt.AlignmentFlag.AlignRight)
+        p.addLayout(hero_row)
         self.overall_bar = QProgressBar()
         self.overall_bar.setRange(0, len(STAGES))
         self.overall_bar.setValue(len(self.state["completed"]))
@@ -168,50 +191,70 @@ class ControlCenter(QMainWindow):
         self.current_label = QLabel("Ready when you are")
         self.current_label.setWordWrap(True)
         p.addWidget(self.current_label)
-        top.addWidget(self.pipeline_panel, 0, 0)
+        self.model_label = QLabel("Model: bootstrap-hybrid-v2   |   Features: verified dataset   |   Rule: KXBTC15M")
+        self.model_label.setObjectName("muted")
+        p.addWidget(self.model_label)
+        top.addWidget(self.pipeline_panel, 0, 0, 1, 5)
 
         self.runtime_panel = self._panel()
         r = QVBoxLayout(self.runtime_panel)
-        r.setContentsMargins(18, 16, 18, 16)
-        r.addWidget(self._section_label("Machine activity"))
-        self.runtime_label = QLabel("Waiting for a task")
-        self.runtime_label.setObjectName("muted")
-        r.addWidget(self.runtime_label)
+        r.setContentsMargins(15, 12, 15, 12)
+        r.addWidget(self._section_label("›  SYSTEM MONITOR"))
+        self.runtime_label = QLabel("CPU: process monitor idle\nMEMORY: available when reported\nWORKER: no active training process")
+        self.runtime_label.setObjectName("value")
+        self.runtime_label.setWordWrap(True)
+        r.addWidget(self.runtime_label, 1)
         self.stage_bar = QProgressBar()
         self.stage_bar.setRange(0, 0)
         self.stage_bar.setTextVisible(False)
         self.stage_bar.hide()
         r.addWidget(self.stage_bar)
-        self.resume_note = QLabel("Progress is never guessed. Stages without measurable progress show activity, not a fake percentage.")
-        self.resume_note.setObjectName("muted")
-        self.resume_note.setWordWrap(True)
-        r.addWidget(self.resume_note)
-        top.addWidget(self.runtime_panel, 0, 1)
+        top.addWidget(self.runtime_panel, 0, 5, 1, 4)
+
+        self.metrics_panel = self._panel()
+        m = QVBoxLayout(self.metrics_panel)
+        m.setContentsMargins(15, 12, 15, 12)
+        m.addWidget(self._section_label("›  LIVE METRICS"))
+        self.metric_label = QLabel("Train loss     —\nVal loss        —\nECE (val)       —\nBrier (val)     —\nAUC (val)       —")
+        self.metric_label.setObjectName("value")
+        m.addWidget(self.metric_label, 1)
+        top.addWidget(self.metrics_panel, 0, 9, 1, 3)
         outer.addLayout(top)
 
-        mid = QHBoxLayout()
-        mid.setSpacing(14)
+        mid = QGridLayout()
+        mid.setSpacing(10)
         left = self._panel()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(16, 14, 16, 14)
-        left_layout.addWidget(self._section_label("Workflow stages"))
-        self.stage_list = QListWidget()
-        self.stage_list.currentRowChanged.connect(self._select_stage)
-        left_layout.addWidget(self.stage_list, 1)
-        mid.addWidget(left, 5)
+        left_layout.setContentsMargins(14, 11, 14, 11)
+        log_head = QHBoxLayout()
+        log_head.addWidget(self._section_label("›  TRAINING LOG  /  LIVE OUTPUT"), 1)
+        clear = QPushButton("Clear view")
+        clear.clicked.connect(lambda: self.log.clear())
+        log_head.addWidget(clear)
+        left_layout.addLayout(log_head)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(800)
+        left_layout.addWidget(self.log, 1)
+        self.log_footer = QLabel("● LIVE     Output is shown as received; no progress is estimated.")
+        self.log_footer.setObjectName("muted")
+        left_layout.addWidget(self.log_footer)
+        mid.addWidget(left, 0, 0, 3, 8)
 
         right = self._panel()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(18, 16, 18, 16)
-        right_layout.addWidget(self._section_label("Selected stage"))
+        right_layout.setContentsMargins(14, 11, 14, 11)
+        right_layout.addWidget(self._section_label("›  PIPELINE PROGRESS"))
+        self.stage_list = QListWidget()
+        self.stage_list.currentRowChanged.connect(self._select_stage)
+        right_layout.addWidget(self.stage_list, 1)
         self.detail_title = QLabel("Select a stage")
-        self.detail_title.setStyleSheet("font-size: 17pt; font-weight: 700;")
+        self.detail_title.setStyleSheet(f"color:{COLORS['green']};font-weight:700;")
         right_layout.addWidget(self.detail_title)
-        self.detail_text = QLabel("Each stage has a clear purpose and must pass its own checks.")
+        self.detail_text = QLabel("Stages run asynchronously. Training output and completion are reported by the worker.")
         self.detail_text.setObjectName("muted")
         self.detail_text.setWordWrap(True)
         right_layout.addWidget(self.detail_text)
-        right_layout.addStretch(1)
         buttons = QGridLayout()
         self.run_button = QPushButton("▶  Run / Resume Pipeline")
         self.run_button.setObjectName("primary")
@@ -220,32 +263,23 @@ class ControlCenter(QMainWindow):
         self.run_selected_button = QPushButton("Run selected stage")
         self.run_selected_button.clicked.connect(self._run_selected)
         buttons.addWidget(self.run_selected_button, 1, 0)
-        self.stop_button = QPushButton("■  Stop safely")
-        self.stop_button.setObjectName("stop")
-        self.stop_button.clicked.connect(self._stop_pipeline)
+        self.stop_button = QPushButton("Finish stage, then pause")
+        self.stop_button.clicked.connect(self._pause_after_stage)
         buttons.addWidget(self.stop_button, 1, 1)
         self.live_button = QPushButton("Start read-only live predictions")
         self.live_button.clicked.connect(self._toggle_live)
         buttons.addWidget(self.live_button, 2, 0, 1, 2)
         right_layout.addLayout(buttons)
-        mid.addWidget(right, 6)
-        outer.addLayout(mid, 3)
+        mid.addWidget(right, 0, 8, 3, 4)
+        mid.setRowStretch(0, 1)
+        outer.addLayout(mid, 1)
 
-        bottom = self._panel()
-        bl = QVBoxLayout(bottom)
-        bl.setContentsMargins(16, 12, 16, 12)
-        log_head = QHBoxLayout()
-        log_head.addWidget(self._section_label("Activity log"), 1)
-        clear = QPushButton("Clear view")
-        clear.clicked.connect(lambda: self.log.clear())
-        log_head.addWidget(clear)
-        bl.addLayout(log_head)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(1200)
-        self.log.setMinimumHeight(145)
-        bl.addWidget(self.log)
-        outer.addWidget(bottom, 2)
+        footer = QHBoxLayout()
+        footer.addWidget(QLabel("›_  KalshiEdge   /   Research pipeline is read-only; no order controls."), 1)
+        self.clock_label = QLabel("")
+        self.clock_label.setObjectName("muted")
+        footer.addWidget(self.clock_label)
+        outer.addLayout(footer)
 
         self.stage_list.setCurrentRow(self._next_stage_index())
 
@@ -298,15 +332,7 @@ class ControlCenter(QMainWindow):
         if index is None:
             return
         key = STAGES[index][0]
-        if self.user_stopping:
-            self.state["statuses"][key] = "interrupted; resume restarts this stage"
-            self.user_stopping = False
-            self._append_log("Stage interrupted. Resume will restart this stage from its beginning.")
-        elif self.stop_after_stage:
-            self.state["statuses"][key] = "stopped after stage"
-            self.stop_after_stage = False
-            self._append_log("Pipeline stopped at a safe stage boundary.")
-        elif exit_code == 0:
+        if exit_code == 0:
             completed = set(self.state.get("completed", []))
             completed.add(key)
             self.state["completed"] = [item[0] for item in STAGES if item[0] in completed]
@@ -319,6 +345,12 @@ class ControlCenter(QMainWindow):
             self.stop_after_stage = True
         self._save_state()
         self._refresh()
+        if self.stop_after_stage:
+            self.stop_after_stage = False
+            if exit_code == 0:
+                self._append_log("Pipeline paused after the stage completed successfully.")
+            else:
+                self._append_log("Pipeline halted after the current stage exited with an error.")
         if not self.stop_after_stage and self._pipeline_requested:
             self._start_next_stage()
         else:
@@ -350,9 +382,24 @@ class ControlCenter(QMainWindow):
         else:
             self.current_label.setText(f"Next: {STAGES[self._next_stage_index()][1]}")
         self._select_stage(self.stage_list.currentRow())
-        self.stop_button.setEnabled(self.active_stage is not None)
-        self.run_button.setEnabled(self.active_stage is None)
-        self.run_selected_button.setEnabled(self.active_stage is None)
+        observing = self.observed_training_pid is not None
+        self.stop_button.setEnabled(self.active_stage is not None and not observing)
+        self.run_button.setEnabled(self.active_stage is None and not observing)
+        self.run_selected_button.setEnabled(self.active_stage is None and not observing)
+        self.stop_button.setText("Finish stage, then pause")
+        if observing:
+            self.hero_status.setText("TRAINING ACTIVE")
+            self.health.setText("●  TRAINING ACTIVE")
+            self.current_label.setText(f"Observing active training worker PID {self.observed_training_pid}. This dashboard will not stop it.")
+        elif self.active_stage is not None:
+            self.hero_status.setText("TRAINING ACTIVE" if STAGES[self.active_stage][0] == "train" else "PIPELINE ACTIVE")
+            self.health.setText("●  TRAINING ACTIVE" if STAGES[self.active_stage][0] == "train" else "●  PIPELINE ACTIVE")
+        elif len(completed) == len(STAGES):
+            self.hero_status.setText("PIPELINE COMPLETE")
+            self.health.setText("●  READY")
+        else:
+            self.hero_status.setText("READY")
+            self.health.setText("●  IDLE")
 
     def _select_stage(self, row: int) -> None:
         if row < 0 or row >= len(STAGES):
@@ -392,6 +439,11 @@ class ControlCenter(QMainWindow):
         return sys.executable, ["-m", "kalshi_edge.cli", *command]
 
     def _start_stage(self, index: int) -> None:
+        self._observe_external_training()
+        if self.observed_training_pid is not None:
+            self._append_log(f"A training worker (PID {self.observed_training_pid}) is already active. No second stage was started.")
+            self._refresh_runtime()
+            return
         if self.process.state() != QProcess.ProcessState.NotRunning:
             return
         if index == 2 and not (self.data_root / "derived" / "features.parquet").exists():
@@ -440,28 +492,17 @@ class ControlCenter(QMainWindow):
         self._start_stage(row)
 
     def _stop_pipeline(self) -> None:
+        # Kept as an internal compatibility hook; the dashboard never interrupts a worker.
+        self._pause_after_stage()
+
+    def _pause_after_stage(self) -> None:
         if self.active_stage is None:
             return
-        answer = QMessageBox.question(
-            self, "Stop safely?",
-            "Stop the current stage now? The last verified completed stages are saved. "
-            "The interrupted stage may need to restart from its beginning; exact mid-stage resume is not yet supported by every existing worker.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
         self._pipeline_requested = False
-        self.stop_after_stage = False
-        self.user_stopping = True
-        self.process.terminate()
-        if not self.process.waitForFinished(4000):
-            self.process.kill()
-        if self.active_stage is not None:
-            key = STAGES[self.active_stage][0]
-            self.state["statuses"][key] = "interrupted; resume restarts this stage"
-            self._save_state()
-        self._append_log("Stop requested. Verify the stage outputs before resuming.")
+        self.stop_after_stage = True
+        self.stop_button.setEnabled(False)
+        self.stop_button.setText("Pausing after this stage…")
+        self._append_log("Pause queued. The current stage will finish normally; no worker was stopped.")
 
     def _toggle_live(self) -> None:
         if self.live_process.state() != QProcess.ProcessState.NotRunning:
@@ -486,29 +527,130 @@ class ControlCenter(QMainWindow):
         self._append_log("Starting read-only live inference. No trading actions are available in this GUI.")
 
     def _refresh_runtime(self) -> None:
+        self.clock_label.setText(datetime.now().astimezone().strftime("%Y-%m-%d  %H:%M:%S %Z"))
+        self._observe_external_training()
         if self.active_stage is None:
-            self.runtime_label.setText("Idle — ready to resume from saved stage state")
             if not self.stage_bar.isHidden():
                 self.stage_bar.hide()
-        if self.live_process.state() != QProcess.ProcessState.NotRunning and self.active_stage is None:
-            self.runtime_label.setText("Read-only live predictor running")
+        else:
+            stage_key, stage_title = STAGES[self.active_stage][0], STAGES[self.active_stage][1]
+            self.hero_status.setText("TRAINING ACTIVE" if stage_key == "train" else "PIPELINE ACTIVE")
+            self.health.setText("●  TRAINING ACTIVE" if stage_key == "train" else "●  PIPELINE ACTIVE")
+            self.runtime_label.setText(f"CPU: not sampled\nMEMORY: not sampled\nWORKER: {stage_title}")
+        if self.active_stage is None and self.observed_training_pid is None:
+            self.runtime_label.setText("CPU: not sampled\nMEMORY: not sampled\nWORKER: idle — ready for next stage")
+            self.hero_status.setText("READY")
+            self.health.setText("●  IDLE")
+        if self.observed_training_pid is not None:
+            elapsed = ""
+            if self.observed_training_started:
+                seconds = max(0, int((datetime.now().astimezone() - self.observed_training_started).total_seconds()))
+                elapsed = f"\nELAPSED: {seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+            self.runtime_label.setText(f"CPU: not sampled\nMEMORY: not sampled\nWORKER PID: {self.observed_training_pid}{elapsed}")
+            self.hero_status.setText("TRAINING ACTIVE")
+            self.health.setText("●  TRAINING ACTIVE")
+            self.current_label.setText("Training is active in an existing worker. The dashboard is observing it; controls will not stop it.")
+            self.run_button.setEnabled(False)
+            self.run_selected_button.setEnabled(False)
+            self.stop_button.setEnabled(False)
+            self._tail_observed_training_log()
+        elif self.live_process.state() != QProcess.ProcessState.NotRunning and self.active_stage is None:
+            self.runtime_label.setText("CPU: not sampled\nMEMORY: not sampled\nWORKER: read-only predictor active")
+
+    @staticmethod
+    def _pid_is_running(pid: int) -> bool:
+        if os.name == "nt":
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+            kernel32.GetExitCodeProcess.restype = ctypes.c_int
+            kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+            kernel32.CloseHandle.restype = ctypes.c_int
+            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)) and exit_code.value == 259)
+            finally:
+                kernel32.CloseHandle(handle)
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _observe_external_training(self) -> None:
+        if self.active_stage is not None or self.process.state() != QProcess.ProcessState.NotRunning:
+            self.observed_training_pid = None
+            return
+        logs = self.data_root / "logs"
+        candidates = sorted(logs.glob("training-v2-*.pid"), key=lambda item: item.stat().st_mtime, reverse=True)
+        observed = None
+        for pid_file in candidates:
+            try:
+                pid = int(pid_file.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                continue
+            if self._pid_is_running(pid):
+                observed = (pid, datetime.fromtimestamp(pid_file.stat().st_mtime).astimezone())
+                break
+        self.observed_training_pid = observed[0] if observed else None
+        self.observed_training_started = observed[1] if observed else None
+
+    def _tail_observed_training_log(self) -> None:
+        if self.observed_training_pid is None:
+            return
+        logs = self.data_root / "logs"
+        for pid_file in sorted(logs.glob("training-v2-*.pid"), key=lambda item: item.stat().st_mtime, reverse=True):
+            try:
+                if int(pid_file.read_text(encoding="utf-8").strip()) != self.observed_training_pid:
+                    continue
+            except (OSError, ValueError):
+                continue
+            prefix = pid_file.with_suffix("")
+            found_output = False
+            for suffix in (".stdout.log", ".stderr.log"):
+                path = Path(str(prefix) + suffix)
+                try:
+                    stat = path.stat()
+                    if stat.st_size == 0:
+                        continue
+                    found_output = True
+                    signature = (str(path), stat.st_mtime_ns, stat.st_size)
+                    if signature == self._last_log_signature:
+                        continue
+                    with path.open("rb") as stream:
+                        stream.seek(max(0, stat.st_size - 65536))
+                        content = stream.read().decode("utf-8", "replace")
+                    self._last_log_signature = signature
+                    if content.strip():
+                        self.log.setPlainText(content[-30000:])
+                        self.log.moveCursor(self.log.textCursor().MoveOperation.End)
+                    return
+                except OSError:
+                    continue
+            if not found_output:
+                self.log.setPlainText("Training process is active. Its current log files have not emitted output yet.\n\nThe worker remains untouched; this panel refreshes when new log output is written.")
+            break
 
     def closeEvent(self, event) -> None:
-        if self.process.state() != QProcess.ProcessState.NotRunning or self.live_process.state() != QProcess.ProcessState.NotRunning:
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, "Stage still running", "Keep the dashboard open until this stage finishes. Closing the window could interrupt the worker.")
+            event.ignore()
+            return
+        if self.live_process.state() != QProcess.ProcessState.NotRunning:
             answer = QMessageBox.question(
                 self, "Processes are running",
-                "Closing the window will stop processes launched by this GUI. Continue?",
+                "Stop the read-only predictor and close the dashboard?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-            for process in (self.process, self.live_process):
-                if process.state() != QProcess.ProcessState.NotRunning:
-                    process.terminate()
-                    if not process.waitForFinished(3000):
-                        process.kill()
+            self.live_process.terminate()
         event.accept()
 
 

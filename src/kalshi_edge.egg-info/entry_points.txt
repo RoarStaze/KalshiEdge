@@ -1,0 +1,3 @@
+[console_scripts]
+kalshi-edge = kalshi_edge.cli:main
+kalshi-edge-gui = kalshi_edge.control_center:main
