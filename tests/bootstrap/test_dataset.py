@@ -60,6 +60,35 @@ def test_build_dataset_writes_18_causal_rows_and_provenance(tmp_path: Path) -> N
     assert report.provenance_path.exists()
 
 
+
+@pytest.mark.parametrize("bad_strike", (7.243729, 10000.0))
+def test_build_dataset_excludes_gross_strike_scale_errors(
+    tmp_path: Path, bad_strike: float
+) -> None:
+    """The official outcome is preserved, but unusable strike features are excluded."""
+    root = tmp_path / "data/bootstrap"
+    _seed(root)
+    ticker = "KXBTC15M-BAD-STRIKE"
+    payload = _market_payload(ticker)
+    payload["market"]["floor_strike"] = bad_strike
+    payload["market"]["result"] = "no"  # Do not infer/change labels from prices.
+    for logical, contents in (
+        (f"markets/{ticker}.json", payload),
+        (f"trades/{ticker}.json", _trade_payload(ticker)),
+        (f"candlesticks/{ticker}.json", _candle_payload(ticker)),
+    ):
+        _write_kalshi(root, logical, contents)
+
+    report = build_dataset(root, BootstrapSettings(bootstrap_dir=root))
+    assert report.market_count == 1
+    assert report.row_count == 18
+    assert report.excluded_markets == (ticker,)
+    assert report.leakage_finding_count == 0
+    table = pq.read_table(report.dataset_path, columns=["market_ticker"])
+    assert set(table["market_ticker"].to_pylist()) == {"KXBTC15M-TEST"}
+
+
+
 def test_build_dataset_rejects_corrupt_input_manifest(tmp_path: Path) -> None:
     root=tmp_path/"data/bootstrap"; _seed(root)
     market=root/"raw/kalshi/markets/KXBTC15M-TEST.json"; market.write_text(market.read_text()+"x")
