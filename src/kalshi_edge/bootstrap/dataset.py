@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from collections import OrderedDict
@@ -29,6 +30,12 @@ from .types import FeatureRow, MarketLabel
 NS = 1_000_000_000
 MAX_FEATURE_LOOKBACK_SECONDS = 900
 DATASET_SCHEMA_VERSION = 3
+# Independent revision for resumable rows. Changing data-eligibility rules must not
+# reuse rows from an interrupted build created before those rules were introduced.
+DATASET_CHECKPOINT_SCHEMA_VERSION = 4
+# A 10x tolerance is deliberately very permissive: this is a units/scale guard,
+# not a filter on ordinary cross-venue BTC price differences.
+MAX_STRIKE_TO_BTC_RATIO = 10.0
 
 
 class DatasetBuildError(RuntimeError):
@@ -342,6 +349,39 @@ class _DailyBinanceCache:
         return HistoricalBTCState(bars=tuple(bars))
 
 
+
+def _plausible_btc_strike_at_first_checkpoint(
+    label: MarketLabel,
+    btc: HistoricalBTCState,
+    checkpoint_seconds: tuple[int, ...],
+) -> bool:
+    """Reject grossly mis-scaled strikes using only first-checkpoint-available BTC data.
+
+    The official Kalshi YES/NO outcome remains authoritative. Never replace an
+    anomalous published strike with a guessed Binance or post-settlement value.
+    """
+    if not checkpoint_seconds or not math.isfinite(label.strike) or label.strike <= 0:
+        return False
+    first_checkpoint_ns = label.close_ts_ns - max(checkpoint_seconds) * NS
+    reference = next(
+        (
+            bar.close
+            for bar in reversed(btc.bars)
+            if bar.completed_ts_ns <= first_checkpoint_ns
+            and math.isfinite(bar.close)
+            and bar.close > 0
+        ),
+        None,
+    )
+    if reference is None:
+        return False
+    return (
+        reference / MAX_STRIKE_TO_BTC_RATIO
+        <= label.strike
+        <= reference * MAX_STRIKE_TO_BTC_RATIO
+    )
+
+
 def _flatten_rows(rows: list[FeatureRow]) -> list[dict[str, Any]]:
     feature_names = sorted({name for row in rows for name in row.features})
     source_names = sorted({name for row in rows for name in row.source_max_ts_ns})
@@ -417,7 +457,7 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
             return {}
         if (
             not isinstance(item, dict)
-            or item.get("schema") != DATASET_SCHEMA_VERSION
+            or item.get("schema") != DATASET_CHECKPOINT_SCHEMA_VERSION
             or item.get("checkpoint_seconds") != list(settings.checkpoint_seconds)
             or item.get("binance_symbol") != settings.binance_symbol
             or not isinstance(item.get("ticker"), str)
@@ -455,7 +495,7 @@ def _append_dataset_checkpoint(
     path = _dataset_checkpoint_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     item = {
-        "schema": DATASET_SCHEMA_VERSION,
+        "schema": DATASET_CHECKPOINT_SCHEMA_VERSION,
         "ticker": ticker,
         "checkpoint_seconds": list(settings.checkpoint_seconds),
         "binance_symbol": settings.binance_symbol,
@@ -556,6 +596,10 @@ def build_dataset(
             candles=_parse_candles(candles_payload),
         )
         btc = btc_cache.window(label)
+        if not _plausible_btc_strike_at_first_checkpoint(label, btc, settings.checkpoint_seconds):
+            excluded.append(label.ticker)
+            report_progress(market_index, label.ticker)
+            continue
         market_rows = build_market_feature_rows(
             label,
             kalshi,
