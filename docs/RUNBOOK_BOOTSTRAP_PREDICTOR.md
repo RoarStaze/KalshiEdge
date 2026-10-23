@@ -87,6 +87,17 @@ Expected derived outputs include:
 
 The build fails closed if required input provenance does not verify or if the leakage audit finds a causal violation.
 
+**Historical strike integrity:** During dataset construction, a grossly mis-scaled
+`floor_strike` is excluded if it differs by more than 10x from an available,
+completed Binance BTC close at the **first prediction checkpoint**. This guards
+against historical API unit typos (including the April 13, 2026 anomaly)
+without reading post-checkpoint or settlement prices or modifying Kalshi's
+original result. The threshold is a deliberately permissive data-quality guard,
+not a trading signal or a claim that Binance sets Kalshi's BRTI settlement.
+Completed per-market build checkpoints now use independent revision 4 to
+prevent reuse of older, unchecked rows after interrupted rebuilds.
+
+
 ## 5. Train a development-only experiment
 
 Use the exact checked-out Git SHA so the bundle records the source revision:
