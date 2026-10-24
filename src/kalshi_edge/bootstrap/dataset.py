@@ -29,10 +29,10 @@ from .types import FeatureRow, MarketLabel
 
 NS = 1_000_000_000
 MAX_FEATURE_LOOKBACK_SECONDS = 900
-DATASET_SCHEMA_VERSION = 3
+DATASET_SCHEMA_VERSION = 4
 # Independent revision for resumable rows. Changing data-eligibility rules must not
 # reuse rows from an interrupted build created before those rules were introduced.
-DATASET_CHECKPOINT_SCHEMA_VERSION = 4
+DATASET_CHECKPOINT_SCHEMA_VERSION = 5
 # A 10x tolerance is deliberately very permissive: this is a units/scale guard,
 # not a filter on ordinary cross-venue BTC price differences.
 MAX_STRIKE_TO_BTC_RATIO = 10.0
@@ -145,17 +145,27 @@ def _float_value(value: Any, *, default: float | None = None) -> float:
 
 
 def _nested_number(payload: dict[str, Any], key: str, field: str, *, default: float | None = None) -> float | None:
-    node = payload.get(key)
-    if isinstance(node, dict):
-        value = node.get(field)
-        if value is not None:
-            return _float_value(value)
-    dollars = payload.get(f"{key}_dollars")
-    if isinstance(dollars, dict):
-        value = dollars.get(field)
-        if value is not None:
-            return _float_value(value)
-    return default
+    """Normalize archived and current Kalshi candle price fields without changing units.
+
+    Historical OHLC uses price.close / yes_bid.close while current
+    candlesticks use price.close_dollars / yes_bid.close_dollars.
+    Both are fixed-point US-dollar prices per YES contract, not integer cents.
+    """
+    values: list[tuple[str, float]] = []
+    for block_key in (key, f"{key}_dollars"):
+        block = payload.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        for field_key in (f"{field}_dollars", field):
+            raw = block.get(field_key)
+            if raw is not None:
+                values.append((f"{block_key}.{field_key}", _float_value(raw)))
+    if not values:
+        return default
+    chosen = values[0][1]
+    if any(not math.isclose(value, chosen, rel_tol=0.0, abs_tol=1e-9) for _, value in values[1:]):
+        raise DatasetBuildError(f"conflicting Kalshi candle {key}.{field} dollar values")
+    return chosen
 
 
 def _parse_trades(payload: dict[str, Any]) -> tuple[HistoricalKalshiTrade, ...]:

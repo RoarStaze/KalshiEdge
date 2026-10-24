@@ -89,6 +89,100 @@ def test_build_dataset_excludes_gross_strike_scale_errors(
 
 
 
+
+def test_kalshi_candle_parser_supports_both_archive_and_live_dollar_fields() -> None:
+    from kalshi_edge.bootstrap.dataset import _parse_candles
+
+    candles = [
+        {
+            "end_period_ts": 1785585900,
+            "yes_bid": {"close": "0.5800"},
+            "yes_ask": {"close": "0.6200"},
+            "price": {"close": "0.6000", "high": "0.6400", "low": "0.5500"},
+            "volume": "3.50",
+            "open_interest": "17.25",
+        },
+        {
+            "end_period_ts": 1785585960,
+            "yes_bid": {"close_dollars": "0.5800"},
+            "yes_ask": {"close_dollars": "0.6200"},
+            "price": {
+                "close_dollars": "0.6000",
+                "high_dollars": "0.6400",
+                "low_dollars": "0.5500",
+            },
+            "volume_fp": "3.50",
+            "open_interest_fp": "17.25",
+        },
+    ]
+    parsed = _parse_candles({"candlesticks": candles})
+    assert len(parsed) == 2
+    for candle in parsed:
+        assert candle.yes_bid_close == pytest.approx(0.58)
+        assert candle.yes_ask_close == pytest.approx(0.62)
+        assert candle.price_close == pytest.approx(0.60)
+        assert candle.price_high == pytest.approx(0.64)
+        assert candle.price_low == pytest.approx(0.55)
+        assert candle.volume == pytest.approx(3.5)
+        assert candle.open_interest == pytest.approx(17.25)
+
+
+def test_kalshi_candle_parser_rejects_conflicting_dual_price_fields() -> None:
+    from kalshi_edge.bootstrap.dataset import _parse_candles
+
+    payload = {"candlesticks": [{
+        "end_period_ts": 1785585900,
+        "yes_bid": {"close": "0.40", "close_dollars": "0.90"},
+        "yes_ask": {"close_dollars": "0.91"},
+        "price": {"close_dollars": "0.50"},
+    }]}
+    with pytest.raises(DatasetBuildError, match="conflicting Kalshi candle yes_bid.close"):
+        _parse_candles(payload)
+
+
+def test_build_dataset_restores_four_minute_live_schema_quote_features(tmp_path: Path) -> None:
+    root = tmp_path / "data/bootstrap"
+    _seed(root)
+    ticker = "KXBTC15M-NEW-CANDLE-FORMAT"
+    opened = int(datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc).timestamp())
+    candle = {
+        "end_period_ts": opened + 600,
+        "yes_bid": {"close_dollars": "0.5800"},
+        "yes_ask": {"close_dollars": "0.6200"},
+        "price": {
+            "close_dollars": "0.6000",
+            "high_dollars": "0.6400",
+            "low_dollars": "0.5500",
+        },
+        "volume_fp": "3.50",
+        "open_interest_fp": "17.25",
+    }
+    for logical, payload in (
+        (f"markets/{ticker}.json", _market_payload(ticker)),
+        (f"trades/{ticker}.json", _trade_payload(ticker)),
+        (f"candlesticks/{ticker}.json", {"ticker": ticker, "candlesticks": [candle]}),
+    ):
+        _write_kalshi(root, logical, payload)
+
+    report = build_dataset(root, BootstrapSettings(bootstrap_dir=root))
+    assert report.market_count == 2
+    assert report.row_count == 36
+    assert report.leakage_finding_count == 0
+    table = pq.read_table(report.dataset_path).to_pylist()
+    at_four_minutes = [
+        row for row in table
+        if row["market_ticker"] == ticker and row["seconds_remaining"] == 240
+    ]
+    assert len(at_four_minutes) == 1
+    row = at_four_minutes[0]
+    assert row["kalshi_quote_available"] == 1.0
+    assert row["kalshi_mid"] == pytest.approx(0.60)
+    assert row["kalshi_candle_price_high"] == pytest.approx(0.64)
+    assert row["kalshi_candle_price_low"] == pytest.approx(0.55)
+    assert row["kalshi_open_interest"] == pytest.approx(17.25)
+    assert row["kalshi_candle_volume"] == pytest.approx(3.50)
+
+
 def test_build_dataset_rejects_corrupt_input_manifest(tmp_path: Path) -> None:
     root=tmp_path/"data/bootstrap"; _seed(root)
     market=root/"raw/kalshi/markets/KXBTC15M-TEST.json"; market.write_text(market.read_text()+"x")
