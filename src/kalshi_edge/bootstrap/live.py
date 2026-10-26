@@ -208,14 +208,18 @@ class LiveFeatureState:
             if quote.market_ticker != self.market.ticker or quote.source_ts_ns > now_ns:
                 continue
             end_ns = (quote.source_ts_ns // (60 * NS) + 1) * 60 * NS
-            if end_ns > now_ns:
+            # Live candle aggregates must also be strictly older than the
+            # decision timestamp to match historical feature eligibility.
+            if end_ns >= now_ns:
                 continue
             buckets.setdefault(end_ns, {"quotes": [], "trades": []})["quotes"].append(quote)
         for trade in self.trades:
             if trade.market_ticker != self.market.ticker or trade.source_ts_ns > now_ns:
                 continue
             end_ns = (trade.source_ts_ns // (60 * NS) + 1) * 60 * NS
-            if end_ns > now_ns:
+            # Live candle aggregates must also be strictly older than the
+            # decision timestamp to match historical feature eligibility.
+            if end_ns >= now_ns:
                 continue
             buckets.setdefault(end_ns, {"quotes": [], "trades": []})["trades"].append(trade)
 
