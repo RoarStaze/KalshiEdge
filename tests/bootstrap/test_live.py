@@ -219,6 +219,54 @@ def test_live_candle_boundary_matches_historical_conservative_cutoff() -> None:
 
 
 
+
+def test_same_market_reconnect_discards_old_feed_state_and_recovers_timestamp_error() -> None:
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+
+    state = LiveFeatureState()
+    market = LiveMarket(
+        ticker="KXBTC15M-TEST", strike=60000.0,
+        open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    )
+    state.update_market(market)
+    state.update_kalshi(LiveQuote(
+        market_ticker=market.ticker,
+        source_ts_ns=OPEN + 60 * NS,
+        yes_bid=0.50, yes_ask=0.51,
+    ))
+    state.update_kalshi(LiveTrade(
+        market_ticker=market.ticker,
+        source_ts_ns=OPEN + 60 * NS,
+        yes_price=0.50, count=1.0, taker_side="yes",
+    ))
+    state.update_brti(BRTIObservation(
+        source_ts_ns=OPEN + 60 * NS, value=60001.0,
+    ))
+    state.update_kalshi(LiveQuote(
+        market_ticker=market.ticker,
+        source_ts_ns=OPEN + 59 * NS,
+        yes_bid=0.49, yes_ask=0.50,
+    ))
+    assert state.invalid_reason == "OUT_OF_ORDER_KALSHI_BOOK"
+
+    # run_forever dispatches LiveMarket again for a fresh connection,
+    # even when the tracked market ticker has not changed.
+    state.update_market(market)
+    assert state.invalid_reason is None
+    assert state.latest_quote is None
+    assert state.latest_brti is None
+    assert not state.trades
+
+    state.update_kalshi(LiveQuote(
+        market_ticker=market.ticker,
+        source_ts_ns=OPEN + 62 * NS,
+        yes_bid=0.50, yes_ask=0.52,
+    ))
+    assert state.invalid_reason is None
+    assert state.latest_quote.yes_bid == 0.50
+
+
+
 def test_transient_crossed_quote_blocks_then_recovers_live_predictions() -> None:
     from kalshi_edge.bootstrap.live import LiveFeatureState
 

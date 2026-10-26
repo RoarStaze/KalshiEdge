@@ -43,9 +43,13 @@ class LiveQuote(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     market_ticker: str
+    # For order-book snapshots/deltas this is the LOCAL availability time:
+    # Kalshi's snapshot lacks a matching event timestamp and subsequent deltas
+    # can carry earlier exchange event times despite increasing sequence numbers.
     source_ts_ns: int = Field(gt=0)
     yes_bid: float | None = Field(default=None, ge=0.0, le=1.0)
     yes_ask: float | None = Field(default=None, ge=0.0, le=1.0)
+    exchange_ts_ns: int | None = Field(default=None, gt=0)
 
 
 class LiveTrade(BaseModel):
@@ -192,6 +196,8 @@ class KalshiLiveFeed:
         self.series_ticker = series_ticker
         self._yes_levels: dict[str, dict[Decimal, Decimal]] = {}
         self._ask_levels: dict[str, dict[Decimal, Decimal]] = {}
+        # Book ordering is defined by the subscription sequence, NOT msg.ts_ms.
+        self._book_sequences: dict[int, int] = {}
 
     def subscription_messages(self, market_tickers: list[str]) -> list[dict]:
         messages: list[dict] = []
@@ -273,15 +279,49 @@ class KalshiLiveFeed:
             return None
         return min(candidates, key=lambda market: (market.close_ts_ns, market.ticker))
 
-    def _quote(self, ticker: str, source_ts_ns: int) -> LiveQuote:
+    def _quote(self, ticker: str, receive_ts_ns: int, *, exchange_ts_ns: int | None = None) -> LiveQuote:
         yes = self._yes_levels.get(ticker, {})
         asks = self._ask_levels.get(ticker, {})
         return LiveQuote(
             market_ticker=ticker,
-            source_ts_ns=source_ts_ns,
+            source_ts_ns=receive_ts_ns,
             yes_bid=float(max(yes)) if yes else None,
             yes_ask=float(min(asks)) if asks else None,
+            exchange_ts_ns=exchange_ts_ns,
         )
+
+    @staticmethod
+    def _exchange_ts_ns(payload: dict, msg: dict) -> int | None:
+        # Diagnostic provenance only; NEVER use exchange event time to order
+        # successive observed book states or claim information was known early.
+        if msg.get("ts_ms") is not None or msg.get("ts") is not None:
+            return _message_ts_ns(msg, 0)
+        if payload.get("sending_ts_ms") is not None:
+            return _epoch_to_ns(int(payload["sending_ts_ms"]))
+        return None
+
+    def _check_book_sequence(self, payload: dict, kind: str) -> tuple[int, int] | None:
+        sid, seq = payload.get("sid"), payload.get("seq")
+        if sid is None and seq is None:
+            # Allows manually constructed unit-test fixtures. run_forever
+            # enforces both fields for actual WebSocket book messages.
+            return None
+        if (
+            not isinstance(sid, int) or isinstance(sid, bool) or sid < 0
+            or not isinstance(seq, int) or isinstance(seq, bool) or seq < 0
+        ):
+            raise LiveFeedProtocolError("invalid orderbook subscription sequence")
+        previous = self._book_sequences.get(sid)
+        if kind == "orderbook_delta":
+            if previous is None:
+                raise LiveFeedProtocolError("orderbook delta received before sequenced snapshot")
+            if seq != previous + 1:
+                raise LiveFeedProtocolError(
+                    f"orderbook sequence discontinuity: sid={sid}, expected={previous + 1}, received={seq}"
+                )
+        elif previous is not None and seq <= previous:
+            raise LiveFeedProtocolError("out-of-order orderbook snapshot sequence")
+        return sid, seq
 
     def process_message(self, payload: dict, *, receive_ts_ns: int) -> tuple[object, ...]:
         if not isinstance(payload, dict):
@@ -294,6 +334,7 @@ class KalshiLiveFeed:
             raise LiveFeedProtocolError("Kalshi message payload is missing")
 
         if kind == "orderbook_snapshot":
+            sequence = self._check_book_sequence(payload, kind)
             ticker = str(msg.get("market_ticker", ""))
             if not ticker:
                 raise LiveFeedProtocolError("orderbook snapshot lacks ticker")
@@ -304,9 +345,14 @@ class KalshiLiveFeed:
             asks = _book_snapshot_levels(msg.get("no_dollars_fp", []), "NO")
             self._yes_levels[ticker] = yes
             self._ask_levels[ticker] = asks
-            return (self._quote(ticker, _message_ts_ns(msg, receive_ts_ns)),)
+            if sequence is not None:
+                self._book_sequences[sequence[0]] = sequence[1]
+            return (self._quote(
+                ticker, receive_ts_ns, exchange_ts_ns=self._exchange_ts_ns(payload, msg)
+            ),)
 
         if kind == "orderbook_delta":
+            sequence = self._check_book_sequence(payload, kind)
             ticker = str(msg.get("market_ticker", ""))
             side = str(msg.get("side", ""))
             if not ticker or side not in {"yes", "no"}:
@@ -323,7 +369,11 @@ class KalshiLiveFeed:
                 ladder.pop(price, None)
             else:
                 ladder[price] = new_quantity
-            return (self._quote(ticker, _message_ts_ns(msg, receive_ts_ns)),)
+            if sequence is not None:
+                self._book_sequences[sequence[0]] = sequence[1]
+            return (self._quote(
+                ticker, receive_ts_ns, exchange_ts_ns=self._exchange_ts_ns(payload, msg)
+            ),)
 
         if kind == "trade":
             ticker = str(msg.get("market_ticker", ""))
@@ -416,6 +466,7 @@ class KalshiLiveFeed:
                 # A reconnect must never reuse the previous connection's orderbook.
                 self._yes_levels.clear()
                 self._ask_levels.clear()
+                self._book_sequences.clear()
                 async with websockets.connect(
                     self.settings.ws_url,
                     additional_headers=headers,
@@ -436,7 +487,10 @@ class KalshiLiveFeed:
                             payload = json.loads(raw)
                         except (json.JSONDecodeError, TypeError) as exc:
                             raise LiveFeedProtocolError("malformed Kalshi WebSocket frame") from exc
-                        for event in self.process_message(payload, receive_ts_ns=__import__("time").time_ns()):
+                        if payload.get("type") in {"orderbook_snapshot", "orderbook_delta"}:
+                            if payload.get("sid") is None or payload.get("seq") is None:
+                                raise LiveFeedProtocolError("live orderbook frame missing subscription sequence")
+                        for event in self.process_message(payload, receive_ts_ns=time.time_ns()):
                             await _dispatch(callback, event)
                             if isinstance(event, MarketLifecycle) and _needs_market_refresh(
                                 event, market, self.series_ticker

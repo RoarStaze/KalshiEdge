@@ -161,6 +161,132 @@ def test_kalshi_feed_parses_market_quote_trade_brti_and_lifecycle() -> None:
 
 
 
+
+def test_orderbook_quote_observation_time_is_monotonic_despite_older_exchange_timestamps() -> None:
+    """A snapshot has no event ts; sequenced deltas can have earlier event times."""
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+    from kalshi_edge.bootstrap.live_kalshi import (
+        KalshiLiveFeed, LiveMarket,
+    )
+
+    feed = KalshiLiveFeed(
+        CollectorSettings(key_id="test-key", private_key_path=Path("test.pem")),
+    )
+    state = LiveFeatureState()
+    ticker = "KXBTC15M-TIMESTAMP"
+    state.update_market(LiveMarket(
+        ticker=ticker, strike=60000.0,
+        open_ts_ns=1_800_000_000_000_000_000,
+        close_ts_ns=1_800_000_900_000_000_000,
+    ))
+    received_snapshot = 1_800_000_000_500_000_000
+    snapshot = feed.process_message({
+        "type": "orderbook_snapshot", "sid": 1, "seq": 41,
+        "sending_ts_ms": 1_800_000_000_400,
+        "msg": {
+            "market_ticker": ticker,
+            "yes_dollars_fp": [["0.41", "2.00"]],
+            "no_dollars_fp": [["0.59", "3.00"]],
+        },
+    }, receive_ts_ns=received_snapshot)[0]
+    state.update_kalshi(snapshot)
+    assert snapshot.source_ts_ns == received_snapshot
+    assert snapshot.exchange_ts_ns == 1_800_000_000_400_000_000
+
+    # Exchange ts_ms precedes even the snapshot's send time, as is
+    # explicitly possible in Kalshi's documented message examples.
+    first = feed.process_message({
+        "type": "orderbook_delta", "sid": 1, "seq": 42,
+        "msg": {
+            "market_ticker": ticker, "side": "yes",
+            "price_dollars": "0.41", "delta_fp": "1.00",
+            "ts_ms": 1_800_000_000_100,
+        },
+    }, receive_ts_ns=received_snapshot + 100_000_000)[0]
+    state.update_kalshi(first)
+    assert first.exchange_ts_ns < snapshot.exchange_ts_ns
+    assert first.source_ts_ns > snapshot.source_ts_ns
+    assert state.invalid_reason is None
+
+    # A subsequent exchange event timestamp may also go backwards; a
+    # continuous sequence establishes the causal book update order.
+    second = feed.process_message({
+        "type": "orderbook_delta", "sid": 1, "seq": 43,
+        "msg": {
+            "market_ticker": ticker, "side": "yes",
+            "price_dollars": "0.41", "delta_fp": "-1.00",
+            "ts_ms": 1_800_000_000_050,
+        },
+    }, receive_ts_ns=received_snapshot + 200_000_000)[0]
+    state.update_kalshi(second)
+    assert second.exchange_ts_ns < first.exchange_ts_ns
+    assert state.invalid_reason is None
+    assert state.latest_quote_ts_ns == second.source_ts_ns
+    assert state.latest_quote.yes_bid == 0.41
+
+
+def test_orderbook_sequence_gap_rejects_delta_without_mutating_then_recovers_on_snapshot() -> None:
+    from decimal import Decimal
+    from kalshi_edge.bootstrap.live_kalshi import KalshiLiveFeed, LiveFeedProtocolError
+
+    feed = KalshiLiveFeed(
+        CollectorSettings(key_id="test-key", private_key_path=Path("test.pem")),
+    )
+    ticker = "KXBTC15M-SEQUENCE"
+    feed.process_message({
+        "type": "orderbook_snapshot", "sid": 2, "seq": 10,
+        "msg": {
+            "market_ticker": ticker,
+            "yes_dollars_fp": [["0.40", "5.00"]],
+            "no_dollars_fp": [["0.60", "4.00"]],
+        },
+    }, receive_ts_ns=1_800_000_000_000_000_000)
+
+    def delta(seq, count):
+        return {
+            "type": "orderbook_delta", "sid": 2, "seq": seq,
+            "msg": {
+                "market_ticker": ticker, "side": "yes",
+                "price_dollars": "0.40", "delta_fp": count,
+            },
+        }
+
+    with pytest.raises(LiveFeedProtocolError, match="sequence discontinuity"):
+        feed.process_message(delta(12, "-2.00"), receive_ts_ns=1_800_000_000_100_000_000)
+    assert feed._yes_levels[ticker][Decimal("0.40")] == Decimal("5.00")
+    assert feed._book_sequences[2] == 10
+
+    # A fresh authoritative snapshot can repair this subscription state.
+    feed.process_message({
+        "type": "orderbook_snapshot", "sid": 2, "seq": 15,
+        "msg": {
+            "market_ticker": ticker,
+            "yes_dollars_fp": [["0.40", "4.00"]],
+            "no_dollars_fp": [["0.60", "3.00"]],
+        },
+    }, receive_ts_ns=1_800_000_000_200_000_000)
+    feed.process_message(delta(16, "-1.00"), receive_ts_ns=1_800_000_000_300_000_000)
+    assert feed._yes_levels[ticker][Decimal("0.40")] == Decimal("3.00")
+    with pytest.raises(LiveFeedProtocolError, match="sequence"):
+        feed.process_message(delta(16, "-1.00"), receive_ts_ns=1_800_000_000_400_000_000)
+
+
+def test_orderbook_sequence_rejects_delta_without_prior_snapshot() -> None:
+    from kalshi_edge.bootstrap.live_kalshi import KalshiLiveFeed, LiveFeedProtocolError
+    feed = KalshiLiveFeed(
+        CollectorSettings(key_id="test-key", private_key_path=Path("test.pem")),
+    )
+    with pytest.raises(LiveFeedProtocolError, match="before sequenced snapshot"):
+        feed.process_message({
+            "type": "orderbook_delta", "sid": 1, "seq": 1,
+            "msg": {
+                "market_ticker": "KXBTC15M-NO-SNAPSHOT",
+                "side": "yes", "price_dollars": "0.40", "delta_fp": "1.00",
+            },
+        }, receive_ts_ns=1_800_000_000_000_000_000)
+
+
+
 def test_orderbook_fixed_point_repeated_additions_do_not_create_phantom_negative_levels() -> None:
     """Regression: float accumulation could underflow past the -1e-12 guard."""
     from decimal import Decimal
