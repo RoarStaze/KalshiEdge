@@ -10,6 +10,7 @@ import math
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import websockets
@@ -83,6 +84,36 @@ def _finite_float(value: object, field: str, *, minimum: float | None = None) ->
     if minimum is not None and result < minimum:
         raise LiveFeedProtocolError(f"invalid Kalshi {field}")
     return result
+
+
+def _book_decimal(value: object, field: str, *, minimum: Decimal | None = None, maximum: Decimal | None = None) -> Decimal:
+    """Parse wire-format fixed-point values without binary floating-point drift."""
+    if isinstance(value, bool) or value is None:
+        raise LiveFeedProtocolError(f"invalid Kalshi {field}")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise LiveFeedProtocolError(f"invalid Kalshi {field}") from exc
+    if not result.is_finite() or (minimum is not None and result < minimum) or (maximum is not None and result > maximum):
+        raise LiveFeedProtocolError(f"invalid Kalshi {field}")
+    return result
+
+
+def _book_snapshot_levels(rows: object, field: str) -> dict[Decimal, Decimal]:
+    """Validate a whole fixed-point snapshot before replacing live book state."""
+    if not isinstance(rows, list):
+        raise LiveFeedProtocolError(f"malformed Kalshi {field} orderbook snapshot")
+    levels: dict[Decimal, Decimal] = {}
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) != 2:
+            raise LiveFeedProtocolError(f"malformed Kalshi {field} orderbook level")
+        price = _book_decimal(row[0], "orderbook price", minimum=Decimal(0), maximum=Decimal(1))
+        quantity = _book_decimal(row[1], "orderbook quantity", minimum=Decimal(0))
+        if price in levels:
+            raise LiveFeedProtocolError(f"duplicate Kalshi {field} orderbook price")
+        if quantity > 0:
+            levels[price] = quantity
+    return levels
 
 
 def _epoch_to_ns(value: int) -> int:
@@ -159,8 +190,8 @@ class KalshiLiveFeed:
     def __init__(self, settings: CollectorSettings, *, series_ticker: str = "KXBTC15M") -> None:
         self.settings = settings
         self.series_ticker = series_ticker
-        self._yes_levels: dict[str, dict[float, float]] = {}
-        self._ask_levels: dict[str, dict[float, float]] = {}
+        self._yes_levels: dict[str, dict[Decimal, Decimal]] = {}
+        self._ask_levels: dict[str, dict[Decimal, Decimal]] = {}
 
     def subscription_messages(self, market_tickers: list[str]) -> list[dict]:
         messages: list[dict] = []
@@ -248,8 +279,8 @@ class KalshiLiveFeed:
         return LiveQuote(
             market_ticker=ticker,
             source_ts_ns=source_ts_ns,
-            yes_bid=max(yes) if yes else None,
-            yes_ask=min(asks) if asks else None,
+            yes_bid=float(max(yes)) if yes else None,
+            yes_ask=float(min(asks)) if asks else None,
         )
 
     def process_message(self, payload: dict, *, receive_ts_ns: int) -> tuple[object, ...]:
@@ -266,13 +297,11 @@ class KalshiLiveFeed:
             ticker = str(msg.get("market_ticker", ""))
             if not ticker:
                 raise LiveFeedProtocolError("orderbook snapshot lacks ticker")
-            try:
-                yes = {float(price): float(quantity) for price, quantity in msg.get("yes_dollars_fp", []) if float(quantity) > 0.0}
-                asks = {float(price): float(quantity) for price, quantity in msg.get("no_dollars_fp", []) if float(quantity) > 0.0}
-            except (TypeError, ValueError) as exc:
-                raise LiveFeedProtocolError("malformed orderbook snapshot") from exc
-            if any(not math.isfinite(price) or price < 0.0 or price > 1.0 for price in (*yes, *asks)):
-                raise LiveFeedProtocolError("invalid orderbook price")
+            # Kalshi sends fixed-point decimal strings for prices and quantities.
+            # Converting each delta to float accumulates roundoff and produces
+            # false negative quantities after many matched add/remove operations.
+            yes = _book_snapshot_levels(msg.get("yes_dollars_fp", []), "YES")
+            asks = _book_snapshot_levels(msg.get("no_dollars_fp", []), "NO")
             self._yes_levels[ticker] = yes
             self._ask_levels[ticker] = asks
             return (self._quote(ticker, _message_ts_ns(msg, receive_ts_ns)),)
@@ -282,15 +311,15 @@ class KalshiLiveFeed:
             side = str(msg.get("side", ""))
             if not ticker or side not in {"yes", "no"}:
                 raise LiveFeedProtocolError("malformed orderbook delta")
-            price = _finite_float(msg.get("price_dollars"), "orderbook price")
-            delta = _finite_float(msg.get("delta_fp"), "orderbook delta")
-            if not 0.0 <= price <= 1.0:
-                raise LiveFeedProtocolError("invalid orderbook price")
+            price = _book_decimal(msg.get("price_dollars"), "orderbook price", minimum=Decimal(0), maximum=Decimal(1))
+            delta = _book_decimal(msg.get("delta_fp"), "orderbook delta")
             ladder = self._yes_levels.setdefault(ticker, {}) if side == "yes" else self._ask_levels.setdefault(ticker, {})
-            new_quantity = ladder.get(price, 0.0) + delta
-            if new_quantity < -1e-12:
+            new_quantity = ladder.get(price, Decimal(0)) + delta
+            if new_quantity < 0:
+                # Fail closed on genuinely inconsistent exchange updates.
+                # With exact decimal arithmetic, this cannot be float noise.
                 raise LiveFeedProtocolError("orderbook delta would create negative quantity")
-            if new_quantity <= 1e-12:
+            if new_quantity == 0:
                 ladder.pop(price, None)
             else:
                 ladder[price] = new_quantity
