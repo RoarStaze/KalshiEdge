@@ -218,6 +218,51 @@ def test_live_candle_boundary_matches_historical_conservative_cutoff() -> None:
 
 
 
+
+def test_transient_crossed_quote_blocks_then_recovers_live_predictions() -> None:
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+
+    state = LiveFeatureState()
+    state.update_market(LiveMarket(
+        ticker="KXBTC15M-TEST", strike=60000.0,
+        open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    ))
+
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST",
+        source_ts_ns=OPEN + 60 * NS,
+        yes_bid=0.55, yes_ask=0.56,
+    ))
+    assert state.invalid_reason is None
+    assert state.latest_quote.yes_bid == 0.55
+
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST",
+        source_ts_ns=OPEN + 61 * NS,
+        yes_bid=0.58, yes_ask=0.57,
+    ))
+    assert state.invalid_reason == "INCONSISTENT_KALSHI_QUOTE"
+    assert state.latest_quote.yes_bid == 0.55
+
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST",
+        source_ts_ns=OPEN + 62 * NS,
+        yes_bid=0.56, yes_ask=0.57,
+    ))
+    assert state.invalid_reason is None
+    assert state.latest_quote.yes_bid == 0.56
+
+    # Recovery from a crossed book must not erase unrelated integrity faults.
+    state.invalid_reason = "OUT_OF_ORDER_KALSHI_TRADE"
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST",
+        source_ts_ns=OPEN + 63 * NS,
+        yes_bid=0.54, yes_ask=0.55,
+    ))
+    assert state.invalid_reason == "OUT_OF_ORDER_KALSHI_TRADE"
+
+
+
 def test_predictor_constructor_rejects_unpromoted_unsealed_or_hash_mismatched_bundle() -> None:
     from kalshi_edge.bootstrap.live import LiveModelError, LivePredictor
 
