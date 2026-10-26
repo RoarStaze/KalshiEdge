@@ -29,10 +29,10 @@ from .types import FeatureRow, MarketLabel
 
 NS = 1_000_000_000
 MAX_FEATURE_LOOKBACK_SECONDS = 900
-DATASET_SCHEMA_VERSION = 4
+DATASET_SCHEMA_VERSION = 5
 # Independent revision for resumable rows. Changing data-eligibility rules must not
 # reuse rows from an interrupted build created before those rules were introduced.
-DATASET_CHECKPOINT_SCHEMA_VERSION = 5
+DATASET_CHECKPOINT_SCHEMA_VERSION = 6
 # A 10x tolerance is deliberately very permissive: this is a units/scale guard,
 # not a filter on ordinary cross-venue BTC price differences.
 MAX_STRIKE_TO_BTC_RATIO = 10.0
