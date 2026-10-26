@@ -131,13 +131,17 @@ class LiveFeatureState:
         if market.close_ts_ns <= market.open_ts_ns or market.strike <= 0.0 or not math.isfinite(market.strike):
             self.invalid_reason = "UNREADABLE_STRIKE"
             return
-        if self.market is None or self.market.ticker != market.ticker:
-            self.quotes.clear()
-            self.trades.clear()
-            self.brti_observations.clear()
-            self.latest_quote_ts_ns = None
-            self.latest_brti_ts_ns = None
-            self.invalid_reason = None
+        # LiveMarket is emitted on each fresh Kalshi WebSocket subscription,
+        # including reconnections to the SAME ticker. Old book/trade/BRTI
+        # observations cannot be safely joined across a lost connection.
+        # Clear the latched error only because we discard all old feed state
+        # and require fresh snapshots/observations before new predictions.
+        self.quotes.clear()
+        self.trades.clear()
+        self.brti_observations.clear()
+        self.latest_quote_ts_ns = None
+        self.latest_brti_ts_ns = None
+        self.invalid_reason = None
         self.market = market
 
     def update_kalshi(self, event: LiveQuote | LiveTrade | MarketLifecycle) -> None:
