@@ -108,6 +108,57 @@ def test_build_feature_row_excludes_every_observation_after_checkpoint() -> None
     assert max(row.source_max_ts_ns.values()) <= checkpoint
 
 
+
+def test_candle_ending_exactly_at_forecast_checkpoint_is_not_yet_available() -> None:
+    label = _label()
+    checkpoint = label.close_ts_ns - 240 * NS
+    btc = HistoricalBTCState(bars=(_bar(checkpoint - 2 * NS, 100.0),))
+    history = HistoricalKalshiState(candles=(
+        HistoricalKalshiCandle(
+            end_ts_ns=checkpoint - 60 * NS,
+            yes_bid_close=0.20,
+            yes_ask_close=0.40,
+            price_close=0.31,
+        ),
+        HistoricalKalshiCandle(
+            end_ts_ns=checkpoint,
+            yes_bid_close=0.80,
+            yes_ask_close=0.90,
+            price_close=0.85,
+        ),
+        HistoricalKalshiCandle(
+            end_ts_ns=checkpoint + 60 * NS,
+            yes_bid_close=0.95,
+            yes_ask_close=0.99,
+        ),
+    ))
+
+    exact = build_feature_row(label, checkpoint, history, btc)
+    assert exact.features["kalshi_quote_available"] == 1.0
+    assert exact.features["kalshi_mid"] == pytest.approx(0.30)
+    assert exact.source_max_ts_ns["kalshi_candles"] == checkpoint - 60 * NS
+
+    later = build_feature_row(label, checkpoint + 1, history, btc)
+    assert later.features["kalshi_mid"] == pytest.approx(0.85)
+    assert later.source_max_ts_ns["kalshi_candles"] == checkpoint
+
+
+def test_only_exact_boundary_candle_is_ineligible_at_checkpoint() -> None:
+    label = _label()
+    checkpoint = label.close_ts_ns - 240 * NS
+    btc = HistoricalBTCState(bars=(_bar(checkpoint - 2 * NS, 100.0),))
+    kalshi = HistoricalKalshiState(candles=(
+        HistoricalKalshiCandle(
+            end_ts_ns=checkpoint, yes_bid_close=0.80, yes_ask_close=0.90,
+        ),
+    ))
+    row = build_feature_row(label, checkpoint, kalshi, btc)
+    assert row.features["kalshi_quote_available"] == 0.0
+    assert row.features["kalshi_mid"] == 0.0
+    assert "kalshi_candles" not in row.source_max_ts_ns
+
+
+
 def test_candle_without_quote_prices_does_not_claim_quote_availability() -> None:
     label = _label()
     checkpoint = label.open_ts_ns + 600 * NS

@@ -28,8 +28,8 @@ from .splits import MarketIndex, WalkForwardSplit, make_walk_forward_splits
 from .types import FeatureRow
 
 
-MODEL_VERSION = "bootstrap-hybrid-v4"
-FEATURE_SCHEMA_VERSION = 4
+MODEL_VERSION = "bootstrap-hybrid-v5"
+FEATURE_SCHEMA_VERSION = 5
 STRUCTURAL_SIMULATIONS = 512
 MIN_HISTORICAL_EVALUATION_SECONDS = 60.0
 KALSHI_FLOW_PREFIXES = (
