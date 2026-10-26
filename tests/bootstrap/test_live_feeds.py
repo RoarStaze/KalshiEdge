@@ -216,87 +216,90 @@ def test_lifecycle_refresh_applies_only_to_tracked_market() -> None:
     assert not _needs_market_refresh(event("KXBTC15M-OLD", "settled"), None, "KXBTC15M")
 
 
-@pytest.mark.asyncio
-async def test_unrelated_series_lifecycle_stream_does_not_reconnect(monkeypatch) -> None:
+def test_unrelated_series_lifecycle_stream_does_not_reconnect(monkeypatch) -> None:
     import asyncio
 
-    from kalshi_edge.bootstrap import live_kalshi
+    async def run_test() -> None:
+        import asyncio
 
-    created = []
-    dispatched = []
-    reached = asyncio.Event()
+        from kalshi_edge.bootstrap import live_kalshi
 
-    class FakeSocket:
-        def __init__(self):
-            self.sent = []
-            self.messages = [
-                {"type": "market_lifecycle_v2", "msg": {
-                    "market_ticker": "KXBTC15M-PAST", "event_type": "settled",
-                }},
-                {"type": "market_lifecycle_v2", "msg": {
-                    "market_ticker": "KXBTC15M-FUTURE", "event_type": "created",
-                }},
-            ]
+        created = []
+        dispatched = []
+        reached = asyncio.Event()
 
-        async def __aenter__(self):
-            return self
+        class FakeSocket:
+            def __init__(self):
+                self.sent = []
+                self.messages = [
+                    {"type": "market_lifecycle_v2", "msg": {
+                        "market_ticker": "KXBTC15M-PAST", "event_type": "settled",
+                    }},
+                    {"type": "market_lifecycle_v2", "msg": {
+                        "market_ticker": "KXBTC15M-FUTURE", "event_type": "created",
+                    }},
+                ]
 
-        async def __aexit__(self, *args):
-            return False
+            async def __aenter__(self):
+                return self
 
-        async def send(self, message):
-            self.sent.append(json.loads(message))
+            async def __aexit__(self, *args):
+                return False
 
-        async def recv(self):
-            if self.messages:
-                return json.dumps(self.messages.pop(0))
-            # A quiet connection should remain open, not spin after the test's signal.
-            await asyncio.Future()
+            async def send(self, message):
+                self.sent.append(json.loads(message))
 
-    def connect(*args, **kwargs):
-        socket = FakeSocket()
-        created.append(socket)
-        return socket
+            async def recv(self):
+                if self.messages:
+                    return json.dumps(self.messages.pop(0))
+                # A quiet connection should remain open, not spin after the test's signal.
+                await asyncio.Future()
 
-    async def fetch_events(**kwargs):
-        return {"events": [{
-            "series_ticker": "KXBTC15M",
-            "markets": [{
-                "ticker": "KXBTC15M-CURRENT",
-                "status": "active",
-                "floor_strike": 60000.0,
-                "open_time": "2026-10-26T11:00:00Z",
-                "close_time": "2099-10-26T11:15:00Z",
-                "open_interest_fp": "10.00",
-            }],
-        }]}
+        def connect(*args, **kwargs):
+            socket = FakeSocket()
+            created.append(socket)
+            return socket
 
-    monkeypatch.setattr(live_kalshi, "fetch_open_events_payload", fetch_events)
-    monkeypatch.setattr(live_kalshi, "load_private_key", lambda path: object())
-    monkeypatch.setattr(live_kalshi, "create_auth_headers", lambda **kwargs: {})
-    monkeypatch.setattr(live_kalshi.websockets, "connect", connect)
+        async def fetch_events(**kwargs):
+            return {"events": [{
+                "series_ticker": "KXBTC15M",
+                "markets": [{
+                    "ticker": "KXBTC15M-CURRENT",
+                    "status": "active",
+                    "floor_strike": 60000.0,
+                    "open_time": "2026-10-26T11:00:00Z",
+                    "close_time": "2099-10-26T11:15:00Z",
+                    "open_interest_fp": "10.00",
+                }],
+            }]}
 
-    feed = live_kalshi.KalshiLiveFeed(CollectorSettings(
-        key_id="dummy", private_key_path=Path("never-read.pem"),
-    ))
+        monkeypatch.setattr(live_kalshi, "fetch_open_events_payload", fetch_events)
+        monkeypatch.setattr(live_kalshi, "load_private_key", lambda path: object())
+        monkeypatch.setattr(live_kalshi, "create_auth_headers", lambda **kwargs: {})
+        monkeypatch.setattr(live_kalshi.websockets, "connect", connect)
 
-    async def callback(value):
-        dispatched.append(value)
-        if len(dispatched) == 3:
-            reached.set()
+        feed = live_kalshi.KalshiLiveFeed(CollectorSettings(
+            key_id="dummy", private_key_path=Path("never-read.pem"),
+        ))
 
-    task = asyncio.create_task(feed.run_forever(callback))
-    try:
-        await asyncio.wait_for(reached.wait(), timeout=2)
-        # Yield the event loop so an unintended disconnect would show up.
-        await asyncio.sleep(0.05)
-        assert len(created) == 1
-        assert len(dispatched) == 3
-        assert created[0].sent
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        async def callback(value):
+            dispatched.append(value)
+            if len(dispatched) == 3:
+                reached.set()
 
+        task = asyncio.create_task(feed.run_forever(callback))
+        try:
+            await asyncio.wait_for(reached.wait(), timeout=2)
+            # Yield the event loop so an unintended disconnect would show up.
+            await asyncio.sleep(0.05)
+            assert len(created) == 1
+            assert len(dispatched) == 3
+            assert created[0].sent
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run_test())
 
 
 def test_binance_live_feed_uses_official_closed_one_second_klines() -> None:
