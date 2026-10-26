@@ -181,6 +181,43 @@ def test_live_feature_state_reuses_causal_historical_feature_semantics() -> None
     assert max(row.source_max_ts_ns.values()) <= now
 
 
+
+def test_live_candle_boundary_matches_historical_conservative_cutoff() -> None:
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+
+    now = CLOSE - 240 * NS
+    state = LiveFeatureState()
+    state.update_market(LiveMarket(
+        ticker="KXBTC15M-TEST", strike=60_000.0,
+        open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    ))
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST", source_ts_ns=now - 61 * NS,
+        yes_bid=0.20, yes_ask=0.40,
+    ))
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST", source_ts_ns=now - NS,
+        yes_bid=0.80, yes_ask=0.90,
+    ))
+    state.update_binance(BinanceBar(
+        ts_ns=now - 2 * NS,
+        open=60_000.0, high=60_000.0,
+        low=60_000.0, close=60_000.0,
+        base_volume=1.0, quote_volume=60_000.0,
+        trade_count=1, taker_buy_base=0.5,
+        taker_buy_quote=30_000.0,
+    ))
+
+    exact = state.feature_row(now)
+    assert exact.features["kalshi_mid"] == pytest.approx(0.30)
+    assert exact.source_max_ts_ns["kalshi_candles"] == now - 60 * NS
+
+    later = state.feature_row(now + 1)
+    assert later.features["kalshi_mid"] == pytest.approx(0.85)
+    assert later.source_max_ts_ns["kalshi_candles"] == now
+
+
+
 def test_predictor_constructor_rejects_unpromoted_unsealed_or_hash_mismatched_bundle() -> None:
     from kalshi_edge.bootstrap.live import LiveModelError, LivePredictor
 
@@ -283,7 +320,7 @@ def test_pre_final_minute_prediction_contains_full_diagnostics() -> None:
     assert 0.0 <= result.confidence <= 1.0
     assert result.component_disagreement is not None
     assert result.model_hash is not None
-    assert result.model_version == "bootstrap-hybrid-v4"
+    assert result.model_version == "bootstrap-hybrid-v5"
     assert result.feed_quality.healthy is True
 
 
@@ -388,7 +425,7 @@ def test_prediction_jsonl_writer_is_bootstrap_only_and_canonical(tmp_path: Path)
     assert path.name == "predictions.jsonl"
     payload = json.loads(path.read_text(encoding="utf-8").strip())
     assert payload["status"] == "OK"
-    assert payload["model_version"] == "bootstrap-hybrid-v4"
+    assert payload["model_version"] == "bootstrap-hybrid-v5"
     assert payload["final_probability"] == pytest.approx(0.66)
 
     with pytest.raises(ValueError):
