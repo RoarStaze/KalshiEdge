@@ -250,8 +250,8 @@ async def test_unrelated_series_lifecycle_stream_does_not_reconnect(monkeypatch)
         async def recv(self):
             if self.messages:
                 return json.dumps(self.messages.pop(0))
-            await reached.wait()
-            return json.dumps({"type": "ok"})
+            # A quiet connection should remain open, not spin after the test's signal.
+            await asyncio.Future()
 
     def connect(*args, **kwargs):
         socket = FakeSocket()
