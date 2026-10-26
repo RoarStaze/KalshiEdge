@@ -160,6 +160,127 @@ def test_kalshi_feed_parses_market_quote_trade_brti_and_lifecycle() -> None:
     assert lifecycle[0].floor_strike == 60005.0
 
 
+
+def test_orderbook_fixed_point_repeated_additions_do_not_create_phantom_negative_levels() -> None:
+    """Regression: float accumulation could underflow past the -1e-12 guard."""
+    from decimal import Decimal
+
+    from kalshi_edge.bootstrap.live_kalshi import KalshiLiveFeed
+
+    feed = KalshiLiveFeed(
+        CollectorSettings(key_id="test-key", private_key_path=Path("test.pem")),
+        series_ticker="KXBTC15M",
+    )
+    ticker = "KXBTC15M-PRECISION"
+    feed.process_message(
+        {
+            "type": "orderbook_snapshot",
+            "msg": {
+                "market_ticker": ticker,
+                "yes_dollars_fp": [["0.4100", "1.00"]],
+                "no_dollars_fp": [["0.5900", "1.00"]],
+            },
+        },
+        receive_ts_ns=1_800_000_000_000_000_000,
+    )
+
+    for _ in range(2000):
+        feed.process_message(
+            {
+                "type": "orderbook_delta",
+                "msg": {
+                    "market_ticker": ticker,
+                    "side": "yes",
+                    "price_dollars": "0.4100",
+                    "delta_fp": "0.07",
+                },
+            },
+            receive_ts_ns=1_800_000_000_000_000_001,
+        )
+
+    assert feed._yes_levels[ticker][Decimal("0.41")] == Decimal("141.00")
+    after = feed.process_message(
+        {
+            "type": "orderbook_delta",
+            "msg": {
+                "market_ticker": ticker,
+                "side": "yes",
+                "price_dollars": "0.41",
+                "delta_fp": "-141.00",
+            },
+        },
+        receive_ts_ns=1_800_000_000_000_000_002,
+    )
+    assert feed._yes_levels[ticker] == {}
+    assert after[0].yes_bid is None
+    assert after[0].yes_ask == 0.59
+
+
+def test_orderbook_rejects_material_negative_quantities_and_invalid_fixed_point_values() -> None:
+    from kalshi_edge.bootstrap.live_kalshi import (
+        KalshiLiveFeed, LiveFeedProtocolError,
+    )
+    feed = KalshiLiveFeed(
+        CollectorSettings(key_id="test-key", private_key_path=Path("test.pem")),
+        series_ticker="KXBTC15M",
+    )
+    ticker = "KXBTC15M-INVALID"
+    feed.process_message(
+        {
+            "type": "orderbook_snapshot",
+            "msg": {
+                "market_ticker": ticker,
+                "yes_dollars_fp": [["0.4100", "1.00"]],
+                "no_dollars_fp": [["0.5900", "8.00"]],
+            },
+        },
+        receive_ts_ns=1_800_000_000_000_000_000,
+    )
+    with pytest.raises(LiveFeedProtocolError, match="negative quantity"):
+        feed.process_message(
+            {
+                "type": "orderbook_delta",
+                "msg": {
+                    "market_ticker": ticker,
+                    "side": "yes",
+                    "price_dollars": "0.41",
+                    "delta_fp": "-1.01",
+                },
+            },
+            receive_ts_ns=1_800_000_000_000_000_001,
+        )
+    assert feed._yes_levels[ticker]
+    for invalid in ("nan", "inf", "not-a-number"):
+        with pytest.raises(LiveFeedProtocolError, match="orderbook delta"):
+            feed.process_message(
+                {
+                    "type": "orderbook_delta",
+                    "msg": {
+                        "market_ticker": ticker,
+                        "side": "yes",
+                        "price_dollars": "0.41",
+                        "delta_fp": invalid,
+                    },
+                },
+                receive_ts_ns=1_800_000_000_000_000_001,
+            )
+    with pytest.raises(LiveFeedProtocolError):
+        feed.process_message(
+            {
+                "type": "orderbook_snapshot",
+                "msg": {
+                    "market_ticker": ticker,
+                    "yes_dollars_fp": [["0.42", "-1.00"]],
+                    "no_dollars_fp": [],
+                },
+            },
+            receive_ts_ns=1_800_000_000_000_000_002,
+        )
+    # A rejected snapshot must not erase the last sound book.
+    assert feed._yes_levels[ticker]
+
+
+
 def test_kalshi_feed_rejects_ambiguous_or_malformed_required_values() -> None:
     from kalshi_edge.bootstrap.live_kalshi import LiveFeedProtocolError, KalshiLiveFeed
 
