@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import math
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +21,7 @@ from ..discovery import fetch_open_events_payload
 
 
 NS = 1_000_000_000
+LOGGER = logging.getLogger(__name__)
 
 
 class LiveFeedProtocolError(RuntimeError):
@@ -129,6 +132,25 @@ async def _dispatch(callback: Callable[[object], object], event: object) -> None
     result = callback(event)
     if inspect.isawaitable(result):
         await result
+
+
+def _needs_market_refresh(event: MarketLifecycle, market: LiveMarket | None, series_ticker: str) -> bool:
+    """A series-wide lifecycle update must not restart an unrelated market feed.
+
+    When no market is active, newly activated series markets prompt discovery.
+    The current market is also refreshed at its scheduled close in run_forever.
+    """
+    if market is None:
+        return event.event_type == "activated" and event.market_ticker.startswith(f"{series_ticker}-")
+    return event.market_ticker == market.ticker and event.event_type in {
+        "created",
+        "activated",
+        "deactivated",
+        "close_date_updated",
+        "determined",
+        "settled",
+        "metadata_updated",
+    }
 
 
 class KalshiLiveFeed:
@@ -362,6 +384,9 @@ class KalshiLiveFeed:
                     method="GET",
                     path="/trade-api/ws/v2",
                 )
+                # A reconnect must never reuse the previous connection's orderbook.
+                self._yes_levels.clear()
+                self._ask_levels.clear()
                 async with websockets.connect(
                     self.settings.ws_url,
                     additional_headers=headers,
@@ -373,6 +398,10 @@ class KalshiLiveFeed:
                         await ws.send(json.dumps(message, separators=(",", ":")))
                     delay = self.settings.reconnect_initial_seconds
                     while True:
+                        # Scheduled market close is a separate mandatory rollover
+                        # trigger, even if its lifecycle event is lost.
+                        if market is not None and time.time_ns() >= market.close_ts_ns:
+                            raise LiveFeedProtocolError("tracked market has closed; refreshing active market")
                         raw = await asyncio.wait_for(ws.recv(), timeout=self.settings.stale_after_seconds)
                         try:
                             payload = json.loads(raw)
@@ -380,19 +409,16 @@ class KalshiLiveFeed:
                             raise LiveFeedProtocolError("malformed Kalshi WebSocket frame") from exc
                         for event in self.process_message(payload, receive_ts_ns=__import__("time").time_ns()):
                             await _dispatch(callback, event)
-                            if isinstance(event, MarketLifecycle) and event.market_ticker.startswith(f"{self.series_ticker}-"):
-                                if event.event_type in {
-                                    "created",
-                                    "activated",
-                                    "deactivated",
-                                    "close_date_updated",
-                                    "determined",
-                                    "settled",
-                                    "metadata_updated",
-                                }:
-                                    raise LiveFeedProtocolError("target lifecycle changed; refreshing live market")
+                            if isinstance(event, MarketLifecycle) and _needs_market_refresh(
+                                event, market, self.series_ticker
+                            ):
+                                raise LiveFeedProtocolError("tracked market lifecycle changed; refreshing live market")
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                LOGGER.warning(
+                    "Kalshi live feed restarting (%s): %s; reconnect delay %.2fs",
+                    type(exc).__name__, exc, delay,
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2.0, self.settings.reconnect_max_seconds)

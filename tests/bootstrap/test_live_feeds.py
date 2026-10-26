@@ -182,6 +182,126 @@ def test_kalshi_feed_rejects_ambiguous_or_malformed_required_values() -> None:
         )
 
 
+
+def test_lifecycle_refresh_applies_only_to_tracked_market() -> None:
+    from kalshi_edge.bootstrap.live_kalshi import (
+        LiveMarket, MarketLifecycle, _needs_market_refresh,
+    )
+
+    tracked = LiveMarket(
+        ticker="KXBTC15M-CURRENT", strike=60000.0,
+        open_ts_ns=1_800_000_000_000_000_000,
+        close_ts_ns=1_800_000_900_000_000_000,
+    )
+
+    def event(ticker, kind):
+        return MarketLifecycle(
+            market_ticker=ticker, event_type=kind,
+            receive_ts_ns=1_800_000_300_000_000_000,
+        )
+
+    # Series-wide settled/created events must never interrupt a healthy
+    # WebSocket subscription to the current market.
+    assert not _needs_market_refresh(event("KXBTC15M-OTHER", "settled"), tracked, "KXBTC15M")
+    assert not _needs_market_refresh(event("KXBTC15M-OTHER", "created"), tracked, "KXBTC15M")
+    assert not _needs_market_refresh(event("KXETH15M-OTHER", "activated"), tracked, "KXBTC15M")
+
+    # Only the subscribed market's own lifecycle changes require re-discovery.
+    assert _needs_market_refresh(event(tracked.ticker, "settled"), tracked, "KXBTC15M")
+    assert _needs_market_refresh(event(tracked.ticker, "metadata_updated"), tracked, "KXBTC15M")
+
+    # When no market is yet available, activation can trigger discovery,
+    # but historical settlement events must not cause a reconnect storm.
+    assert _needs_market_refresh(event("KXBTC15M-NEXT", "activated"), None, "KXBTC15M")
+    assert not _needs_market_refresh(event("KXBTC15M-OLD", "settled"), None, "KXBTC15M")
+
+
+def test_unrelated_series_lifecycle_stream_does_not_reconnect(monkeypatch) -> None:
+    import asyncio
+
+    async def run_test() -> None:
+        import asyncio
+
+        from kalshi_edge.bootstrap import live_kalshi
+
+        created = []
+        dispatched = []
+        reached = asyncio.Event()
+
+        class FakeSocket:
+            def __init__(self):
+                self.sent = []
+                self.messages = [
+                    {"type": "market_lifecycle_v2", "msg": {
+                        "market_ticker": "KXBTC15M-PAST", "event_type": "settled",
+                    }},
+                    {"type": "market_lifecycle_v2", "msg": {
+                        "market_ticker": "KXBTC15M-FUTURE", "event_type": "created",
+                    }},
+                ]
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def send(self, message):
+                self.sent.append(json.loads(message))
+
+            async def recv(self):
+                if self.messages:
+                    return json.dumps(self.messages.pop(0))
+                # A quiet connection should remain open, not spin after the test's signal.
+                await asyncio.Future()
+
+        def connect(*args, **kwargs):
+            socket = FakeSocket()
+            created.append(socket)
+            return socket
+
+        async def fetch_events(**kwargs):
+            return {"events": [{
+                "series_ticker": "KXBTC15M",
+                "markets": [{
+                    "ticker": "KXBTC15M-CURRENT",
+                    "status": "active",
+                    "floor_strike": 60000.0,
+                    "open_time": "2026-10-26T11:00:00Z",
+                    "close_time": "2099-10-26T11:15:00Z",
+                    "open_interest_fp": "10.00",
+                }],
+            }]}
+
+        monkeypatch.setattr(live_kalshi, "fetch_open_events_payload", fetch_events)
+        monkeypatch.setattr(live_kalshi, "load_private_key", lambda path: object())
+        monkeypatch.setattr(live_kalshi, "create_auth_headers", lambda **kwargs: {})
+        monkeypatch.setattr(live_kalshi.websockets, "connect", connect)
+
+        feed = live_kalshi.KalshiLiveFeed(CollectorSettings(
+            key_id="dummy", private_key_path=Path("never-read.pem"),
+        ))
+
+        async def callback(value):
+            dispatched.append(value)
+            if len(dispatched) == 3:
+                reached.set()
+
+        task = asyncio.create_task(feed.run_forever(callback))
+        try:
+            await asyncio.wait_for(reached.wait(), timeout=2)
+            # Yield the event loop so an unintended disconnect would show up.
+            await asyncio.sleep(0.05)
+            assert len(created) == 1
+            assert len(dispatched) == 3
+            assert created[0].sent
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run_test())
+
+
 def test_binance_live_feed_uses_official_closed_one_second_klines() -> None:
     from kalshi_edge.bootstrap import live_binance
 
