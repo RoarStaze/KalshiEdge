@@ -151,6 +151,11 @@ class LiveFeatureState:
             if self.latest_quote_ts_ns is not None and event.source_ts_ns < self.latest_quote_ts_ns:
                 self.invalid_reason = "OUT_OF_ORDER_KALSHI_BOOK"
                 return
+            # A transient crossed book should block inference while crossed,
+            # but must not poison the remainder of the market after recovery.
+            # Other integrity errors (e.g. out-of-order data) remain latched.
+            if self.invalid_reason == "INCONSISTENT_KALSHI_QUOTE":
+                self.invalid_reason = None
             self.quotes.append(event)
             self.quotes = self.quotes[-4096:]
             self.latest_quote_ts_ns = event.source_ts_ns
