@@ -110,7 +110,9 @@ def build_feature_row(
 
     past_trades = sorted((trade for trade in kalshi.trades if trade.ts_ns <= checkpoint_ts_ns), key=lambda item: item.ts_ns)
     completed_candles = sorted(
-        (candle for candle in kalshi.candles if candle.end_ts_ns <= checkpoint_ts_ns),
+        # The archived minute's final aggregate may not have been published at
+        # the instant it closes. Do not assume exact-boundary availability.
+        (candle for candle in kalshi.candles if candle.end_ts_ns < checkpoint_ts_ns),
         key=lambda item: item.end_ts_ns,
     )
 
