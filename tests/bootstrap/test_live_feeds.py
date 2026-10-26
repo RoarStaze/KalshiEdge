@@ -557,7 +557,7 @@ def test_binance_live_feed_uses_official_closed_one_second_klines() -> None:
     assert "KalshiCollector" not in source
 
     feed = live_binance.BinanceLiveFeed("BTCUSDT")
-    assert feed.ws_url == "wss://stream.binance.com:9443/ws/btcusdt@kline_1s"
+    assert feed.ws_url == "wss://data-stream.binance.vision:443/ws/btcusdt@kline_1s"
     assert not [name for name in dir(feed) if any(token in name.lower() for token in ("order", "cancel", "portfolio"))]
 
     open_payload = {
@@ -590,6 +590,85 @@ def test_binance_live_feed_uses_official_closed_one_second_klines() -> None:
     assert bar.close == 60001.0
     assert bar.trade_count == 4
     assert bar.taker_buy_base == 0.8
+
+
+
+def test_binance_live_feed_logs_failures_and_recovers_on_market_data_only_endpoint(
+    monkeypatch, caplog
+) -> None:
+    import asyncio
+    import logging
+
+    from kalshi_edge.bootstrap import live_binance
+
+    payload = {
+        "e": "kline",
+        "E": 1_800_000_001_020,
+        "s": "BTCUSDT",
+        "k": {
+            "t": 1_800_000_000_000,
+            "T": 1_800_000_000_999,
+            "s": "BTCUSDT",
+            "i": "1s",
+            "o": "60000.0", "h": "60002.0",
+            "l": "59999.0", "c": "60001.0",
+            "v": "1.5", "q": "90000.0",
+            "n": 4, "x": False,
+            "V": "0.8", "Q": "48000.0",
+        },
+    }
+    closed_payload = {**payload, "k": {**payload["k"], "x": True}}
+    attempts = []
+    received = []
+    ready = asyncio.Event()
+
+    class FakeSocket:
+        def __init__(self):
+            self.messages = [payload, closed_payload]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def recv(self):
+            if self.messages:
+                return json.dumps(self.messages.pop(0))
+            await asyncio.Future()
+
+    def fake_connect(url, **kwargs):
+        attempts.append(url)
+        if len(attempts) == 1:
+            raise OSError("simulated public websocket connection failure")
+        return FakeSocket()
+
+    monkeypatch.setattr(live_binance.websockets, "connect", fake_connect)
+    feed = live_binance.BinanceLiveFeed("BTCUSDT")
+
+    async def callback(bar):
+        received.append(bar)
+        ready.set()
+
+    async def run_test():
+        task = asyncio.create_task(feed.run_forever(callback))
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=3)
+            assert len(attempts) == 2
+            assert attempts == [feed.ws_url, feed.ws_url]
+            assert len(received) == 1
+            assert received[0].close == 60001.0
+            assert received[0].ts_ns == 1_800_000_000_000_000_000
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    with caplog.at_level(logging.WARNING, logger="kalshi_edge.bootstrap.live_binance"):
+        asyncio.run(run_test())
+
+    assert "Binance live feed restarting" in caplog.text
+    assert "simulated public websocket connection failure" in caplog.text
+
 
 
 def test_binance_parser_rejects_wrong_symbol_interval_and_bad_prices() -> None:

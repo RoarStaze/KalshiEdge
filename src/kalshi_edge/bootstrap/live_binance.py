@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import math
 from collections.abc import Awaitable, Callable
 
@@ -13,7 +14,10 @@ import websockets
 from .binance_history import BinanceBar, normalize_epoch_to_ns
 
 
-BINANCE_STREAM_ORIGIN = "wss://stream.binance.com:9443"
+# Binance's documented unauthenticated, market-data-only Spot endpoint.
+# Matches the archived BTCUSDT 1s spot kline dataset, with no account access.
+BINANCE_STREAM_ORIGIN = "wss://data-stream.binance.vision:443"
+LOGGER = logging.getLogger(__name__)
 
 
 class LiveBinanceProtocolError(RuntimeError):
@@ -122,6 +126,12 @@ class BinanceLiveFeed:
                             await _dispatch(callback, bar)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                # Never silently hide a failed market-data dependency:
+                # the predictor fails closed on missing/stale Binance bars.
+                LOGGER.warning(
+                    "Binance live feed restarting (%s): %s; url=%s; reconnect delay %.2fs",
+                    type(exc).__name__, exc, self.ws_url, delay,
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2.0, 30.0)
