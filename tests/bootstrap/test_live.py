@@ -220,6 +220,136 @@ def test_live_candle_boundary_matches_historical_conservative_cutoff() -> None:
 
 
 
+
+def test_high_frequency_quotes_keep_last_completed_minute_candle() -> None:
+    """Regression: 4,096 event cap dropped quote candles within seconds."""
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+
+    now = CLOSE - 240 * NS
+    previous_minute_end = now - 60 * NS
+    state = LiveFeatureState()
+    state.update_market(LiveMarket(
+        ticker="KXBTC15M-TEST", strike=60_000.0,
+        open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    ))
+    state.update_kalshi(LiveQuote(
+        market_ticker="KXBTC15M-TEST",
+        source_ts_ns=previous_minute_end - NS,
+        yes_bid=0.41, yes_ask=0.43,
+    ))
+    # Six thousand orderbook updates within just six seconds of a *later*
+    # minute must not evict the immediately preceding completed minute.
+    for i in range(6000):
+        state.update_kalshi(LiveQuote(
+            market_ticker="KXBTC15M-TEST",
+            source_ts_ns=now - 40 * NS + i * 1_000_000,
+            yes_bid=0.79, yes_ask=0.81,
+        ))
+    state.update_binance(BinanceBar(
+        ts_ns=now - 2 * NS,
+        open=60_000.0, high=60_000.0,
+        low=60_000.0, close=60_000.0,
+        base_volume=1.0, quote_volume=60_000.0,
+        trade_count=1, taker_buy_base=0.5,
+        taker_buy_quote=30_000.0,
+    ))
+    candles = state._completed_candles(now)
+    previous = next(c for c in candles if c.end_ts_ns == previous_minute_end)
+    assert previous.yes_bid_close == 0.41
+    assert previous.yes_ask_close == 0.43
+    assert len(state.quotes) == 1
+    assert len(state._minute_quote_closes) == 2
+    row = state.feature_row(now)
+    assert row.features["kalshi_quote_available"] == 1.0
+    assert row.features["kalshi_mid"] == pytest.approx(0.42)
+    assert row.source_max_ts_ns["kalshi_candles"] == previous_minute_end
+
+
+def test_burst_trades_preserve_300_second_flow_and_completed_minute_summary() -> None:
+    """Regression: old 8,192-event limit truncated recent trade-flow windows."""
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+
+    now = CLOSE - 120 * NS
+    state = LiveFeatureState()
+    ticker = "KXBTC15M-TEST"
+    state.update_market(LiveMarket(
+        ticker=ticker, strike=60_000.0,
+        open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    ))
+    early = now - 240 * NS
+    state.update_kalshi(LiveTrade(
+        market_ticker=ticker, source_ts_ns=early,
+        yes_price=0.55, count=2.0, taker_side="yes",
+    ))
+    state.update_kalshi(LiveQuote(
+        market_ticker=ticker, source_ts_ns=early,
+        yes_bid=0.54, yes_ask=0.56,
+    ))
+    # A large, rapid burst of later trades should NOT erase the earlier
+    # trade that is still inside the required 300-second causal window.
+    for i in range(8500):
+        state.update_kalshi(LiveTrade(
+            market_ticker=ticker,
+            source_ts_ns=now - 15 * NS + i * 1_000_000,
+            yes_price=0.66 if i % 2 == 0 else 0.67,
+            count=1.0, taker_side="no",
+        ))
+    state.update_binance(BinanceBar(
+        ts_ns=now - 2 * NS,
+        open=60_000.0, high=60_000.0,
+        low=60_000.0, close=60_000.0,
+        base_volume=1.0, quote_volume=60_000.0,
+        trade_count=1, taker_buy_base=0.5,
+        taker_buy_quote=30_000.0,
+    ))
+    row = state.feature_row(now)
+    assert len(state.trades) == 8501
+    assert row.features["kalshi_trade_volume_300s"] == pytest.approx(8502.0)
+    old_minute_end = (early // (60 * NS) + 1) * 60 * NS
+    historical = next(
+        c for c in state._completed_candles(now)
+        if c.end_ts_ns == old_minute_end
+    )
+    assert historical.volume == pytest.approx(2.0)
+    assert historical.price_close == pytest.approx(0.55)
+    assert historical.price_high == pytest.approx(0.55)
+
+
+def test_minute_trade_aggregate_preserves_close_extremes_volume_and_boundary() -> None:
+    from kalshi_edge.bootstrap.live import LiveFeatureState
+
+    end = CLOSE - 240 * NS
+    state = LiveFeatureState()
+    ticker = "KXBTC15M-TEST"
+    state.update_market(LiveMarket(
+        ticker=ticker, strike=60_000.0,
+        open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    ))
+    for i, (price, count) in enumerate(
+        ((0.4, 1.25), (0.6, 2.0), (0.3, 1.0), (0.5, 3.0))
+    ):
+        state.update_kalshi(LiveTrade(
+            market_ticker=ticker,
+            source_ts_ns=end - (4 - i) * NS,
+            yes_price=price,
+            count=count,
+            taker_side="yes",
+        ))
+
+    # Equality to minute close is not enough to imply the closed candle is
+    # already published. Preserve historical strict end < checkpoint rule.
+    assert not state._completed_candles(end)
+    candles = state._completed_candles(end + 1)
+    assert len(candles) == 1
+    candle = candles[0]
+    assert candle.end_ts_ns == end
+    assert candle.price_close == pytest.approx(0.5)
+    assert candle.price_high == pytest.approx(0.6)
+    assert candle.price_low == pytest.approx(0.3)
+    assert candle.volume == pytest.approx(7.25)
+
+
+
 def test_same_market_reconnect_discards_old_feed_state_and_recovers_timestamp_error() -> None:
     from kalshi_edge.bootstrap.live import LiveFeatureState
 
