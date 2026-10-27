@@ -239,7 +239,8 @@ class KalshiLiveFeed:
         )
         return messages
 
-    def market_from_events_payload(self, payload: dict) -> LiveMarket | None:
+    def market_from_events_payload(self, payload: dict, *, now_ns: int | None = None) -> LiveMarket | None:
+        """Select a readable active round; optionally exclude already-closed rounds."""
         candidates: list[LiveMarket] = []
         for event in payload.get("events", []):
             if not isinstance(event, dict) or event.get("series_ticker") != self.series_ticker:
@@ -261,6 +262,8 @@ class KalshiLiveFeed:
                     open_ts_ns = _time_to_ns(raw.get("open_time") or raw.get("open_ts"), "market open time")
                     close_ts_ns = _time_to_ns(raw.get("close_time") or raw.get("close_ts"), "market close time")
                     if close_ts_ns <= open_ts_ns:
+                        continue
+                    if now_ns is not None and close_ts_ns <= now_ns:
                         continue
                     oi_raw = raw.get("open_interest_fp", raw.get("open_interest", 0.0))
                     open_interest = _finite_float(oi_raw or 0.0, "open interest", minimum=0.0)
@@ -450,10 +453,22 @@ class KalshiLiveFeed:
                     base_url=self.settings.rest_base_url,
                     series_ticker=self.series_ticker,
                 )
-                market = self.market_from_events_payload(events_payload)
-                tickers = [] if market is None else [market.ticker]
-                if market is not None:
-                    await _dispatch(callback, market)
+                market = self.market_from_events_payload(events_payload, now_ns=time.time_ns())
+                if market is None:
+                    # An empty book subscription cannot turn into a populated
+                    # market without another discovery pass. The websocket's
+                    # lifecycle channel may not emit "activated" while connected,
+                    # particularly if a round activated before subscription.
+                    # Re-query REST on a bounded cadence instead of idling forever.
+                    LOGGER.info(
+                        "No active, readable %s market; retrying discovery in 5 seconds",
+                        self.series_ticker,
+                    )
+                    await asyncio.sleep(5.0)
+                    delay = self.settings.reconnect_initial_seconds
+                    continue
+                tickers = [market.ticker]
+                await _dispatch(callback, market)
 
                 key_id, private_key_path = self.settings.require_credentials()
                 private_key = load_private_key(private_key_path)

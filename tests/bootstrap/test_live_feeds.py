@@ -463,6 +463,130 @@ def test_lifecycle_refresh_applies_only_to_tracked_market() -> None:
     assert not _needs_market_refresh(event("KXBTC15M-OLD", "settled"), None, "KXBTC15M")
 
 
+
+def test_market_discovery_excludes_already_closed_active_market() -> None:
+    from kalshi_edge.bootstrap.live_kalshi import KalshiLiveFeed
+
+    feed = KalshiLiveFeed(
+        CollectorSettings(key_id="dummy", private_key_path=Path("never-read.pem")),
+    )
+    payload = {"events": [{
+        "series_ticker": "KXBTC15M",
+        "markets": [
+            {
+                "ticker": "KXBTC15M-EXPIRED",
+                "status": "active", "floor_strike": 60000.0,
+                "open_time": "2026-10-26T10:00:00Z",
+                "close_time": "2026-10-26T10:15:00Z",
+            },
+            {
+                "ticker": "KXBTC15M-CURRENT",
+                "status": "active", "floor_strike": 60005.0,
+                "open_time": "2026-10-26T10:15:00Z",
+                "close_time": "2026-10-26T10:30:00Z",
+            },
+        ],
+    }]}
+    now_ns = 1_793_009_700_000_000_000  # 2026-10-26 around 10:15 UTC
+    selected = feed.market_from_events_payload(payload, now_ns=now_ns)
+    assert selected is not None
+    assert selected.ticker == "KXBTC15M-CURRENT"
+    assert feed.market_from_events_payload(
+        {"events": [dict(payload["events"][0], markets=[payload["events"][0]["markets"][0]])]},
+        now_ns=now_ns,
+    ) is None
+
+
+def test_feed_rediscovers_after_empty_market_without_subscribing_empty_book(monkeypatch) -> None:
+    import asyncio
+
+    from kalshi_edge.bootstrap import live_kalshi
+
+    async def run_test():
+        fetched = []
+        sockets = []
+        wake = asyncio.Event()
+        sleeps = []
+        original_sleep = asyncio.sleep
+
+        async def fetch_events(**kwargs):
+            fetched.append(kwargs)
+            if len(fetched) == 1:
+                return {"events": []}
+            return {"events": [{
+                "series_ticker": "KXBTC15M",
+                "markets": [{
+                    "ticker": "KXBTC15M-FRESH",
+                    "status": "active",
+                    "floor_strike": 60000.0,
+                    "open_time": "2026-10-26T00:00:00Z",
+                    "close_time": "2099-10-26T00:15:00Z",
+                }],
+            }]}
+
+        async def immediate_sleep(seconds):
+            sleeps.append(seconds)
+            await original_sleep(0)
+
+        class FakeSocket:
+            def __init__(self):
+                self.sent = []
+
+            async def __aenter__(self):
+                sockets.append(self)
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def send(self, message):
+                payload = json.loads(message)
+                self.sent.append(payload)
+                if any(
+                    m["params"].get("channels") == ["orderbook_delta"]
+                    for m in self.sent
+                ):
+                    wake.set()
+
+            async def recv(self):
+                await asyncio.Future()
+
+        monkeypatch.setattr(live_kalshi, "fetch_open_events_payload", fetch_events)
+        monkeypatch.setattr(live_kalshi, "load_private_key", lambda path: object())
+        monkeypatch.setattr(live_kalshi, "create_auth_headers", lambda **kwargs: {})
+        monkeypatch.setattr(live_kalshi.websockets, "connect", lambda *args, **kwargs: FakeSocket())
+        monkeypatch.setattr(live_kalshi.asyncio, "sleep", immediate_sleep)
+
+        feed = live_kalshi.KalshiLiveFeed(CollectorSettings(
+            key_id="dummy", private_key_path=Path("never-read.pem"),
+        ))
+        dispatched = []
+
+        async def callback(value):
+            dispatched.append(value)
+
+        task = asyncio.create_task(feed.run_forever(callback))
+        try:
+            await asyncio.wait_for(wake.wait(), timeout=2)
+            assert len(fetched) == 2
+            assert sleeps == [5.0]
+            assert len(sockets) == 1
+            books = [
+                m for m in sockets[0].sent
+                if m["params"]["channels"] == ["orderbook_delta"]
+            ]
+            assert len(books) == 1
+            assert books[0]["params"]["market_tickers"] == ["KXBTC15M-FRESH"]
+            assert len(dispatched) == 1
+            assert dispatched[0].ticker == "KXBTC15M-FRESH"
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run_test())
+
+
+
 def test_unrelated_series_lifecycle_stream_does_not_reconnect(monkeypatch) -> None:
     import asyncio
 
