@@ -9,7 +9,9 @@ import os
 import pickle
 import statistics
 import time
+from collections import deque
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -101,13 +103,29 @@ def load_default_model(root: Path) -> tuple[artifact.ModelBundle, training.Fitte
     return bundle, pipeline
 
 
+@dataclass
+class _MinuteTradeSummary:
+    """Finalized only when its UTC minute is strictly before the checkpoint."""
+
+    last: LiveTrade
+    high: float
+    low: float
+    volume: float
+
+
 class LiveFeatureState:
-    """In-memory causal rolling state. It owns no filesystem and no collector state."""
+    """Bounded, causally available live observations and minute candle rollups."""
 
     def __init__(self) -> None:
         self.market: LiveMarket | None = None
+        # Only the latest book quote is needed for immediate market health.
+        # Fixed event-count limits truncate previous minutes at fast delta rates.
         self.quotes: list[LiveQuote] = []
-        self.trades: list[LiveTrade] = []
+        self._minute_quote_closes: dict[int, LiveQuote] = {}
+        # Keep *all trades within the 300-second model-flow horizon*,
+        # regardless of burst rate, and aggregate full-market minute candles.
+        self.trades: deque[LiveTrade] = deque()
+        self._minute_trade_summaries: dict[int, _MinuteTradeSummary] = {}
         self.binance_bars: list[BinanceBar] = []
         self.brti_observations: list[BRTIObservation] = []
         self.latest_quote_ts_ns: int | None = None
@@ -137,7 +155,9 @@ class LiveFeatureState:
         # Clear the latched error only because we discard all old feed state
         # and require fresh snapshots/observations before new predictions.
         self.quotes.clear()
+        self._minute_quote_closes.clear()
         self.trades.clear()
+        self._minute_trade_summaries.clear()
         self.brti_observations.clear()
         self.latest_quote_ts_ns = None
         self.latest_brti_ts_ns = None
@@ -160,8 +180,10 @@ class LiveFeatureState:
             # Other integrity errors (e.g. out-of-order data) remain latched.
             if self.invalid_reason == "INCONSISTENT_KALSHI_QUOTE":
                 self.invalid_reason = None
-            self.quotes.append(event)
-            self.quotes = self.quotes[-4096:]
+            minute_end_ns = (event.source_ts_ns // (60 * NS) + 1) * 60 * NS
+            self._minute_quote_closes[minute_end_ns] = event
+            # O(1) book-state storage even under thousands of updates/second.
+            self.quotes[:] = [event]
             self.latest_quote_ts_ns = event.source_ts_ns
             return
 
@@ -173,7 +195,25 @@ class LiveFeatureState:
                 self.invalid_reason = "OUT_OF_ORDER_KALSHI_TRADE"
                 return
             self.trades.append(event)
-            self.trades = self.trades[-8192:]
+            # 300-second flow features require time-window retention, not a
+            # fixed number of trades. Prune at the incoming event timestamp.
+            cutoff_ns = event.source_ts_ns - 300 * NS
+            while len(self.trades) > 1 and self.trades[0].source_ts_ns < cutoff_ns:
+                self.trades.popleft()
+            minute_end_ns = (event.source_ts_ns // (60 * NS) + 1) * 60 * NS
+            summary = self._minute_trade_summaries.get(minute_end_ns)
+            if summary is None:
+                self._minute_trade_summaries[minute_end_ns] = _MinuteTradeSummary(
+                    last=event,
+                    high=event.yes_price,
+                    low=event.yes_price,
+                    volume=event.count,
+                )
+            else:
+                summary.last = event
+                summary.high = max(summary.high, event.yes_price)
+                summary.low = min(summary.low, event.yes_price)
+                summary.volume += event.count
             return
 
         if isinstance(event, MarketLifecycle):
@@ -212,42 +252,25 @@ class LiveFeatureState:
     def _completed_candles(self, now_ns: int) -> tuple[features.HistoricalKalshiCandle, ...]:
         if self.market is None:
             return ()
-        buckets: dict[int, dict[str, list]] = {}
-        for quote in self.quotes:
-            if quote.market_ticker != self.market.ticker or quote.source_ts_ns > now_ns:
-                continue
-            end_ns = (quote.source_ts_ns // (60 * NS) + 1) * 60 * NS
-            # Live candle aggregates must also be strictly older than the
-            # decision timestamp to match historical feature eligibility.
-            if end_ns >= now_ns:
-                continue
-            buckets.setdefault(end_ns, {"quotes": [], "trades": []})["quotes"].append(quote)
-        for trade in self.trades:
-            if trade.market_ticker != self.market.ticker or trade.source_ts_ns > now_ns:
-                continue
-            end_ns = (trade.source_ts_ns // (60 * NS) + 1) * 60 * NS
-            # Live candle aggregates must also be strictly older than the
-            # decision timestamp to match historical feature eligibility.
-            if end_ns >= now_ns:
-                continue
-            buckets.setdefault(end_ns, {"quotes": [], "trades": []})["trades"].append(trade)
-
+        # Aggregated online: no raw quote/trade count cap can silently erase
+        # the last completed candle during a high-volume 15-minute market.
+        # Preserve the historical strict end < checkpoint eligibility rule.
+        minute_ends = sorted(set(self._minute_quote_closes) | set(self._minute_trade_summaries))
         output: list[features.HistoricalKalshiCandle] = []
-        for end_ns in sorted(buckets):
-            item = buckets[end_ns]
-            quote_rows: list[LiveQuote] = sorted(item["quotes"], key=lambda value: value.source_ts_ns)
-            trade_rows: list[LiveTrade] = sorted(item["trades"], key=lambda value: value.source_ts_ns)
-            latest_quote = quote_rows[-1] if quote_rows else None
-            prices = [trade.yes_price for trade in trade_rows]
+        for end_ns in minute_ends:
+            if end_ns >= now_ns:
+                continue
+            quote = self._minute_quote_closes.get(end_ns)
+            summary = self._minute_trade_summaries.get(end_ns)
             output.append(
                 features.HistoricalKalshiCandle(
                     end_ts_ns=end_ns,
-                    yes_bid_close=None if latest_quote is None else latest_quote.yes_bid,
-                    yes_ask_close=None if latest_quote is None else latest_quote.yes_ask,
-                    price_close=prices[-1] if prices else None,
-                    price_high=max(prices) if prices else None,
-                    price_low=min(prices) if prices else None,
-                    volume=sum(trade.count for trade in trade_rows),
+                    yes_bid_close=None if quote is None else quote.yes_bid,
+                    yes_ask_close=None if quote is None else quote.yes_ask,
+                    price_close=None if summary is None else summary.last.yes_price,
+                    price_high=None if summary is None else summary.high,
+                    price_low=None if summary is None else summary.low,
+                    volume=0.0 if summary is None else summary.volume,
                     open_interest=self.market.open_interest,
                 )
             )
