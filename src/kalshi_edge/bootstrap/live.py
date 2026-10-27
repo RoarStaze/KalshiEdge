@@ -21,6 +21,7 @@ from ..config import CollectorSettings
 from . import artifact, evaluate, features, structural, training
 from .binance_history import BinanceBar
 from .config import BootstrapSettings
+from .final_forecast import FinalForecastGate, FinalForecastWriter
 from .live_binance import BinanceLiveFeed
 from .live_kalshi import BRTIObservation, KalshiLiveFeed, LiveMarket, LiveQuote, LiveTrade, MarketLifecycle
 from .types import FeedQuality, FeatureRow, MarketLabel, PredictionRecord
@@ -576,6 +577,8 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     state = LiveFeatureState()
     predictor = LivePredictor(state=state, bundle=bundle, pipeline=pipeline, settings=bootstrap)
     writer = PredictionJsonlWriter(bootstrap.bootstrap_dir)
+    final_gate = FinalForecastGate()
+    final_writer = FinalForecastWriter(bootstrap.bootstrap_dir)
     kalshi = KalshiLiveFeed(collector, series_ticker=bootstrap.series_ticker)
     binance = BinanceLiveFeed(bootstrap.binance_symbol)
 
@@ -593,7 +596,23 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     async def predict_loop() -> None:
         while True:
             now_ns = time.time_ns()
-            writer.append(predictor.predict(now_ns))
+            # One causal prediction per tick feeds both continuous diagnostics
+            # and the independent single-shot 240s final-forecast gate.
+            market = state.market
+            prediction = predictor.predict(now_ns)
+            writer.append(prediction)
+            final = final_gate.evaluate(market, now_ns=now_ns, prediction=prediction)
+            if final is not None and market is not None:
+                saved_path = final_writer.save(final, market_close_ts_ns=market.close_ts_ns)
+                if saved_path is not None:
+                    print(
+                        f"FINAL FORECAST: {final.market_ticker} "
+                        f"{final.forecast} confidence={final.confidence} "
+                        f"remaining={final.seconds_remaining:.3f}s "
+                        f"reason={final.reason or 'OK'} "
+                        f"file={saved_path}",
+                        flush=True,
+                    )
             sleep_seconds = max(0.001, 1.0 - ((time.time_ns() - now_ns) / NS))
             await asyncio.sleep(sleep_seconds)
 
