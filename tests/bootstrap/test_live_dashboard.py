@@ -22,6 +22,7 @@ def _write_prediction(root: Path, at: int, *, status: str = "OK", seconds: float
         prediction_ts_ns=at,
         market_ticker=TICKER,
         status=status,
+        reason=None if status == "OK" else "STALE_KALSHI_BOOK",
         feed_quality=FeedQuality(healthy=status == "OK"),
         model_hash="f" * 64,
         model_version="bootstrap-hybrid-v5",
