@@ -63,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
         "mistake-pool", help="verify settled mistakes/low-confidence enrollments; no retraining or lockbox access",
     )
 
+    volatility_upgrade = sub.add_parser(
+        "volatility-upgrade",
+        help="train a 240-second volatility probability challenger, independently evaluate, and promote only if superior",
+    )
+    volatility_upgrade.add_argument("--check", action="store_true", help="check fresh lockbox eligibility without training or evaluation")
+    volatility_upgrade.add_argument("--git-sha", default=None, help="explicit Git SHA for the candidate bundle")
+
     bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate the untouched lockbox and promote an eligible bootstrap model")
     bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
 
@@ -200,6 +207,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
+    if args.command == "volatility-upgrade":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.volatility_upgrade import preflight, run_upgrade
+        from .bootstrap.evaluate import _resolved_git_sha
+
+        root = BootstrapSettings().bootstrap_dir
+        if args.check:
+            status = preflight(root)
+            print(json.dumps(status, indent=2, sort_keys=True))
+            return 0 if status["ready"] else 2
+        report = run_upgrade(root, git_sha=_resolved_git_sha(args.git_sha))
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["promoted"] else 2
     if args.command == "bootstrap-evaluate":
         from .bootstrap.config import BootstrapSettings
         from .bootstrap.evaluate import run_lockbox_evaluation

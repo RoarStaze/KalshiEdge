@@ -136,6 +136,34 @@ To gather new causal training features, separately run the existing appropriate 
 The preexisting full-history initial bootstrap remains available **only before any promoted default model exists** via `kalshi-edge bootstrap-train --initial-baseline`. After promotion, that flag is refused. The installed `kalshiedge start` launcher continues normal read-only live collection and settlement enrollment without launching training.
 
 **Important:** Failure-only sampling is statistically biased: a model trained solely on failures may lose existing strengths and predict poorly calibrated probabilities. This is an experimental hard-example policy, not a demonstrated accuracy improvement. Keep independent population-representative calibration and untouched lockbox tests; promotion is not guaranteed.
+## Volatility-aware final probability challenger
+
+A separate model upgrade tests whether realized BTC volatility adds measurable predictive value at the **locked four-minute checkpoint**, without refitting the entire expensive V5 outcome model or disturbing the 3:1 training cycle.
+
+- Uses only point-in-time `btc_close`, Kalshi strike, 60s and 300s realized volatility, and time remaining. A simple lognormal approximation estimates the chance that **Kalshi's final 60-second settlement average** finishes above the strike (rather than incorrectly using only the last spot price).
+- On historical **240-second calibration rows**, selects a fixed conservative blend weight with a chronologically earlier fitting block and a later acceptance block. If it doesn't improve Brier and log loss with bounded calibration regression, the experiment is rejected **before accessing any fresh lockbox**.
+- If it passes calibration, creates a SHA-256-bound **volatility challenger bundle** pinning the currently promoted V5 model, dataset provenance, selected weight, and independent future lockbox. The challenger does not change any final forecast previously saved.
+- During a fresh lockbox evaluation, compares the volatility candidate against **Kalshi and the currently promoted incumbent** both on standard checkpoints and on **exactly one 240s prediction per market**. Directional accuracy must not degrade; probability metrics must improve without violating calibration tolerances. **Only then** will it automatically create a promoted model and atomically update `models/default.json`; otherwise it preserves the old model.
+- The existing 69% strength/confidence rule and exact 240-second final checkpoint are unchanged. The dashboard shows a promoted upgraded model's estimated BTC move (±1σ) and volatility blend weight; model probabilities still require ongoing live calibration monitoring.
+
+Before running, a complete new historical period of **at least 120 genuinely new KXBTC15M markets beyond every previously evaluated lockbox** must be backfilled and rebuilt into the causally verified dataset. Previously tested lockboxes cannot be reused. This is separate from the dashboard's mistake/refresher training readiness and never places trades.
+
+Check readiness **without using the lockbox**:
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+.\.venv\Scripts\Activate.ps1
+kalshi-edge volatility-upgrade --check
+```
+
+Once the new dataset reports ready, the following **explicit command trains the volatility challenger and runs the one-time fresh lockbox comparison**, automatically replacing the model only on pass:
+
+```powershell
+$gitSha = (git rev-parse HEAD).Trim()
+kalshi-edge volatility-upgrade --git-sha $gitSha
+```
+
+Some upgrades may find no reliable validation improvement and **leave the lockbox untouched**. A rejected fresh lockbox candidate consumes that evaluation period for future model selection. After promotion, restart `kalshiedge start` to load the new hash-addressed default bundle. The earlier promoted model remains intact for auditing and rollback. A conditional promotion is not a guarantee of improved future live predictions.
 ## Adaptive 3:1 training cycle and dashboard readiness
 
 After the initial promoted baseline, future learning uses a **repeating four-session curriculum**:
