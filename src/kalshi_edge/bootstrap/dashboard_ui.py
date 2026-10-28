@@ -178,6 +178,8 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
     <div class="datum"><div class="datum-label">BTC reference</div><div class="datum-number" id="btc">—</div><div class="datum-hint">Last live Binance bar</div></div>
     <div class="datum"><div class="datum-label">Model P(ABOVE)</div><div class="datum-number" id="p-up">—</div><div class="datum-hint">Current or saved probability</div></div>
     <div class="datum"><div class="datum-label">Kalshi implied P(ABOVE)</div><div class="datum-number" id="prior">—</div><div class="datum-hint">Current quoted benchmark</div></div>
+    <div class="datum"><div class="datum-label">Expected BTC move (±1σ)</div><div class="datum-number" id="vol-expected">—</div><div class="datum-hint">Volatility model · before settlement</div></div>
+    <div class="datum"><div class="datum-label">Volatility probability weight</div><div class="datum-number" id="vol-weight">—</div><div class="datum-hint">Shown only for promoted upgraded models</div></div>
    </div>
   </article>
   <article class="card health">
@@ -259,6 +261,8 @@ function renderLive(data){
  text("strike",money(data.strike));
  text("btc",money(p?.btc_reference));
  text("prior",pct(p?.kalshi_prior));
+ text("vol-expected",Number.isFinite(p?.volatility_expected_move_pct)?"±"+p.volatility_expected_move_pct.toFixed(3)+"%":"—");
+ text("vol-weight",Number.isFinite(p?.volatility_weight)?Math.round(p.volatility_weight*100)+"%":"—");
  text("p-up",pct(locked?f.p_yes:p?.p_yes));
  text("model-version",f?.model_version||p?.model_version||"—");
  text("latest-at",p?.prediction_ts_ns?local(p.prediction_ts_ns/1e6):"—");
