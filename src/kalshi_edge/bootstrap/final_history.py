@@ -251,9 +251,14 @@ def sync_final_settlements(
     from .mistake_learning import enroll_settled_forecasts
 
     pool = enroll_settled_forecasts(root)
+    from .correct_learning import enroll_correct_forecasts
+    refresher = enroll_correct_forecasts(root)
     stats["mistake_cases_added"] = pool["new_cases"]
     stats["mistake_cases_eligible"] = pool["eligible"]
     stats["mistake_pool_errors"] = pool["source_errors"]
+    stats["correct_cases_added"] = refresher["new_cases"]
+    stats["correct_cases_eligible"] = refresher["eligible"]
+    stats["correct_pool_errors"] = refresher["errors"]
     return stats
 
 
@@ -324,8 +329,63 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-def _make_handler(root: Path) -> type[BaseHTTPRequestHandler]:
+def _make_handler(root: Path, controller=None) -> type[BaseHTTPRequestHandler]:
+    from .training_cycle import TrainingController, CycleError
+    training_controller = controller or TrainingController(root)
+
     class HistoryHandler(BaseHTTPRequestHandler):
+        def _json(self, status: int, data: dict) -> None:
+            content = json.dumps(data, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'none'")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def do_POST(self) -> None:
+            if self.path != "/api/training/start":
+                self._json(404, {"error": "endpoint not found"})
+                return
+            # Loopback bind alone does not stop cross-site browser POSTs.
+            # Refuse cross-origin forms and requests lacking a non-simple
+            # custom action header. No CORS authorization is emitted.
+            expected = f"http://127.0.0.1:{self.server.server_port}"
+            if (
+                self.headers.get("Origin") != expected
+                or self.headers.get("X-KalshiEdge-Action") != "train"
+                or self.headers.get("Content-Type") != "application/json"
+            ):
+                self._json(403, {"error": "same-origin Train Now action required"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "-1")
+            except ValueError:
+                length = -1
+            if not 0 <= length <= 256:
+                self._json(400, {"error": "invalid action body size"})
+                return
+            try:
+                body = json.loads(self.rfile.read(length))
+            except (UnicodeDecodeError, ValueError):
+                self._json(400, {"error": "invalid JSON"})
+                return
+            if body != {}:
+                self._json(400, {"error": "Train Now accepts no overrides"})
+                return
+            try:
+                result = training_controller.start()
+            except CycleError as exc:
+                self._json(409, {"error": str(exc)})
+                return
+            except Exception:
+                LOG.exception("Training process could not be started")
+                self._json(500, {"error": "training process launch failed; inspect server logs"})
+                return
+            self._json(202, result)
+
         def do_GET(self) -> None:
             if self.path == "/":
                 content = _PAGE.encode("utf-8")
@@ -335,6 +395,14 @@ def _make_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 kind = "application/json; charset=utf-8"
             elif self.path == "/api/live":
                 content = json.dumps(read_live_dashboard(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
+                kind = "application/json; charset=utf-8"
+            elif self.path == "/api/training":
+                try:
+                    data = training_controller.status()
+                except CycleError as exc:
+                    self._json(503, {"error": str(exc)})
+                    return
+                content = json.dumps(data, separators=(",", ":"), allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
             elif self.path == "/api/health":
                 content = b'{"app":"kalshiedge","service":"unified-dashboard","ready":true}'
@@ -376,8 +444,10 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
             if stop.wait(POLL_SECONDS):
                 return
 
+    from .training_cycle import TrainingController
+    controller = TrainingController(root)
     worker = threading.Thread(target=resolve_loop, name="kalshi-final-settlement-reader", daemon=True)
-    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(root))
+    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(root, controller=controller))
     server.daemon_threads = True
     worker.start()
     print(f"KalshiEdge final history: http://127.0.0.1:{port}/", flush=True)
@@ -388,6 +458,7 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         pass
     finally:
         stop.set()
+        controller.stop()
         server.server_close()
         worker.join(timeout=2)
     return 0

@@ -68,8 +68,9 @@ def test_bootstrap_train_command_executes_real_entrypoint(monkeypatch, capsys) -
 
     called: list[str | None] = []
 
-    def fake_train(root, settings, *, git_sha=None, mistakes_only=False):
+    def fake_train(root, settings, *, git_sha=None, mistakes_only=False, correct_only=False):
         assert mistakes_only is True
+        assert correct_only is False
         called.append(git_sha)
         return BootstrapTrainingReport(
             experiment_bundle_sha256="a" * 64,
@@ -83,6 +84,10 @@ def test_bootstrap_train_command_executes_real_entrypoint(monkeypatch, capsys) -
         )
 
     monkeypatch.setattr("kalshi_edge.bootstrap.evaluate.train_experiment", fake_train)
+    monkeypatch.setattr(
+        "kalshi_edge.bootstrap.training_cycle.inspect_training_readiness",
+        lambda root: {"ready": True, "mode": "mistake", "reason": "verified"},
+    )
     assert main(["bootstrap-train", "--git-sha", "a" * 40]) == 0
     assert called == ["a" * 40]
     output = capsys.readouterr().out

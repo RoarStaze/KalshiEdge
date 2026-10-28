@@ -104,6 +104,35 @@ tr:hover td{background:#192c3b}
 .pill.PENDING{color:#b3cde5;border-color:#435976;background:#202c43}
 .empty{padding:26px;color:var(--muted);text-align:center}
 footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
+.training-card{padding:25px 26px;margin-top:26px;border-top:2px solid #56d6c1}
+.training-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.training-head h2{font-size:24px;letter-spacing:-.7px;margin:7px 0 5px}
+.training-pill{border:1px solid #3b7180;background:#14323a;color:var(--mint);padding:7px 12px;border-radius:25px;font-size:11px;font-weight:700;letter-spacing:.7px}
+.training-pill.waiting{border-color:#6b6049;color:#efd09a;background:#2a261f}
+.training-cycle{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:24px 0}
+.training-step{padding:14px;border-radius:10px;background:#101e2b;border:1px solid #2a3c51}
+.training-step.active{border-color:var(--cyan);background:#143543}
+.training-step.completed{border-color:#337266}
+.training-step small{display:block;font-size:10px;color:var(--muted);letter-spacing:1.1px}
+.training-step strong{display:block;margin-top:8px;font-size:12px}
+.training-layout{display:grid;grid-template-columns:minmax(0,1fr) 285px;gap:24px;align-items:start}
+.training-progress-title{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:12px;font-weight:600}
+.training-big-percent{font-size:26px;font-variant-numeric:tabular-nums;color:var(--mint)}
+.training-bar{height:9px;background:#2b3e51;border-radius:12px;overflow:hidden;margin:13px 0 12px}
+.training-bar>div{height:100%;width:0%;background:linear-gradient(90deg,#52b8d4,#8fe7c3);border-radius:12px;transition:width .4s}
+.training-detail{font-size:12px;color:var(--muted);line-height:1.65;min-height:38px}
+.training-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:18px}
+.training-count{border:1px solid #2b4154;background:#10202f;padding:11px;border-radius:8px}
+.training-count b{display:block;font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
+.training-count span{display:block;color:var(--muted);font-size:10px;line-height:1.4;margin-top:5px}
+.training-action{border-left:1px solid var(--line);padding-left:23px}
+.training-action h3{font-size:14px;margin:0 0 9px}
+.training-action p{font-size:12px;color:var(--muted);line-height:1.65;margin:0 0 16px}
+.train-button{width:100%;padding:14px 12px;border:0;border-radius:9px;background:linear-gradient(130deg,#7ae2ca,#50bfd4);color:#092632;font-weight:800;font-size:13px;cursor:pointer}
+.train-button:hover:not(:disabled){filter:brightness(1.12)}
+.train-button:disabled{background:#344859;color:#9daab7;cursor:not-allowed}
+.train-feedback{font-size:11px;color:#acc9d6;line-height:1.6;margin-top:12px;overflow-wrap:anywhere;min-height:18px}
+@media(max-width:800px){.training-layout{grid-template-columns:1fr}.training-action{border-left:0;border-top:1px solid var(--line);padding:20px 0 0}.training-cycle{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:960px){.layout{grid-template-columns:1fr}.context{display:grid;grid-template-columns:1.5fr 1fr}.forecast{min-height:0}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.shell{padding:0 14px 40px}header{padding:15px 0}.tag{font-size:8px}.header-right{font-size:10px}.section-intro{margin:22px 0 16px}.forecast{padding:20px}.context{display:flex}.context-header,.health{padding:20px}.market-data{gap:9px}.datum{padding:14px}.datum-number{font-size:19px}.history-header{margin-top:28px}.kpi{padding:14px}.kpi-num{font-size:27px}th,td{padding:11px}}
 </style>
@@ -160,6 +189,38 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <div class="health-row"><span>Latest prediction</span><strong id="latest-at">—</strong></div>
    <div class="health-row"><span>Market closes</span><strong id="close-at">—</strong></div>
   </article>
+ </div>
+</section>
+<section class="card training-card" aria-label="Adaptive model training">
+ <div class="training-head">
+  <div><div class="eyebrow">ADAPTIVE LEARNING / MANUAL TRAINING</div><h2>Learning cycle</h2>
+   <p class="subtitle">Three mistake rounds, then one correct-market refresher. Evaluation controls promotion.</p>
+  </div>
+  <span class="training-pill waiting" id="train-status-pill">COLLECTING DATA</span>
+ </div>
+ <div class="training-cycle" id="train-steps">
+  <div class="training-step active" id="train-step-1"><small>ROUND 1</small><strong>Mistakes</strong></div>
+  <div class="training-step" id="train-step-2"><small>ROUND 2</small><strong>Mistakes</strong></div>
+  <div class="training-step" id="train-step-3"><small>ROUND 3</small><strong>Mistakes</strong></div>
+  <div class="training-step" id="train-step-4"><small>ROUND 4</small><strong>Correct refresher</strong></div>
+ </div>
+ <div class="training-layout">
+  <div>
+   <div class="training-progress-title"><span id="training-target">Round 1 · Learn from mistakes</span><strong class="training-big-percent" id="training-progress-pct">0%</strong></div>
+   <div class="training-bar" role="progressbar" aria-label="Training data collection readiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-bar"><div id="training-bar-fill"></div></div>
+   <div class="training-detail" id="training-reason">Checking settled predictions, verified feature rows and independent evaluation markets.</div>
+   <div class="training-counts">
+    <div class="training-count"><b id="training-cases">—</b><span>Eligible markets / 12</span></div>
+    <div class="training-count"><b id="training-outcomes">—</b><span>Outcome classes / 2</span></div>
+    <div class="training-count"><b id="training-lockbox">—</b><span>New markets / 20</span></div>
+   </div>
+  </div>
+  <div class="training-action">
+   <h3 id="training-headline">Collecting training data</h3>
+   <p id="training-description">Training remains disabled until verified examples, two settlement classes and a new untouched lockbox are ready.</p>
+   <button class="train-button" type="button" disabled id="train-now">Train Now</button>
+   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
+  </div>
  </div>
 </section>
 <section aria-label="Final Forecast history">
@@ -261,8 +322,63 @@ catch(err){el("connection-dot").classList.remove("on");text("connection-label","
 async function refreshHistory(){try{const response=await fetch("/api/history",{cache:"no-store"});if(!response.ok)throw Error("HTTP "+response.status);renderHistory(await response.json())}
 catch(err){text("history-status","Could not refresh: "+err.message)}}
 el("filter").addEventListener("change",()=>{if(history)renderHistory(history)});
-refreshLive();refreshHistory();
-setInterval(refreshLive,1500);setInterval(refreshHistory,5000);setInterval(clock,250);
+let trainingStatus=null;
+function renderTraining(info){
+ trainingStatus=info;
+ const run=info.run||{};
+ const running=!!info.running;
+ const step=Number(info.cycle_position)||1;
+ const phase=String(run.stage||"");
+ const pctValue=Math.max(0,Math.min(100,Number(info.progress_percent)||0));
+ const state=running?(phase==="EVALUATING"?"EVALUATING":"TRAINING"):info.ready?"TRAINING READY":info.status==="BLOCKED"?"DATA BLOCKED":info.status==="EVALUATION_PENDING"?"EVALUATION PENDING":"COLLECTING DATA";
+ const pillEl=el("train-status-pill");pillEl.textContent=state;pillEl.className="training-pill "+(running||info.ready?"":"waiting");
+ text("training-target","Round "+info.round_number+" · "+info.mode_label);
+ text("training-progress-pct",pctValue+"%");
+ el("training-bar-fill").style.width=pctValue+"%";
+ el("training-bar").setAttribute("aria-valuenow",String(pctValue));
+ text("training-cases",info.eligible_markets+" / "+info.target_markets);
+ text("training-outcomes",info.outcome_classes+" / 2");
+ text("training-lockbox",info.new_evaluation_markets+" / "+info.target_new_markets);
+ text("training-reason",info.reason);
+ for(let i=1;i<=4;i++){
+   const stepEl=el("train-step-"+i);
+   stepEl.className="training-step "+(i===step?"active":i<step?"completed":"");
+ }
+ text("training-headline",running?"Training in progress":info.ready?"Training Ready":"Collecting training data");
+ text("training-description",running?
+   "Running "+info.mode_label.toLowerCase()+" training. The fresh lockbox is evaluated once after training; only a passing candidate can replace the promoted model. Keep KalshiEdge open.":
+   info.ready?"All prerequisites passed. Train Now runs this round, evaluates the reserved lockbox once, and advances the 3:1 cycle whether promotion passes or fails.":
+   "Training stays disabled until the required eligible markets, both settlement classes, and fresh evaluation markets are present.");
+ el("train-now").disabled=!info.ready||running||!!run.stage&&run.stage==="STARTING";
+ if(running){text("train-feedback","Worker: "+phase+" · Round "+info.round_number)}
+ else if(phase==="COMPLETE"){text("train-feedback","Previous round finished · "+(run.promoted?"model promoted (restart KalshiEdge to load it).":"promotion criteria not met; existing model retained."))}
+ else if(phase==="FAILED"||phase==="INTERRUPTED"){text("train-feedback","Previous run "+phase.toLowerCase()+": "+(run.error||"see local logs"))}
+ else{text("train-feedback",info.ready?"Ready for manual training.":"The progress bar measures data readiness, not training time.")}
+}
+async function refreshTraining(){
+ try{
+   const response=await fetch("/api/training",{cache:"no-store"});
+   if(!response.ok)throw Error("HTTP "+response.status);
+   renderTraining(await response.json());
+ }catch(err){text("training-reason","Cannot verify training readiness: "+err.message);el("train-now").disabled=true;}
+}
+el("train-now").addEventListener("click",async()=>{
+ if(!trainingStatus?.ready||trainingStatus.running)return;
+ if(!confirm("Start round "+trainingStatus.round_number+" ("+trainingStatus.mode_label+")? This can run for hours. After fitting, the fresh untouched lockbox will be evaluated exactly once and a model may be promoted only if it passes the benchmark and incumbent checks."))return;
+ const button=el("train-now");button.disabled=true;text("train-feedback","Submitting training request…");
+ try{
+   const response=await fetch("/api/training/start",{
+     method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"train"},
+     body:"{}",cache:"no-store"
+   });
+   const result=await response.json();
+   if(!response.ok)throw Error(result.error||"HTTP "+response.status);
+   text("train-feedback","Training round "+result.round_number+" started · "+result.mode+" · see local worker log for diagnostics.");
+ }catch(err){text("train-feedback","Could not start training: "+err.message)}
+ await refreshTraining();
+});
+refreshLive();refreshHistory();refreshTraining();
+setInterval(refreshLive,1500);setInterval(refreshHistory,5000);setInterval(refreshTraining,5000);setInterval(clock,250);
 </script>
 </body></html>
 """

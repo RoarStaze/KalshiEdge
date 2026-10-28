@@ -136,6 +136,24 @@ To gather new causal training features, separately run the existing appropriate 
 The preexisting full-history initial bootstrap remains available **only before any promoted default model exists** via `kalshi-edge bootstrap-train --initial-baseline`. After promotion, that flag is refused. The installed `kalshiedge start` launcher continues normal read-only live collection and settlement enrollment without launching training.
 
 **Important:** Failure-only sampling is statistically biased: a model trained solely on failures may lose existing strengths and predict poorly calibrated probabilities. This is an experimental hard-example policy, not a demonstrated accuracy improvement. Keep independent population-representative calibration and untouched lockbox tests; promotion is not guaranteed.
+## Adaptive 3:1 training cycle and dashboard readiness
+
+After the initial promoted baseline, future learning uses a **repeating four-session curriculum**:
+
+1. Mistake round: train only on previously incorrect or legitimately low-confidence settled final forecasts.
+2. Mistake round: repeat with the eligible historical error pool.
+3. Mistake round: repeat with the eligible historical error pool.
+4. Correct refresher: train only on previously **correct, high-confidence** settled final forecasts.
+
+Then repeat. The **cycle advances only when the experimental model has completed its one-time fresh lockbox evaluation**—including if promotion is rejected. Training failures, pending evaluation and a restarted UI do not advance the cycle. Correct cases live in a separate verified, immutable `data/bootstrap/correct_pool/` directory; they are never marked as mistakes. Both sets bind the original locked prediction and official settled market result with SHA-256.
+
+The unified dashboard adds an **Adaptive Learning** panel showing the current round and 3:1 pattern, a **collection readiness bar**, counts of eligible markets (minimum 12), both settlement outcome classes, and at least 20 genuinely new markets beyond the last consumed lockbox. **100% means all preconditions and dataset integrity checks passed**, not a prediction win-rate or training completion. If causal historical feature data is absent, backfill and rebuild the dataset first; a saved final forecast alone is not a model input.
+
+When ready, the **Train Now** button becomes enabled. Clicking it and accepting the explicit confirmation starts the supervised CPU-prioritized training worker while the local dashboard and live predictor continue running. It trains the selected development markets, calibrates probabilities on a **later representative period**, and performs the **one-time untouched lockbox evaluation**. Promotion is permitted only if the candidate beats **both Kalshi's benchmark and the incumbent promoted model** on that fresh evaluation. Rejected candidates do not replace the live model. The dashboard displays worker stage and outcome, but never fabricates completion percentages for long fitting.
+
+Training may take hours. Keep `kalshiedge start` running; Ctrl+C stops the launched training worker as well as the local services. New promoted model bundles are picked up by the live predictor after a restart of KalshiEdge. Logs are saved under `data/bootstrap/training_runs/` and stage metadata under `training_runs/current.json`.
+
+**No automatic trading, silent retraining, lookahead selection, reuse of previously evaluated lockboxes, or automatic promotion without passing evaluation.** This 3:1 scheduling hypothesis is not proven to improve out-of-sample accuracy. Monitor the measured live final-forecast accuracy and probability-calibration metrics before treating it as an improvement.
 ## Desktop Control Center
 
 An optional Windows desktop GUI is available for the bootstrap workflow. Install and launch it from the repository root:

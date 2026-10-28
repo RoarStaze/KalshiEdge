@@ -70,12 +70,36 @@ def _spawn_service(args: list[str], root: Path, log: IO[bytes]) -> subprocess.Po
         stdout=log,
         stderr=subprocess.STDOUT,
         creationflags=creationflags,
+        start_new_session=os.name != "nt",
     )
 
 
 def _stop(service: subprocess.Popen | None) -> None:
     if service is None or service.poll() is not None:
         return
+    # The dashboard can own a long-running Train Now child process. Stopping
+    # only the HTTP server process on Windows leaves that child orphaned.
+    # Stop the entire process tree, and never touch unrelated process IDs.
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(service.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=15,
+            )
+            if result.returncode == 0:
+                service.wait(timeout=5)
+                return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        import signal
+        try:
+            os.killpg(service.pid, signal.SIGTERM)
+            service.wait(timeout=8)
+            return
+        except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
+            pass
     service.terminate()
     try:
         service.wait(timeout=8)
