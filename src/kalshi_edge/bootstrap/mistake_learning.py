@@ -193,6 +193,12 @@ def enroll_settled_forecasts(root: Path) -> dict[str, int]:
             counts["settled_checked"] += 1
             candidate = _expected_case(root, forecast, settlement)
             if candidate is None:
+                # A prior immutable enrollment can NEVER disappear silently if
+                # a source settlement or original forecast has been altered.
+                existing_path = _case_path(root, forecast.market_ticker, _close_ns(forecast))
+                if existing_path.exists():
+                    _load_case(root, existing_path)
+                    raise MistakePoolError("previously enrolled case unexpectedly no longer satisfies its policy")
                 counts["correct_high_confidence_excluded"] += 1
                 continue
 
