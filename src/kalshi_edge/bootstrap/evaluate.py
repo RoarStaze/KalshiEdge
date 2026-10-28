@@ -310,8 +310,10 @@ def _resolved_git_sha(explicit: str | None = None) -> str:
     return value
 
 
-def _build_experiment_bundle(root: Path, settings: BootstrapSettings, *, git_sha: str) -> artifact.ModelBundle:
-    return training.build_experiment_bundle(root, settings, git_sha=git_sha)
+def _build_experiment_bundle(
+    root: Path, settings: BootstrapSettings, *, git_sha: str, mistakes_only: bool = False,
+) -> artifact.ModelBundle:
+    return training.build_experiment_bundle(root, settings, git_sha=git_sha, mistakes_only=mistakes_only)
 
 
 def train_experiment(
@@ -319,16 +321,25 @@ def train_experiment(
     settings: BootstrapSettings,
     *,
     git_sha: str | None = None,
+    mistakes_only: bool = False,
 ) -> BootstrapTrainingReport:
     """Train and save an experiment bundle without reading/evaluating the lockbox."""
     root = root.resolve()
     resolved_sha = _resolved_git_sha(git_sha)
-    bundle = _build_experiment_bundle(root, settings, git_sha=resolved_sha)
+    bundle = _build_experiment_bundle(root, settings, git_sha=resolved_sha, mistakes_only=mistakes_only)
     if bundle.stage != "experiment":
         raise EvaluationError("training must produce an experiment bundle")
     experiment_path = artifact.save_model_bundle(bundle, root / "models" / "experiments")
     sealed = artifact.load_model_bundle(experiment_path)
-    train_rows, calibration_rows, lockbox_rows = training.partition_row_counts(root, sealed.boundaries)
+    selected_training = tuple(
+        path.rsplit("/", 1)[-1].removesuffix(".json")
+        for path in sealed.input_hashes if path.startswith("mistake_pool/")
+    )
+    if mistakes_only and not selected_training:
+        raise EvaluationError("mistake-only experiment has no verified selected training cases")
+    train_rows, calibration_rows, lockbox_rows = training.partition_row_counts(
+        root, sealed.boundaries, selected_training_markets=selected_training,
+    )
     report_path = root / "reports" / f"training-{experiment_path.stem}.json"
     report = BootstrapTrainingReport(
         experiment_bundle_sha256=experiment_path.stem,
@@ -497,7 +508,7 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
         experiment.boundaries.lockbox_end_ts_ns,
     )
     try:
-        lockbox_rows = training.load_lockbox_rows(root, experiment.boundaries)
+        lockbox_rows = training.load_lockbox_rows(root, experiment.boundaries, experiment=experiment)
     except Exception as exc:
         raise EvaluationError("could not materialize the predeclared lockbox") from exc
     report = evaluate_lockbox(experiment, lockbox_rows)

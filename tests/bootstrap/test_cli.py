@@ -25,6 +25,8 @@ def test_cli_exposes_bootstrap_predictor_commands() -> None:
     build = parser.parse_args(["bootstrap-build-dataset"])
     assert train.command == "bootstrap-train"
     assert train.git_sha == "a" * 40
+    assert train.initial_baseline is False
+    assert parser.parse_args(["mistake-pool"]).command == "mistake-pool"
     assert evaluate.command == "bootstrap-evaluate"
     assert evaluate.bundle == Path("experiment.json")
     assert live.command == "predict-live"
@@ -66,7 +68,8 @@ def test_bootstrap_train_command_executes_real_entrypoint(monkeypatch, capsys) -
 
     called: list[str | None] = []
 
-    def fake_train(root, settings, *, git_sha=None):
+    def fake_train(root, settings, *, git_sha=None, mistakes_only=False):
+        assert mistakes_only is True
         called.append(git_sha)
         return BootstrapTrainingReport(
             experiment_bundle_sha256="a" * 64,

@@ -55,6 +55,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap_train = sub.add_parser("bootstrap-train", help="train a development-only bootstrap experiment")
     bootstrap_train.add_argument("--git-sha", default=None, help="explicit 40-character Git SHA for reproducible host runs")
+    bootstrap_train.add_argument(
+        "--initial-baseline", action="store_true",
+        help="initial full-history bootstrap only, forbidden after a default model is promoted",
+    )
+    sub.add_parser(
+        "mistake-pool", help="verify settled mistakes/low-confidence enrollments; no retraining or lockbox access",
+    )
 
     bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate the untouched lockbox and promote an eligible bootstrap model")
     bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
@@ -143,12 +150,42 @@ def main(argv: list[str] | None = None) -> int:
         report = build_dataset(bootstrap.bootstrap_dir, bootstrap, progress_callback=progress)
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
+    if args.command == "mistake-pool":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.mistake_learning import enroll_settled_forecasts, verified_mistake_pool
+
+        root = BootstrapSettings().bootstrap_dir
+        stats = enroll_settled_forecasts(root)
+        cases = verified_mistake_pool(root)
+        print(json.dumps({
+            "policy": "settled-final-mistakes-and-low-confidence-v1",
+            "status": "ENROLLED" if cases else "NO_ELIGIBLE_SETTLED_CASES",
+            "enrollment": stats,
+            "total_verified_cases": len(cases),
+            "wrong_final_cases": sum(case.is_incorrect for case, _, _ in cases),
+            "low_confidence_cases": sum("LOW_CONFIDENCE" in case.reasons for case, _, _ in cases),
+            "cases": [
+                {
+                    "market_ticker": case.market_ticker,
+                    "forecast": case.forecast,
+                    "actual_side": case.actual_side,
+                    "reasons": case.reasons,
+                }
+                for case, _, _ in cases
+            ],
+        }, indent=2))
+        return 0 if stats["source_errors"] == 0 else 2
     if args.command == "bootstrap-train":
         from .bootstrap.config import BootstrapSettings
         from .bootstrap.evaluate import train_experiment
 
         bootstrap = BootstrapSettings()
-        report = train_experiment(bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha)
+        if args.initial_baseline and (bootstrap.bootstrap_dir / "models" / "default.json").exists():
+            parser.error("--initial-baseline is forbidden when a promoted model exists; future training is mistake-only")
+        report = train_experiment(
+            bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha,
+            mistakes_only=not args.initial_baseline,
+        )
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
     if args.command == "bootstrap-evaluate":
