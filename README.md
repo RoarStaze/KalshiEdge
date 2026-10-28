@@ -106,6 +106,36 @@ kalshiedge start
 This opens **http://127.0.0.1:8899/** in your default browser. Keep that terminal open. Ctrl+C stops the services that the launcher started. `kalshiedge start --no-browser` and `kalshiedge start --port 8900` are optional. The legacy `kalshi-edge predict-live` and `kalshi-edge final-history` commands still work; stop old manual instances before switching to one-command startup.
 
 The installer writes `%LOCALAPPDATA%\KalshiEdge\bin\kalshiedge.cmd` and adds that directory to the **user PATH**; administrator permissions are not required. The wrapper invokes your repository's `.venv` directly. Logs: `data/bootstrap/diagnostics/app-*.log`. The dashboard binds only to `127.0.0.1`. The launcher never initiates trading, training, backfills or lockbox evaluation. Model confidence is not measured win-rate accuracy.
+## Future learning from mistakes (settlement-gated)
+
+After an official Kalshi market settlement, KalshiEdge automatically inspects the **immutable locked final forecast**, not its changing live preview. The future training pool accepts exactly two categories:
+
+- **Incorrect directional final forecasts:** a locked ABOVE/BELOW whose official Kalshi YES/NO settlement proves it wrong.
+- **Low-confidence / low-probability final forecasts:** a saved, on-time final estimate with model confidence below **69%**, or directional probability below **69%**. The existing 69% final-decision gate normally makes these `SKIP` decisions; unresolved, stale-feed and late SKIPs are excluded.
+
+Correct **high-confidence** markets and unresolved/provisional outcomes are never enrolled. Each selected market is stored once under `data/bootstrap/mistake_pool/YYYY-MM-DD/<ticker>.json`, bound to the original immutable forecast and officially verified outcome by SHA-256 hashes; the source files are not changed.
+
+After merging this policy, from the repository virtualenv you can inspect the queue without retraining:
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+.\.venv\Scripts\Activate.ps1
+kalshi-edge final-history --once
+kalshi-edge mistake-pool
+```
+
+**Future `kalshi-edge bootstrap-train` calls now default to mistake-only model fitting** when using this CLI. The new training policy:
+
+- Fits candidate models only on verified mistake/low-confidence markets **whose causal historical features were subsequently backfilled and rebuilt into the verified dataset**.
+- Keeps *later representative calibration markets*, including correct examples, for separate probability calibration and an independent, newer, untouched evaluation lockbox. Calibration is intentionally not mistake-only; otherwise probability estimates can become badly biased.
+- Requires at least **12 eligible selected development markets** with both settlement classes, and at least **20 genuinely new markets** after the last evaluated lockbox. Without sufficient data, training **fails before expensive model fitting**; the existing promoted model remains in service.
+- Preserves the one-time Kalshi benchmark promotion gate. No automatic model replacement or trading happens.
+
+To gather new causal training features, separately run the existing appropriate Kalshi/Binance historical backfills and `kalshi-edge bootstrap-build-dataset` after newly settled markets become available. Enrollment alone does not fabricate feature rows or bypass an exhausted lockbox.
+
+The preexisting full-history initial bootstrap remains available **only before any promoted default model exists** via `kalshi-edge bootstrap-train --initial-baseline`. After promotion, that flag is refused. The installed `kalshiedge start` launcher continues normal read-only live collection and settlement enrollment without launching training.
+
+**Important:** Failure-only sampling is statistically biased: a model trained solely on failures may lose existing strengths and predict poorly calibrated probabilities. This is an experimental hard-example policy, not a demonstrated accuracy improvement. Keep independent population-representative calibration and untouched lockbox tests; promotion is not guaranteed.
 ## Desktop Control Center
 
 An optional Windows desktop GUI is available for the bootstrap workflow. Install and launch it from the repository root:
