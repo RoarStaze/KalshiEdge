@@ -108,6 +108,14 @@ def preflight(root: Path) -> dict[str, Any]:
         if len(context.plan.calibration_groups) < volatility.MIN_CALIBRATION_MARKETS:
             base["reason"] = "Insufficient historic calibration markets."
             return base
+        from .training_cycle import _pending_learning_experiments
+        pending = _pending_learning_experiments(root)
+        if pending:
+            base["reason"] = (
+                f"{pending} prior mistake/refresher experiment(s) await independent "
+                "evaluation; finish or resolve them before reserving another lockbox."
+            )
+            return base
         from .live import load_default_bundle
         incumbent = load_default_bundle(root)
         base["incumbent_bundle_sha256"] = incumbent.bundle_sha256
