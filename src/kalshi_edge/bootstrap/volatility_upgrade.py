@@ -312,7 +312,20 @@ def run_upgrade(root: Path, *, git_sha: str) -> dict[str, Any]:
 
     root = root.resolve()
     with SingleStarter(root / "training_runs" / "worker.lock"):
-        challenger, summary = build_candidate(root, git_sha=git_sha)
+        try:
+            challenger, summary = build_candidate(root, git_sha=git_sha)
+        except volatility.VolatilityChallengerError as exc:
+            # Insufficient *observed* (not fabricated) historical volatility is
+            # a clear pre-lockbox rejection, not a broken model or an evaluation.
+            return {
+                "candidate_type": volatility.VOLATILITY_POLICY,
+                "promoted": False,
+                "lockbox_evaluated": False,
+                "accepted_for_lockbox": False,
+                "decision": "INSUFFICIENT_CAUSAL_VOLATILITY_DATA",
+                "reason": str(exc),
+                "note": "Default promoted model remains unchanged; no evaluation lockbox was accessed.",
+            }
         if challenger is None:
             return {
                 **summary,
