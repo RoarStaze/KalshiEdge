@@ -200,7 +200,9 @@ def sync_final_settlements(
     root = root.resolve()
     now_ns = time.time_ns() if now_ns is None else now_ns
     stats = {"forecast_count": 0, "pending": 0, "already_resolved": 0, "newly_resolved": 0, "errors": 0, "requests": 0}
-    forecasts = list(reversed(_forecasts(root)))
+    # Prioritize the newest completed market so stale archived requests cannot
+    # starve current forecasts under the per-poll request budget.
+    forecasts = _forecasts(root)
     stats["forecast_count"] = len(forecasts)
 
     owns_http = http is None
