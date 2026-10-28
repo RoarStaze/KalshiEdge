@@ -73,6 +73,9 @@ class DatasetContext:
     feature_names: tuple[str, ...]
     input_hashes: dict[str, str]
     plan: PartitionPlan
+    mistakes_only: bool = False
+    selected_tickers: tuple[str, ...] = ()
+    selected_labels: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -164,7 +167,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verified_context(root: Path) -> DatasetContext:
+def _verified_context(root: Path, *, mistakes_only: bool = False) -> DatasetContext:
     dataset_path, manifest_path, provenance_path = _dataset_paths(root)
     try:
         verified = verify_artifact(dataset_path, manifest_path)
@@ -202,7 +205,21 @@ def _verified_context(root: Path) -> DatasetContext:
     input_hashes["manifests/dataset/features.parquet.manifest.json"] = _sha256_file(manifest_path)
 
     previous_lockbox_end = _previous_lockbox_end_ts_ns(root)
-    plan = _partition_plan(dataset_path, previous_lockbox_end_ts_ns=previous_lockbox_end)
+    selected_tickers: tuple[str, ...] = ()
+    selected_labels: tuple[tuple[str, int], ...] = ()
+    if mistakes_only:
+        # Inspect *only pre-calibration* final-outcome case files. Neither the
+        # calibration nor the new lockbox decisions/labels are inspected here.
+        plan, selected_cases = _mistake_partition_plan(root, dataset_path, previous_lockbox_end)
+        selected_tickers = plan.development_groups
+        selected_labels = tuple(
+            (case.market_ticker, 1 if case.selected_label == "yes" else 0)
+            for case, _path, _digest in selected_cases
+        )
+        for _case, path, digest in selected_cases:
+            input_hashes[path.relative_to(root).as_posix()] = digest
+    else:
+        plan = _partition_plan(dataset_path, previous_lockbox_end_ts_ns=previous_lockbox_end)
     return DatasetContext(
         dataset_path=dataset_path,
         manifest_path=manifest_path,
@@ -210,6 +227,9 @@ def _verified_context(root: Path) -> DatasetContext:
         feature_names=feature_names,
         input_hashes=input_hashes,
         plan=plan,
+        mistakes_only=mistakes_only,
+        selected_tickers=selected_tickers,
+        selected_labels=selected_labels,
     )
 
 
@@ -316,6 +336,80 @@ def _partition_plan(
     )
 
 
+def _mistake_partition_plan(
+    root: Path,
+    dataset_path: Path,
+    previous_lockbox_end_ts_ns: int | None,
+) -> tuple[PartitionPlan, tuple]:
+    """Mistake-only development with unbiased later calibration and untouched lockbox.
+
+    Construct the chronological windows using dataset METADATA ONLY, and
+    *then* load case files strictly inside the development window. Source
+    labels/outcomes for the later calibration or lockbox never enter selection.
+    """
+
+    if previous_lockbox_end_ts_ns is None:
+        raise TrainingError("mistake-only retraining requires a prior evaluation and a promoted baseline model")
+    if not (root / "models" / "default.json").is_file():
+        raise TrainingError("mistake-only retraining requires an existing promoted default model")
+
+    fresh = [
+        group for group in _metadata_groups(dataset_path)
+        if group[1] > previous_lockbox_end_ts_ns
+    ]
+    if len(fresh) < 20:
+        raise TrainingError(
+            "mistake-only training needs at least 20 new market groups after the last evaluated lockbox; "
+            "collect more future markets and rebuild the causal dataset"
+        )
+    lockbox_count = max(2, len(fresh) // 5)
+    new_lockbox = fresh[-lockbox_count:]
+    pre_lockbox = fresh[:-lockbox_count]
+    calibration_count = max(2, len(pre_lockbox) // 10)
+    calibration_groups = pre_lockbox[-calibration_count:]
+    development_candidates = pre_lockbox[:-calibration_count]
+
+    # Protect holdouts BEFORE reading a single mistake-pool case.
+    allowed = {group[0] for group in development_candidates}
+    from .mistake_learning import verified_mistake_pool, MistakePoolError
+    try:
+        cases = verified_mistake_pool(root, allowed_tickers=allowed)
+    except MistakePoolError as exc:
+        raise TrainingError("a mistake training-case manifest failed integrity verification") from exc
+
+    by_ticker = {case.market_ticker: (case, path, digest) for case, path, digest in cases}
+    development = [group for group in development_candidates if group[0] in by_ticker]
+    if len(development) < 12:
+        raise TrainingError(
+            f"mistake-only training has {len(development)} eligible causal market groups in the "
+            "development window; at least 12 are required. "
+            "Only settled mistakes/low-confidence cases with rebuilt historical features are eligible. "
+            "Do not reuse the evaluation lockbox or train on confident correct markets."
+        )
+
+    # Training uses only selected mistake/low-confidence market groups.
+    if max(g[2] for g in development) >= min(g[1] for g in calibration_groups):
+        raise TrainingError("selected mistake market overlaps the unbiased calibration period")
+    if max(g[2] for g in calibration_groups) >= min(g[1] for g in new_lockbox):
+        raise TrainingError("calibration market overlaps new untouched lockbox")
+
+    plan = PartitionPlan(
+        development_groups=tuple(g[0] for g in development),
+        calibration_groups=tuple(g[0] for g in calibration_groups),
+        lockbox_groups=tuple(g[0] for g in new_lockbox),
+        boundaries=artifact.SplitBoundaries(
+            train_start_ts_ns=min(g[1] for g in development),
+            train_end_ts_ns=max(g[2] for g in development),
+            calibration_start_ts_ns=min(g[1] for g in calibration_groups),
+            calibration_end_ts_ns=max(g[2] for g in calibration_groups),
+            lockbox_start_ts_ns=min(g[1] for g in new_lockbox),
+            lockbox_end_ts_ns=max(g[2] for g in new_lockbox),
+        ),
+    )
+    selected = tuple(by_ticker[group] for group in plan.development_groups)
+    return plan, selected
+
+
 def _table_to_rows(table, feature_names: Sequence[str]) -> tuple[FeatureRow, ...]:
     data = table.to_pydict()
     source_columns = [name for name in table.column_names if name.startswith("source_ts__")]
@@ -357,10 +451,16 @@ def _read_rows_before_lockbox(context: DatasetContext) -> tuple[FeatureRow, ...]
     ]
     schema = pq.read_schema(context.dataset_path)
     columns.extend(name for name in schema.names if name.startswith("source_ts__"))
+    filters = [("checkpoint_ts_ns", "<", context.plan.boundaries.lockbox_start_ts_ns)]
+    if context.mistakes_only:
+        # Not even pre-lockbox correct, confident development rows are
+        # materialized for fitting.
+        allowed = (*context.selected_tickers, *context.plan.calibration_groups)
+        filters.append(("market_ticker", "in", list(allowed)))
     table = pq.read_table(
         context.dataset_path,
         columns=columns,
-        filters=[("checkpoint_ts_ns", "<", context.plan.boundaries.lockbox_start_ts_ns)],
+        filters=filters,
     )
     rows = _table_to_rows(table, context.feature_names)
     if any(row.checkpoint_ts_ns >= context.plan.boundaries.lockbox_start_ts_ns for row in rows):
@@ -729,10 +829,11 @@ def _library_versions() -> dict[str, str]:
     return versions
 
 
-def _training_config_hash(settings: BootstrapSettings) -> str:
+def _training_config_hash(settings: BootstrapSettings, *, mistakes_only: bool = False) -> str:
     payload = {
         "model_version": MODEL_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "training_mode": "mistakes-only-v1" if mistakes_only else "bootstrap-baseline",
         "settings": settings.model_dump(mode="json"),
         "structural_simulations": STRUCTURAL_SIMULATIONS,
         "minimum_historical_evaluation_seconds": MIN_HISTORICAL_EVALUATION_SECONDS,
@@ -752,11 +853,23 @@ def _required_bundle_features(outcome_features: Sequence[str], dataset_features:
     return tuple(sorted(needed))
 
 
-def build_experiment_bundle(root: Path, settings: BootstrapSettings, *, git_sha: str) -> artifact.ModelBundle:
-    context = _verified_context(root)
+def build_experiment_bundle(
+    root: Path, settings: BootstrapSettings, *, git_sha: str, mistakes_only: bool = False,
+) -> artifact.ModelBundle:
+    context = _verified_context(root, mistakes_only=mistakes_only)
     pre_lockbox_rows = _read_rows_before_lockbox(context)
     development_rows = _rows_for_groups(pre_lockbox_rows, context.plan.development_groups)
     calibration_rows = _rows_for_groups(pre_lockbox_rows, context.plan.calibration_groups)
+    if mistakes_only:
+        selected_labels = dict(context.selected_labels)
+        if set(context.plan.development_groups) != set(selected_labels):
+            raise TrainingError("mistake-only train groups do not exactly match verified case labels")
+        if any(row.label_yes != selected_labels[row.market_ticker] for row in development_rows):
+            raise TrainingError("official mistake-case outcome does not match the causal dataset training label")
+        if any(row.market_ticker not in selected_labels for row in development_rows):
+            raise TrainingError("correct/confident market leaked into mistake-only training set")
+        if len({row.label_yes for row in development_rows}) < 2:
+            raise TrainingError("mistake-only training requires both ABOVE and BELOW settlement labels")
     if not development_rows or not calibration_rows:
         raise TrainingError("development/calibration partition is empty")
     if any(_group(row) in set(context.plan.lockbox_groups) for row in pre_lockbox_rows):
@@ -903,7 +1016,7 @@ def build_experiment_bundle(root: Path, settings: BootstrapSettings, *, git_sha:
         feature_names=required_features,
         boundaries=context.plan.boundaries,
         input_hashes=context.input_hashes,
-        training_config_hash=_training_config_hash(settings),
+        training_config_hash=_training_config_hash(settings, mistakes_only=mistakes_only),
         library_versions=_library_versions(),
         components=component_identities,
         calibration_method=calibrator.method,
