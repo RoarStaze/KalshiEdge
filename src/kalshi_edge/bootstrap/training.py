@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from . import artifact, calibration, models, structural
+from . import artifact, calibration, models, structural, volatility
 from .config import BootstrapSettings
 from .leakage import audit_dataset_rows
 from .metrics import ProbabilityMetrics, probability_metrics
@@ -91,6 +91,43 @@ class FittedBootstrapPipeline:
     residual_model: models.ResidualModel
     stacker: models.Stacker
     calibrator: calibration.Calibrator
+    # Existing hash-sealed V5 pickles predate this optional field. getattr
+    # below keeps every previously promoted bundle loadable without re-fitting.
+    volatility_overlay: volatility.VolatilityOverlay | None = None
+
+    def base_candidate(self, rows: Sequence[FeatureRow]) -> list[float]:
+        """Return candidate probability without computing zero-weight components.
+
+        This matches predict()['candidate'] exactly, but avoids unnecessary
+        Monte Carlo when the existing model assigned structural weight zero.
+        Used solely for pre-lockbox volatility candidate selection.
+        """
+        selected = tuple(rows)
+        if not selected or any(not is_evaluation_row(r) for r in selected):
+            raise TrainingError("base candidate requires causally evaluable historical rows")
+        _require_feature_schema(selected, self.required_feature_names)
+        x = _matrix(selected, self.outcome_feature_names)
+        weights = self.stacker.weights
+        active: dict[str, list[float]] = {}
+        prior = [_kalshi_prior(row) for row in selected]
+        if weights.get("kalshi_prior", 0.0) > 0:
+            active["kalshi_prior"] = prior
+        if weights.get("historical_ml", 0.0) > 0:
+            active["historical_ml"] = _predict_classifier(self.outcome_model, x)
+        if weights.get("structural", 0.0) > 0:
+            active["structural"] = [
+                self.structural_model.predict_proba(structural.structural_state_from_row(row))
+                for row in selected
+            ]
+        if weights.get("residual_corrected", 0.0) > 0:
+            active["residual_corrected"] = self.residual_model.predict(x, prior)
+        if not active:
+            raise TrainingError("incumbent has no active prediction components")
+        raw = self.calibrator.predict(self.stacker.predict(active))
+        existing_overlay = getattr(self, "volatility_overlay", None)
+        if existing_overlay is None:
+            return [float(p) for p in raw]
+        return [existing_overlay.predict(p, row.features) for p, row in zip(raw, selected)]
 
     def predict(self, rows: Sequence[FeatureRow]) -> dict[str, list[float]]:
         selected = tuple(rows)
@@ -121,8 +158,12 @@ class FittedBootstrapPipeline:
             if self.stacker.weights.get(name, 0.0) > 0.0
         }
         raw = self.stacker.predict(active)
-        candidate = self.calibrator.predict(raw)
-        return {
+        base = self.calibrator.predict(raw)
+        overlay = getattr(self, "volatility_overlay", None)
+        candidate = base if overlay is None else [
+            overlay.predict(p, row.features) for p, row in zip(base, selected)
+        ]
+        outputs = {
             "candidate": candidate,
             "kalshi_prior": prior,
             "structural": structural_p,
@@ -131,6 +172,14 @@ class FittedBootstrapPipeline:
             "historical_ml": historical,
             "residual_corrected": residual_p,
         }
+        if overlay is not None:
+            outputs["volatility_analytic"] = [
+                (estimate.probability_above if (
+                    estimate := volatility.analytic_estimate(row.features)
+                ) is not None else p)
+                for row, p in zip(selected, base)
+            ]
+        return outputs
 
 
 def is_evaluation_row(row: FeatureRow) -> bool:
