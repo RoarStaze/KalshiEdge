@@ -311,9 +311,12 @@ def _resolved_git_sha(explicit: str | None = None) -> str:
 
 
 def _build_experiment_bundle(
-    root: Path, settings: BootstrapSettings, *, git_sha: str, mistakes_only: bool = False,
+    root: Path, settings: BootstrapSettings, *, git_sha: str,
+    mistakes_only: bool = False, correct_only: bool = False,
 ) -> artifact.ModelBundle:
-    return training.build_experiment_bundle(root, settings, git_sha=git_sha, mistakes_only=mistakes_only)
+    return training.build_experiment_bundle(
+        root, settings, git_sha=git_sha, mistakes_only=mistakes_only, correct_only=correct_only,
+    )
 
 
 def train_experiment(
@@ -322,20 +325,27 @@ def train_experiment(
     *,
     git_sha: str | None = None,
     mistakes_only: bool = False,
+    correct_only: bool = False,
 ) -> BootstrapTrainingReport:
     """Train and save an experiment bundle without reading/evaluating the lockbox."""
     root = root.resolve()
     resolved_sha = _resolved_git_sha(git_sha)
-    bundle = _build_experiment_bundle(root, settings, git_sha=resolved_sha, mistakes_only=mistakes_only)
+    if mistakes_only and correct_only:
+        raise EvaluationError("train_experiment cannot fit both mistake and refresher classes")
+    # Preserve the old test extension seam for baseline non-learning training.
+    kwargs = {"mistakes_only": mistakes_only}
+    if correct_only:
+        kwargs["correct_only"] = True
+    bundle = _build_experiment_bundle(root, settings, git_sha=resolved_sha, **kwargs)
     if bundle.stage != "experiment":
         raise EvaluationError("training must produce an experiment bundle")
     experiment_path = artifact.save_model_bundle(bundle, root / "models" / "experiments")
     sealed = artifact.load_model_bundle(experiment_path)
     selected_training = tuple(
         path.rsplit("/", 1)[-1].removesuffix(".json")
-        for path in sealed.input_hashes if path.startswith("mistake_pool/")
+        for path in sealed.input_hashes if path.startswith(("mistake_pool/", "correct_pool/"))
     )
-    if mistakes_only and not selected_training:
+    if (mistakes_only or correct_only) and not selected_training:
         raise EvaluationError("mistake-only experiment has no verified selected training cases")
     train_rows, calibration_rows, lockbox_rows = training.partition_row_counts(
         root, sealed.boundaries, selected_training_markets=selected_training,
