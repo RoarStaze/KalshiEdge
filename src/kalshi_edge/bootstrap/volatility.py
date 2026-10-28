@@ -17,6 +17,13 @@ from .types import FeatureRow
 VOLATILITY_POLICY = "volatility-final-minute-average-blend-v1"
 WEIGHTS = (0.0, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50)
 MIN_CALIBRATION_MARKETS = 80
+# Realized-volatility measurements can be missing from some historical bars.
+# A missing estimate uses the incumbent's probability (never guessed/filled).
+# Require sufficient real observed markets in BOTH chronological partitions.
+MIN_USABLE_VOLATILITY_MARKETS = 80
+MIN_USABLE_FIT_MARKETS = 40
+MIN_USABLE_VALIDATION_MARKETS = 20
+MIN_USABLE_FRACTION_PER_PARTITION = 0.30
 FINAL_LOCK_SECONDS = 240.0
 CHECKPOINT_TOLERANCE_SECONDS = 1.0
 
@@ -46,21 +53,29 @@ def analytic_estimate(features: Mapping[str, float]) -> VolatilityEstimate | Non
         btc = float(features["btc_close"])
         strike = float(features["strike"])
         remaining = float(features["seconds_remaining"])
-        rv60 = float(features["btc_realized_vol_60s"])
+        rv60 = float(features.get("btc_realized_vol_60s", 0.0))
         rv300 = float(features.get("btc_realized_vol_300s", 0.0))
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
 
     if (
-        not all(math.isfinite(x) for x in (btc, strike, remaining, rv60, rv300))
-        or btc <= 0.0 or strike <= 0.0
-        or remaining < 60.0 or rv60 <= 0.0 or rv300 < 0.0
+        not all(math.isfinite(x) for x in (btc, strike, remaining))
+        or btc <= 0.0 or strike <= 0.0 or remaining < 60.0
     ):
         return None
 
-    # The short observation captures current turbulence; the longer window
-    # reduces single-window noise when it is available. Both are strictly past.
-    sigma = 0.75 * rv60 + 0.25 * rv300 if rv300 > 0 else rv60
+    # Zero/NaN can mean missing candle history in earlier feature builds.
+    # Use the existing independent 300s estimate when the 60s one is absent;
+    # never synthesize future volatility, and never use the zero value as
+    # evidence of zero market risk. If both are unusable, no overlay applies.
+    valid60 = math.isfinite(rv60) and rv60 > 0.0
+    valid300 = math.isfinite(rv300) and rv300 > 0.0
+    if not valid60 and not valid300:
+        return None
+    sigma = (
+        .75 * rv60 + .25 * rv300 if valid60 and valid300
+        else rv60 if valid60 else rv300
+    )
     sigma = max(0.000005, min(0.01, sigma))
     effective = max(1.0, remaining - 40.0)
     standard_deviation = sigma * math.sqrt(effective)
@@ -110,6 +125,9 @@ class VolatilitySelection:
     selected_weight: float
     accepted: bool
     reason: str
+    usable_fit_markets: int = 0
+    usable_validation_markets: int = 0
+    unavailable_markets: int = 0
 
 
 def is_final_checkpoint(row: FeatureRow) -> bool:
@@ -144,12 +162,33 @@ def select_volatility_overlay(
         raise VolatilityChallengerError("each calibration market may contribute only one final forecast row")
     if any(not math.isfinite(p) or not 0.0 <= p <= 1.0 for p in base_probabilities):
         raise VolatilityChallengerError("incumbent predictions are not finite probabilities")
-    if any(analytic_estimate(row.features) is None for row in rows):
-        raise VolatilityChallengerError("historical volatility observations are incomplete")
-
+    # Score the entire chronological cohort against the incumbent so
+    # missing-volatility markets cannot be silently dropped to inflate
+    # apparent model quality. Overlay.predict() returns the incumbent
+    # probability unchanged on those markets.
+    availability = [analytic_estimate(row.features) is not None for row in rows]
     indices = sorted(range(len(rows)), key=lambda i: (rows[i].checkpoint_ts_ns, rows[i].market_ticker))
     split = len(indices) * 2 // 3
     train_ids, validation_ids = indices[:split], indices[split:]
+    usable_fit = sum(availability[i] for i in train_ids)
+    usable_validation = sum(availability[i] for i in validation_ids)
+    total_usable = usable_fit + usable_validation
+    if (
+        total_usable < MIN_USABLE_VOLATILITY_MARKETS
+        or usable_fit < max(MIN_USABLE_FIT_MARKETS, math.ceil(MIN_USABLE_FRACTION_PER_PARTITION * len(train_ids)))
+        or usable_validation < max(
+            MIN_USABLE_VALIDATION_MARKETS,
+            math.ceil(MIN_USABLE_FRACTION_PER_PARTITION * len(validation_ids)),
+        )
+    ):
+        raise VolatilityChallengerError(
+            "insufficient observed historical BTC volatility at 240s checkpoint: "
+            f"usable={total_usable}/{len(rows)}, "
+            f"fit={usable_fit}/{len(train_ids)}, "
+            f"validation={usable_validation}/{len(validation_ids)}; "
+            "no values imputed and lockbox untouched. "
+            "Backfill real BTC candles and rebuild the verified dataset."
+        )
     fit_rows = [rows[i] for i in train_ids]
     validate_rows = [rows[i] for i in validation_ids]
     for group in (fit_rows, validate_rows):
@@ -195,4 +234,7 @@ def select_volatility_overlay(
         selected_weight=selected,
         accepted=improves,
         reason="PASSED_CHRONOLOGICAL_CALIBRATION" if improves else "NO_RELIABLE_VOLATILITY_IMPROVEMENT",
+        usable_fit_markets=usable_fit,
+        usable_validation_markets=usable_validation,
+        unavailable_markets=len(rows) - total_usable,
     )
