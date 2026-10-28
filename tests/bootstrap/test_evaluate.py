@@ -298,3 +298,55 @@ def test_failed_promotion_never_replaces_existing_default(tmp_path: Path) -> Non
     assert result.decision.promoted is False
     assert result.promoted_path is None
     assert default_path.read_bytes() == before
+
+
+
+def test_volatility_240_gate_blocks_poor_final_checkpoint_accuracy_even_if_overall_passes() -> None:
+    report = _report(
+        candidate=_metric(brier=.15, log_loss=.44, ece=.02),
+        prior=_metric(brier=.18, log_loss=.51, ece=.02),
+    )
+    enhanced = report.model_copy(update={"metrics": {
+        **report.metrics,
+        "incumbent_current": _metric(brier=.16, log_loss=.46, ece=.02),
+        "volatility_240_candidate": _metric(brier=.21, log_loss=.61, ece=.02),
+        "volatility_240_incumbent": _metric(brier=.18, log_loss=.51, ece=.02),
+        "volatility_240_kalshi": _metric(brier=.20, log_loss=.59, ece=.02),
+    }})
+    decision = evaluate.promotion_decision(enhanced)
+    assert not decision.promoted
+    assert "VOLATILITY_240_INCUMBENT_NOT_BEATEN" in decision.reason_codes
+
+
+def test_volatility_240_gate_accepts_improvement_against_both_incumbent_and_kalshi() -> None:
+    report = _report(
+        candidate=_metric(brier=.15, log_loss=.44, ece=.02),
+        prior=_metric(brier=.18, log_loss=.51, ece=.02),
+    )
+    enhanced = report.model_copy(update={"metrics": {
+        **report.metrics,
+        "incumbent_current": _metric(brier=.16, log_loss=.46, ece=.02),
+        "volatility_240_candidate": _metric(brier=.14, log_loss=.41, ece=.02),
+        "volatility_240_incumbent": _metric(brier=.17, log_loss=.50, ece=.02),
+        "volatility_240_kalshi": _metric(brier=.20, log_loss=.59, ece=.02),
+    }})
+    assert evaluate.promotion_decision(enhanced).promoted is True
+
+
+def test_volatility_240_gate_rejects_accuracy_regression() -> None:
+    report = _report(
+        candidate=_metric(brier=.15, log_loss=.44, ece=.02),
+        prior=_metric(brier=.18, log_loss=.51, ece=.02),
+    )
+    better = _metric(brier=.14, log_loss=.41, ece=.02).model_copy(update={"accuracy": .72})
+    incumbent = _metric(brier=.17, log_loss=.50, ece=.02).model_copy(update={"accuracy": .77})
+    enhanced = report.model_copy(update={"metrics": {
+        **report.metrics,
+        "incumbent_current": _metric(brier=.16, log_loss=.46, ece=.02),
+        "volatility_240_candidate": better,
+        "volatility_240_incumbent": incumbent,
+        "volatility_240_kalshi": _metric(brier=.20, log_loss=.59, ece=.02),
+    }})
+    decision = evaluate.promotion_decision(enhanced)
+    assert not decision.promoted
+    assert "VOLATILITY_240_INCUMBENT_ACCURACY_DEGRADED" in decision.reason_codes
