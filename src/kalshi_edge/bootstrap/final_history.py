@@ -22,6 +22,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
+from .dashboard_ui import PAGE as _PAGE
+from .live_dashboard import read_live_dashboard
 
 LOG = logging.getLogger(__name__)
 NS = 1_000_000_000
@@ -313,87 +315,6 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-_PAGE = r"""<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KalshiEdge | Final Forecast History</title>
-<style>
-:root{color-scheme:dark;font-family:Inter,"Segoe UI",system-ui,sans-serif;background:#080c16;color:#eef2fc}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 8% 0%,#122346 0%,#080c16 48%);min-height:100vh}
-main{max-width:1280px;margin:auto;padding:38px 28px 80px}
-.kicker{font-size:11px;letter-spacing:2.3px;color:#72a6ff;font-weight:800}
-h1{margin:8px 0;font-size:clamp(26px,4vw,40px);letter-spacing:-1px}
-.sub{color:#9ba8c2;margin:0 0 28px;font-size:14px}
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
-.card{border:1px solid #26344e;background:linear-gradient(160deg,#151f35,#0d1525);border-radius:15px;padding:20px}
-.label{font-size:12px;color:#a1aec8;font-weight:600}.value{font-size:30px;font-weight:800;margin:9px 0 4px;font-variant-numeric:tabular-nums}
-.hint{font-size:11px;color:#7787a5}.good{color:#56d9a6}.bad{color:#fa8a94}.warn{color:#f4c46d}
-.toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:34px 0 14px}
-h2{font-size:18px;letter-spacing:-.3px;margin:0}
-#status{color:#a1aec8;font-size:12px}
-.table-wrap{border:1px solid #26344e;background:#101827;border-radius:15px;overflow:auto}
-table{border-collapse:collapse;width:100%;min-width:870px;font-size:13px}
-th{text-align:left;background:#18233a;color:#a7b7d2;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.8px;padding:14px}
-td{padding:15px 14px;border-top:1px solid #25314a;color:#e3e9f6;white-space:nowrap;font-variant-numeric:tabular-nums}
-tr:hover td{background:#18243a}
-.pill{display:inline-block;border:1px solid #48536b;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:800;letter-spacing:.4px}
-.pill.CORRECT,.pill.ABOVE{border-color:#236b5d;color:#58ddb0;background:#102d2c}
-.pill.INCORRECT,.pill.BELOW{border-color:#744451;color:#ffa3af;background:#311b27}
-.pill.SKIP{border-color:#6d5738;color:#eec987;background:#29231c}
-.pill.PENDING{border-color:#445575;color:#a0bff4;background:#1b2941}
-.muted{color:#8e9bb5}.foot{margin-top:18px;color:#7586a5;font-size:12px;line-height:1.6}
-@media(max-width:760px){main{padding:25px 14px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.card{padding:15px}.value{font-size:25px}}
-</style></head><body><main>
-<div class="kicker">KALSHIEDGE / READ-ONLY RESEARCH</div>
-<h1>Final forecast history</h1>
-<p class="sub">One locked forecast per 15-minute BTC market · Official Kalshi settlement outcomes · No order execution</p>
-<div class="kpis">
-<div class="card"><div class="label">Settled directional accuracy</div><div id="accuracy" class="value good">—</div><div id="accuracy-detail" class="hint">No settled predictions yet</div></div>
-<div class="card"><div class="label">Correct / Incorrect</div><div id="results" class="value">0 / 0</div><div class="hint">Settled ABOVE / BELOW only</div></div>
-<div class="card"><div class="label">SKIP decisions</div><div id="skips" class="value warn">0</div><div class="hint">Excluded from accuracy</div></div>
-<div class="card"><div class="label">Pending settlement</div><div id="pending" class="value">0</div><div class="hint">Not scored before Kalshi finalizes</div></div>
-</div>
-<div class="toolbar"><h2>Recorded forecasts</h2><span id="status">Connecting…</span></div>
-<div class="table-wrap"><table><thead><tr><th>Market close (local)</th><th>Market</th><th>Forecast</th><th>Probability</th><th>Confidence</th><th>Official outcome</th><th>Result</th></tr></thead>
-<tbody id="records"><tr><td colspan="7" class="muted">Loading recorded forecasts…</td></tr></tbody></table></div>
-<p class="foot">Accuracy = correct ÷ (correct + incorrect), using only officially settled directional decisions. SKIP and pending markets are excluded. The dashboard refreshes every 5 seconds; settlement polling happens every 30 seconds. Percentages reflect measured outcomes only, not guaranteed performance.</p>
-</main><script>
-const $=id=>document.getElementById(id);
-const pct=n=>n==null?"—":(100*n).toFixed(2)+"%";
-const field=v=>v==null?"—":String(v);
-function pill(label){let span=document.createElement("span");span.className="pill "+label;span.textContent=label;return span}
-function cell(tr,v){let td=document.createElement("td");if(v instanceof Node)td.appendChild(v);else td.textContent=field(v);tr.appendChild(td)}
-async function refresh(){
- try{
-  const response=await fetch("/api/history",{cache:"no-store"});
-  if(!response.ok)throw Error("HTTP "+response.status);
-  const data=await response.json(),s=data.summary;
-  $("accuracy").textContent=pct(s.accuracy);
-  $("accuracy-detail").textContent=s.settled_directional_forecasts+" settled directional decisions";
-  $("results").textContent=s.correct+" / "+s.incorrect;
-  $("skips").textContent=s.skipped;
-  $("pending").textContent=s.pending_settlement;
-  $("status").textContent=s.total_final_forecasts+" forecasts · Updated "+new Date().toLocaleTimeString();
-  const body=$("records");body.replaceChildren();
-  if(!data.forecasts.length){let tr=document.createElement("tr");cell(tr,"No final forecasts recorded yet.");body.appendChild(tr)}
-  for(const f of data.forecasts){
-   let tr=document.createElement("tr");
-   cell(tr,new Date(f.market_close).toLocaleString());
-   cell(tr,f.market_ticker);
-   cell(tr,pill(f.forecast));
-   cell(tr,pct(f.directional_probability));
-   cell(tr,pct(f.confidence));
-   cell(tr,f.actual_side??"Awaiting settlement");
-   cell(tr,pill(f.verdict));
-   body.appendChild(tr);
-  }
- }catch(e){$("status").textContent="Refresh error: "+e.message}
-}
-refresh();setInterval(refresh,5000);
-</script></body></html>
-"""
-
-
 def _make_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     class HistoryHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -402,6 +323,12 @@ def _make_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 kind = "text/html; charset=utf-8"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
+                kind = "application/json; charset=utf-8"
+            elif self.path == "/api/live":
+                content = json.dumps(read_live_dashboard(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
+                kind = "application/json; charset=utf-8"
+            elif self.path == "/api/health":
+                content = b'{"app":"kalshiedge","service":"unified-dashboard","ready":true}'
                 kind = "application/json; charset=utf-8"
             else:
                 self.send_error(404)

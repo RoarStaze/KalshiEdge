@@ -230,6 +230,14 @@ def test_localhost_dashboard_and_json_api(tmp_path: Path) -> None:
             assert data["summary"]["total_final_forecasts"] == 1
             assert data["forecasts"][0]["forecast"] == "ABOVE"
             assert data["forecasts"][0]["verdict"] == "PENDING"
+            live = client.get(base + "/api/live")
+            assert live.status_code == 200
+            assert live.json()["status"] == "WAITING_FOR_PREDICTOR"
+            assert live.json()["final_forecast"] is None
+            health = client.get(base + "/api/health")
+            assert health.status_code == 200
+            assert health.json()["app"] == "kalshiedge"
+            assert health.json()["service"] == "unified-dashboard"
             assert client.get(base + "/orders").status_code == 404
     finally:
         server.shutdown()
