@@ -468,11 +468,43 @@ def _read_rows_before_lockbox(context: DatasetContext) -> tuple[FeatureRow, ...]
     return rows
 
 
-def load_lockbox_rows(root: Path, boundaries: artifact.SplitBoundaries) -> tuple[FeatureRow, ...]:
-    """Materialize only predeclared lockbox rows for the evaluation entrypoint."""
+def load_lockbox_rows(
+    root: Path, boundaries: artifact.SplitBoundaries, *,
+    experiment: artifact.ModelBundle | None = None,
+) -> tuple[FeatureRow, ...]:
+    """Materialize the predeclared untouched lockbox; never selected error-only rows."""
     context = _verified_context(root)
-    if context.plan.boundaries != boundaries:
-        raise TrainingError("current dataset partition boundaries do not match experiment bundle")
+    mistake_inputs = {} if experiment is None else {
+        path: sha for path, sha in experiment.input_hashes.items()
+        if path.startswith("mistake_pool/")
+    }
+    if not mistake_inputs:
+        if context.plan.boundaries != boundaries:
+            raise TrainingError("current dataset partition boundaries do not match experiment bundle")
+    else:
+        # In mistake-only training, the development partition is intentionally
+        # sparse, so its chronology differs from the standard full-data plan.
+        # Validate frozen experiment inputs without looking at lockbox outcomes.
+        expected_dataset_hash = experiment.input_hashes.get("derived/features.parquet")
+        if not expected_dataset_hash or expected_dataset_hash != context.input_hashes["derived/features.parquet"]:
+            raise TrainingError("mistake experiment dataset hash has changed since training")
+        if boundaries.lockbox_start_ts_ns <= _previous_lockbox_end_ts_ns(root):
+            raise TrainingError("mistake experiment lockbox overlaps an already evaluated interval")
+        for relative, expected in mistake_inputs.items():
+            path = (root.resolve() / relative).resolve()
+            if (root.resolve() / "mistake_pool").resolve() not in path.parents:
+                raise TrainingError("mistake experiment source path escapes the immutable pool")
+            if not path.is_file() or _sha256_file(path) != expected:
+                raise TrainingError("pinned mistake-case training source changed after model training")
+        # Whole-market group boundaries must remain intact and locked.
+        groups = _metadata_groups(context.dataset_path)
+        locked = [g for g in groups if boundaries.lockbox_start_ts_ns <= g[1] <= boundaries.lockbox_end_ts_ns]
+        if len(locked) < 2 or min(g[1] for g in locked) != boundaries.lockbox_start_ts_ns:
+            raise TrainingError("predeclared mistake-only lockbox markets no longer match dataset")
+        if max(g[2] for g in locked) != boundaries.lockbox_end_ts_ns:
+            raise TrainingError("mistake-only lockbox final market boundary mismatch")
+        if any(g[2] > boundaries.lockbox_end_ts_ns for g in locked):
+            raise TrainingError("mistake-only lockbox group extends beyond its reserved boundary")
     import pyarrow.parquet as pq
 
     columns = [
@@ -1034,15 +1066,26 @@ def build_experiment_bundle(
     )
 
 
-def partition_row_counts(root: Path, boundaries: artifact.SplitBoundaries) -> tuple[int, int, int]:
-    """Return counts without exposing lockbox labels/features to the training path."""
+def partition_row_counts(
+    root: Path, boundaries: artifact.SplitBoundaries, *,
+    selected_training_markets: tuple[str, ...] = (),
+) -> tuple[int, int, int]:
+    """Metadata-only counts. In mistake-only mode, count ONLY selected train rows."""
     try:
+        import pyarrow as pa
         import pyarrow.compute as pc
         import pyarrow.parquet as pq
 
-        table = pq.read_table(_dataset_paths(root)[0], columns=["checkpoint_ts_ns"])
+        columns = ["checkpoint_ts_ns", "market_ticker"] if selected_training_markets else ["checkpoint_ts_ns"]
+        table = pq.read_table(_dataset_paths(root)[0], columns=columns)
         column = table["checkpoint_ts_ns"]
-        train = pc.sum(pc.less_equal(column, boundaries.train_end_ts_ns)).as_py() or 0
+        train_mask = pc.less_equal(column, boundaries.train_end_ts_ns)
+        if selected_training_markets:
+            train_mask = pc.and_(
+                train_mask,
+                pc.is_in(table["market_ticker"], value_set=pa.array(selected_training_markets)),
+            )
+        train = pc.sum(train_mask).as_py() or 0
         calibration_count = pc.sum(
             pc.and_(
                 pc.greater_equal(column, boundaries.calibration_start_ts_ns),
