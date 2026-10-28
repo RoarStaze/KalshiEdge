@@ -53,6 +53,9 @@ class LivePredictionRecord(PredictionRecord):
     final_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     component_disagreement: float | None = Field(default=None, ge=0.0, le=1.0)
+    volatility_analytic_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    volatility_expected_move_pct: float | None = Field(default=None, ge=0.0)
+    volatility_weight: float | None = Field(default=None, ge=0.0, le=1.0)
     model_version: str | None = None
 
 
@@ -526,6 +529,9 @@ class LivePredictor:
         components = [values[name] for name in ("kalshi_prior", "structural", "historical_ml", "residual_corrected")]
         disagreement = max(components) - min(components)
         confidence = min(1.0, 2.0 * abs(p_yes - 0.5))
+        from .volatility import analytic_estimate
+        overlay = getattr(self.pipeline, "volatility_overlay", None)
+        vol_estimate = analytic_estimate(full_row.features) if overlay is not None and seconds_remaining >= 60 else None
         return LivePredictionRecord(
             prediction_ts_ns=now_ns,
             market_ticker=market.ticker,
@@ -549,6 +555,9 @@ class LivePredictor:
             final_probability=p_yes,
             confidence=confidence,
             component_disagreement=disagreement,
+            volatility_analytic_probability=None if vol_estimate is None else vol_estimate.probability_above,
+            volatility_expected_move_pct=None if vol_estimate is None else vol_estimate.expected_move_pct,
+            volatility_weight=None if vol_estimate is None else overlay.weight,
             model_version=self.bundle.model_version,
         )
 
