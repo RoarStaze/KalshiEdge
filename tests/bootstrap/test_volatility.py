@@ -46,7 +46,7 @@ def test_direction_reversal_and_invalid_volatility_are_fail_closed() -> None:
     assert below.probability_above < .5
 
     for fields in (
-        {"btc_realized_vol_60s": 0.0},
+        {"btc_realized_vol_60s": 0.0, "btc_realized_vol_300s": 0.0},
         {"btc_realized_vol_60s": float("nan")},
         {"seconds_remaining": 59.0},
         {"btc_close": 0.0},
