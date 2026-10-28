@@ -206,6 +206,13 @@ def build_candidate(root: Path, *, git_sha: str) -> tuple[artifact.ModelBundle |
         "selected_weight": selection.selected_weight,
         "fit_markets": selection.fit_markets,
         "validation_markets": selection.validation_markets,
+        "usable_fit_markets": selection.usable_fit_markets,
+        "usable_validation_markets": selection.usable_validation_markets,
+        "unavailable_volatility_markets": selection.unavailable_markets,
+        "volatility_coverage": (
+            (selection.usable_fit_markets + selection.usable_validation_markets)
+            / (selection.fit_markets + selection.validation_markets)
+        ),
         "validation_baseline": selection.validation_baseline.model_dump(mode="json", exclude={"reliability_bins"}),
         "validation_challenger": selection.validation_challenger.model_dump(mode="json", exclude={"reliability_bins"}),
         "accepted_for_lockbox": selection.accepted,
