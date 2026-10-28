@@ -230,7 +230,7 @@ def _verified_context(root: Path, *, mistakes_only: bool = False, correct_only: 
         feature_names=feature_names,
         input_hashes=input_hashes,
         plan=plan,
-        mistakes_only=mistakes_only,
+        mistakes_only=mistakes_only or correct_only,
         selected_tickers=selected_tickers,
         selected_labels=selected_labels,
     )
