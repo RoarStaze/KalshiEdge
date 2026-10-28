@@ -29,6 +29,7 @@ research = [
 
 [project.scripts]
 kalshi-edge = "kalshi_edge.cli:main"
+kalshiedge = "kalshi_edge.launcher:main"
 kalshi-edge-gui = "kalshi_edge.control_center:main"
 
 [tool.setuptools.packages.find]
