@@ -60,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
 
     sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
+    history = sub.add_parser("final-history", help="show local final-forecast history and sync official Kalshi settlements")
+    history.add_argument("--once", action="store_true", help="sync available official settlements once and exit")
+    history.add_argument("--port", type=int, default=8899, help="local dashboard TCP port (default 8899)")
     return parser
 
 
@@ -157,6 +160,18 @@ def main(argv: list[str] | None = None) -> int:
         from .bootstrap.live import run_live
 
         return run_live()
+    if args.command == "final-history":
+        from .bootstrap.config import BootstrapSettings
+        from .bootstrap.final_history import run_final_history
+
+        if not 1 <= args.port <= 65535:
+            parser.error("--port must be between 1 and 65535")
+        return run_final_history(
+            BootstrapSettings().bootstrap_dir,
+            CollectorSettings().rest_base_url,
+            port=args.port,
+            once=args.once,
+        )
     raise AssertionError(f"unhandled command: {args.command}")
 
 
