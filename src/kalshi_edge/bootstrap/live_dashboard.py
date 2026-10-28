@@ -67,7 +67,7 @@ def _current_final(root: Path, ticker: str, close_ts_ns: int) -> FinalForecastRe
         record = FinalForecastRecord.model_validate_json(path.read_text(encoding="utf-8"))
         if (
             record.market_ticker != ticker
-            or record.scheduled_ts_ns + FINAL_CHECKPOINT_SECONDS * NS != close_ts_ns
+            or abs(record.scheduled_ts_ns + FINAL_CHECKPOINT_SECONDS * NS - close_ts_ns) > 2_000_000
         ):
             LOG.warning("Invalid final record linkage for %s", path)
             return None
@@ -110,6 +110,10 @@ def read_live_dashboard(root: Path, *, now_ns: int | None = None) -> dict[str, A
         return result
 
     final = _current_final(root.resolve(), prediction.market_ticker, close_ns)
+    if final is not None:
+        # The JSONL seconds_remaining field is a float; use the exact sealed
+        # checkpoint timestamp after a tolerance-checked match.
+        close_ns = final.scheduled_ts_ns + FINAL_CHECKPOINT_SECONDS * NS
     result.update(
         {
             "status": "LIVE" if prediction.status == "OK" and prediction.feed_quality.healthy else "DEGRADED",
