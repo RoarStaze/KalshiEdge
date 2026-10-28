@@ -83,6 +83,29 @@ kalshi-edge predict-live
 
 `bootstrap-evaluate` is the only path that may promote an experiment to the live default. `predict-live` accepts only a promoted/default hash-verified model bundle.
 
+## Unified local dashboard (Windows)
+
+After a v5 model has been promoted, launch KalshiEdge as a **single-command**, read-only local application. It runs the existing live prediction engine, settlement synchronization, and a combined browser dashboard with:
+
+- a live changeable UP/DOWN preview, price-to-beat, BTC reference, confidence meter and time-to-close;
+- an immutable ABOVE/BELOW/SKIP final at **240 seconds before close**, using the actual **69% confidence gate**;
+- an automatically updating settled history, directional accuracy, SKIP/pending counts, and Kalshi-confirmed outcomes.
+
+Install the per-user command **once** from the repo root (requires the existing `.venv`):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-kalshiedge.ps1
+```
+
+Open a **new** PowerShell or Command Prompt window from **any folder**, then run:
+
+```text
+kalshiedge start
+```
+
+This opens **http://127.0.0.1:8899/** in your default browser. Keep that terminal open. Ctrl+C stops the services that the launcher started. `kalshiedge start --no-browser` and `kalshiedge start --port 8900` are optional. The legacy `kalshi-edge predict-live` and `kalshi-edge final-history` commands still work; stop old manual instances before switching to one-command startup.
+
+The installer writes `%LOCALAPPDATA%\KalshiEdge\bin\kalshiedge.cmd` and adds that directory to the **user PATH**; administrator permissions are not required. The wrapper invokes your repository's `.venv` directly. Logs: `data/bootstrap/diagnostics/app-*.log`. The dashboard binds only to `127.0.0.1`. The launcher never initiates trading, training, backfills or lockbox evaluation. Model confidence is not measured win-rate accuracy.
 ## Desktop Control Center
 
 An optional Windows desktop GUI is available for the bootstrap workflow. Install and launch it from the repository root:
