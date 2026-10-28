@@ -245,6 +245,15 @@ def sync_final_settlements(
     finally:
         if owns_http:
             client.close()
+
+    # The settled outcome is the only trigger for adding new training cases.
+    # Local import avoids coupling the live settlement reader to training.
+    from .mistake_learning import enroll_settled_forecasts
+
+    pool = enroll_settled_forecasts(root)
+    stats["mistake_cases_added"] = pool["new_cases"]
+    stats["mistake_cases_eligible"] = pool["eligible"]
+    stats["mistake_pool_errors"] = pool["source_errors"]
     return stats
 
 
