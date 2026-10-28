@@ -15,7 +15,7 @@ from kalshi_edge.bootstrap.training_cycle import (
     CycleError, TrainingController, _completed_learning_rounds,
     _run_state, _state_path, inspect_training_readiness, run_training_worker,
 )
-from tests.bootstrap.test_evaluate import _bundle
+from bootstrap.test_evaluate import _bundle
 
 
 def _seal_cycle(root: Path, index: int, mode: str, promoted: bool = True) -> str:
@@ -209,7 +209,7 @@ def test_refresher_training_partition_selects_only_correct_markets(monkeypatch, 
 
 
 def test_promotion_rejects_degradation_against_incumbent(tmp_path):
-    from tests.bootstrap.test_evaluate import _report, _metric
+    from bootstrap.test_evaluate import _report, _metric
     report = _report(candidate=_metric(brier=.20, log_loss=.60, ece=.02),
                      prior=_metric(brier=.23, log_loss=.66, ece=.02))
     report = report.model_copy(update={"metrics": {
@@ -222,7 +222,7 @@ def test_promotion_rejects_degradation_against_incumbent(tmp_path):
 
 
 def test_promotion_can_pass_both_incumbent_and_kalshi(tmp_path):
-    from tests.bootstrap.test_evaluate import _report, _metric
+    from bootstrap.test_evaluate import _report, _metric
     report = _report(candidate=_metric(brier=.14, log_loss=.41, ece=.02),
                      prior=_metric(brier=.23, log_loss=.66, ece=.02))
     report = report.model_copy(update={"metrics": {
