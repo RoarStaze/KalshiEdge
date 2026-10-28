@@ -504,6 +504,18 @@ def load_lockbox_rows(
                 raise TrainingError("mistake experiment source path escapes the immutable pool")
             if not path.is_file() or _sha256_file(path) != expected:
                 raise TrainingError("pinned mistake-case training source changed after model training")
+        # Reverify settlement/forecast source hashes for *selected development*
+        # records. Never consult held-out lockbox outcome files.
+        from .mistake_learning import MistakePoolError, verified_mistake_pool
+        selected = {
+            Path(relative).stem for relative in mistake_inputs
+        }
+        try:
+            verified_cases = verified_mistake_pool(root, allowed_tickers=selected)
+        except MistakePoolError as exc:
+            raise TrainingError("mistake experiment source provenance failed before evaluation") from exc
+        if {case.market_ticker for case, _, _ in verified_cases} != selected:
+            raise TrainingError("pinned mistake experiment source case is missing")
         # Whole-market group boundaries must remain intact and locked.
         groups = _metadata_groups(context.dataset_path)
         locked = [g for g in groups if boundaries.lockbox_start_ts_ns <= g[1] <= boundaries.lockbox_end_ts_ns]
