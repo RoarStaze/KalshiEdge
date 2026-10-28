@@ -14,8 +14,15 @@ def _groups(count: int):
     return [(f"KXBTC15M-M{i:04d}", 100000 + i * 100, 100050 + i * 100) for i in range(count)]
 
 
+def _existing_model(root: Path) -> None:
+    default = root / "models" / "default.json"
+    default.parent.mkdir(parents=True, exist_ok=True)
+    default.write_text("{}")
+
+
 def test_mistake_training_selects_only_error_case_development_markets(monkeypatch, tmp_path: Path) -> None:
     groups = _groups(90)
+    _existing_model(tmp_path)
     monkeypatch.setattr(training, "_metadata_groups", lambda _path: groups)
     # Previous eval ends on market 19; 70 new groups remain. The newest 14
     # are held out as a new lockbox; 5 immediately before are calibration.
@@ -52,6 +59,7 @@ def test_mistake_training_selects_only_error_case_development_markets(monkeypatc
 
 def test_mistake_training_fails_before_model_fitting_without_enough_cases(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(training, "_metadata_groups", lambda _path: _groups(70))
+    _existing_model(tmp_path)
     monkeypatch.setattr(
         mistake_learning, "verified_mistake_pool",
         lambda _root, *, allowed_tickers: (),
@@ -64,6 +72,7 @@ def test_mistake_training_fails_before_model_fitting_without_enough_cases(monkey
 
 def test_mistake_training_requires_fresh_untouched_markets(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(training, "_metadata_groups", lambda _path: _groups(30))
+    _existing_model(tmp_path)
     with pytest.raises(training.TrainingError, match="at least 20"):
         training._mistake_partition_plan(
             tmp_path, tmp_path / "features.parquet", previous_lockbox_end_ts_ns=102000,
