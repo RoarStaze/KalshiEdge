@@ -251,9 +251,14 @@ def sync_final_settlements(
     from .mistake_learning import enroll_settled_forecasts
 
     pool = enroll_settled_forecasts(root)
+    from .correct_learning import enroll_correct_forecasts
+    refresher = enroll_correct_forecasts(root)
     stats["mistake_cases_added"] = pool["new_cases"]
     stats["mistake_cases_eligible"] = pool["eligible"]
     stats["mistake_pool_errors"] = pool["source_errors"]
+    stats["correct_cases_added"] = refresher["new_cases"]
+    stats["correct_cases_eligible"] = refresher["eligible"]
+    stats["correct_pool_errors"] = refresher["errors"]
     return stats
 
 
