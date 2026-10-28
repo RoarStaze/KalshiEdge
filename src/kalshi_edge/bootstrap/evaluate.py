@@ -173,6 +173,22 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         if candidate.ece - incumbent.ece > PROMOTION_MAX_ECE_DEGRADATION + PROMOTION_NONWORSE_TOLERANCE:
             reasons.append("INCUMBENT_CALIBRATION_DEGRADED")
 
+    if any(key.startswith("volatility_240_") for key in report.metrics):
+        required = ("volatility_240_candidate", "volatility_240_incumbent", "volatility_240_kalshi")
+        if any(key not in report.metrics for key in required):
+            reasons.append("VOLATILITY_240_BENCHMARK_MISSING")
+        else:
+            final_candidate = report.metrics["volatility_240_candidate"]
+            final_incumbent = report.metrics["volatility_240_incumbent"]
+            final_kalshi = report.metrics["volatility_240_kalshi"]
+            for name, benchmark in (("INCUMBENT", final_incumbent), ("KALSHI", final_kalshi)):
+                final_nonworse, final_improved, _, _ = _dominates(final_candidate, benchmark)
+                if not final_nonworse or not final_improved:
+                    reasons.append(f"VOLATILITY_240_{name}_NOT_BEATEN")
+                if final_candidate.ece > benchmark.ece + PROMOTION_MAX_ECE_DEGRADATION:
+                    reasons.append(f"VOLATILITY_240_{name}_ECE_DEGRADED")
+                if final_candidate.accuracy + PROMOTION_NONWORSE_TOLERANCE < benchmark.accuracy:
+                    reasons.append(f"VOLATILITY_240_{name}_ACCURACY_DEGRADED")
     promoted = superior and not reasons
     return PromotionDecision(
         promoted=promoted,
@@ -448,6 +464,13 @@ def finalize_evaluation(
         raise EvaluationError("this experiment has already been evaluated against the lockbox")
     _require_untouched_lockbox_interval(root, report.lockbox_start_ts_ns, report.lockbox_end_ts_ns)
 
+    if any(k.startswith("volatility_challengers/") for k in experiment.input_hashes):
+        required_volatility = {
+            "incumbent_current", "volatility_240_candidate",
+            "volatility_240_incumbent", "volatility_240_kalshi",
+        }
+        if not required_volatility.issubset(report.metrics):
+            raise EvaluationError("volatility challenger lacks locked-240s and incumbent benchmarks")
     decision = promotion_decision(report)
     _atomic_json(
         report_path,
