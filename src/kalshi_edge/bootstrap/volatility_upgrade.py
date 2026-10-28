@@ -206,7 +206,19 @@ def build_candidate(root: Path, *, git_sha: str) -> tuple[artifact.ModelBundle |
     if not selection.accepted or selection.overlay is None:
         return None, summary
 
-    enhanced = replace(incumbent_pipeline, volatility_overlay=selection.overlay)
+    features = tuple(sorted(set(incumbent.feature_names) | {
+        "btc_close", "strike", "seconds_remaining",
+        "btc_realized_vol_60s", "btc_realized_vol_300s",
+    }))
+    if not set(features).issubset(context.feature_names):
+        raise VolatilityUpgradeError("volatility challenger features unavailable in causal dataset")
+
+    # The promoted bundle and fitted pipeline must have exactly matching
+    # feature manifests; live inference refuses mismatched schemas.
+    enhanced = replace(
+        incumbent_pipeline, required_feature_names=features,
+        volatility_overlay=selection.overlay,
+    )
     serialized = pickle.dumps(enhanced, protocol=pickle.HIGHEST_PROTOCOL)
     weight = selection.overlay.weight
 
@@ -230,13 +242,6 @@ def build_candidate(root: Path, *, git_sha: str) -> tuple[artifact.ModelBundle |
     except FileExistsError:
         if marker_path.read_bytes() != marker_bytes:
             raise VolatilityUpgradeError("existing source marker content mismatch")
-
-    features = tuple(sorted(set(incumbent.feature_names) | {
-        "btc_close", "strike", "seconds_remaining",
-        "btc_realized_vol_60s", "btc_realized_vol_300s",
-    }))
-    if not set(features).issubset(context.feature_names):
-        raise VolatilityUpgradeError("volatility challenger features unavailable in causal dataset")
 
     config_bytes = json.dumps({
         "git_sha": git_sha,
