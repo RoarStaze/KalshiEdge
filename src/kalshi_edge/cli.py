@@ -59,6 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_evaluate = sub.add_parser("bootstrap-evaluate", help="evaluate the untouched lockbox and promote an eligible bootstrap model")
     bootstrap_evaluate.add_argument("--bundle", type=Path, default=None, help="experiment bundle path; defaults to latest experiment")
 
+    app = sub.add_parser("start", help="launch unified local dashboard, live model and settlement tracking")
+    app.add_argument("--no-browser", action="store_true", help="do not automatically open the browser")
+    app.add_argument("--port", type=int, default=8899, help="local dashboard port (default 8899)")
     sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
     history = sub.add_parser("final-history", help="show local final-forecast history and sync official Kalshi settlements")
     history.add_argument("--once", action="store_true", help="sync available official settlements once and exit")
@@ -156,6 +159,12 @@ def main(argv: list[str] | None = None) -> int:
         run = run_lockbox_evaluation(bootstrap.bootstrap_dir, args.bundle)
         print(json.dumps(run.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0 if run.decision.promoted else 2
+    if args.command == "start":
+        from .launcher import start
+
+        if not 1 <= args.port <= 65535:
+            parser.error("--port must be between 1 and 65535")
+        return start(port=args.port, open_browser=not args.no_browser)
     if args.command == "predict-live":
         from .bootstrap.live import run_live
 
