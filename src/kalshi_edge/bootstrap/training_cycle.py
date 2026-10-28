@@ -256,7 +256,15 @@ def inspect_training_readiness(root: Path) -> dict[str, Any]:
 
 
 def _write_worker_state(root: Path, *, stage: str, mode: str, round_number: int, **values) -> None:
+    prior = _run_state(root)
+    retained = {}
+    if prior is not None and prior.get("round_number") == round_number:
+        retained = {
+            key: prior[key] for key in ("log_path", "worker_pid")
+            if key in prior
+        }
     _atomic_state(_state_path(root), {
+        **retained,
         "stage": stage,
         "mode": mode,
         "round_number": round_number,
@@ -380,6 +388,9 @@ class TrainingController:
                 log_path=str(logfile),
             )
             try:
+                # Yield CPU priority to the latency-critical live forecasting
+                # process when long experiment fitting is active on Windows.
+                priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
                 self._process = subprocess.Popen(
                     [
                         sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
@@ -391,6 +402,13 @@ class TrainingController:
                     stdin=subprocess.DEVNULL,
                     stdout=self._log_handle,
                     stderr=subprocess.STDOUT,
+                    creationflags=priority,
+                )
+                _write_worker_state(
+                    self.root, stage="STARTING", mode=info["mode"],
+                    round_number=info["round_number"],
+                    worker_pid=self._process.pid,
+                    log_path=str(logfile),
                 )
             except (OSError, subprocess.SubprocessError):
                 self._log_handle.close()
