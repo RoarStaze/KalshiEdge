@@ -162,6 +162,17 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
             reasons.append("CALIBRATION_MATERIALLY_DEGRADED")
         superior = nonworse and improved and ece_change <= PROMOTION_MAX_ECE_DEGRADATION + PROMOTION_NONWORSE_TOLERANCE
 
+    # Learning-cycle candidates must also outperform the *current* promoted
+    # model on the SAME fresh independent lockbox, not only the Kalshi prior.
+    # Baseline bootstrap reports have no incumbent_current metric.
+    incumbent = report.metrics.get("incumbent_current")
+    if incumbent is not None and candidate is not None:
+        incumbent_nonworse, incumbent_improved, _, _ = _dominates(candidate, incumbent)
+        if not incumbent_nonworse or not incumbent_improved:
+            reasons.append("INCUMBENT_MODEL_NOT_BEATEN")
+        if candidate.ece - incumbent.ece > PROMOTION_MAX_ECE_DEGRADATION + PROMOTION_NONWORSE_TOLERANCE:
+            reasons.append("INCUMBENT_CALIBRATION_DEGRADED")
+
     promoted = superior and not reasons
     return PromotionDecision(
         promoted=promoted,
@@ -522,4 +533,24 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
     except Exception as exc:
         raise EvaluationError("could not materialize the predeclared lockbox") from exc
     report = evaluate_lockbox(experiment, lockbox_rows)
+    if any(key.startswith(("mistake_pool/", "correct_pool/")) for key in experiment.input_hashes):
+        # Compare the incumbent without fitting it, or touching any other
+        # holdout period. This is the SAME one-time evaluation call and data.
+        from .live import load_default_bundle
+        incumbent_bundle = load_default_bundle(root)
+        scored = tuple(
+            row for row in lockbox_rows
+            if experiment.boundaries.lockbox_start_ts_ns <= row.checkpoint_ts_ns
+            <= experiment.boundaries.lockbox_end_ts_ns and training.is_evaluation_row(row)
+        )
+        incumbent_map = _predict_bundle_rows(incumbent_bundle, scored)
+        incumbent_p = incumbent_map.get("candidate")
+        if incumbent_p is None or len(incumbent_p) != len(scored):
+            raise EvaluationError("incumbent model did not provide matching lockbox probabilities")
+        incumbent_snapshot = artifact.metric_snapshot(
+            probability_metrics([row.label_yes for row in scored], incumbent_p)
+        )
+        report = report.model_copy(update={
+            "metrics": {**report.metrics, "incumbent_current": incumbent_snapshot},
+        })
     return finalize_evaluation(root, experiment_path, report)
