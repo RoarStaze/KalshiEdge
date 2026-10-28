@@ -181,11 +181,23 @@ def main(argv: list[str] | None = None) -> int:
 
         bootstrap = BootstrapSettings()
         if args.initial_baseline and (bootstrap.bootstrap_dir / "models" / "default.json").exists():
-            parser.error("--initial-baseline is forbidden when a promoted model exists; future training is mistake-only")
-        report = train_experiment(
-            bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha,
-            mistakes_only=not args.initial_baseline,
-        )
+            parser.error("--initial-baseline is forbidden when a promoted model exists")
+        if args.initial_baseline:
+            # Initial historical baseline is permitted once, before promotion.
+            report = train_experiment(
+                bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha,
+            )
+        else:
+            from .bootstrap.training_cycle import inspect_training_readiness
+            status = inspect_training_readiness(bootstrap.bootstrap_dir)
+            if not status["ready"]:
+                parser.error("training cycle is not ready: " + status["reason"])
+            mode = status["mode"]
+            report = train_experiment(
+                bootstrap.bootstrap_dir, bootstrap, git_sha=args.git_sha,
+                mistakes_only=mode == "mistake",
+                correct_only=mode == "correct",
+            )
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
         return 0
     if args.command == "bootstrap-evaluate":
