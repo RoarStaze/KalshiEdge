@@ -93,18 +93,22 @@ def preflight(root: Path) -> dict[str, Any]:
         base["reason"] = "A previously evaluated and promoted V5 baseline model is required."
         return base
     try:
-        # Verify the immutable dataset/manifests and chronology before any labels.
-        context = training._verified_context(root)
-        groups = training._metadata_groups(context.dataset_path)
+        # Count new whole-market groups without reading outcome labels. A
+        # dataset with zero new groups cannot produce a full partition plan yet.
+        dataset_path, _manifest_path, _provenance_path = training._dataset_paths(root)
+        groups = training._metadata_groups(dataset_path)
         fresh = [g for g in groups if g[1] > previous]
         base["fresh_market_count"] = len(fresh)
         if len(fresh) < MIN_FRESH_LOCKBOX_MARKETS:
             base["reason"] = (
-                f"Only {len(fresh)}/{MIN_FRESH_LOCKBOX_MARKETS} new causal market groups "
+                f"Only {len(fresh)}/{MIN_FRESH_LOCKBOX_MARKETS} new historical market groups "
                 "since the last evaluated lockbox. Backfill recent BTC/Kalshi history "
-                "and rebuild the dataset; do not reuse a previous lockbox."
+                "and rebuild the causal dataset; do not reuse a previous lockbox."
             )
             return base
+        # Once enough markets exist, verify every manifest, source digest and
+        # chronology before declaring the upgrade ready.
+        context = training._verified_context(root)
         if len(context.plan.calibration_groups) < volatility.MIN_CALIBRATION_MARKETS:
             base["reason"] = "Insufficient historic calibration markets."
             return base
