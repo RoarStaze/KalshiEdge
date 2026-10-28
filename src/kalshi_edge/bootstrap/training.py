@@ -367,7 +367,15 @@ def _mistake_partition_plan(
     pre_lockbox = fresh[:-lockbox_count]
     calibration_count = max(2, len(pre_lockbox) // 10)
     calibration_groups = pre_lockbox[-calibration_count:]
-    development_candidates = pre_lockbox[:-calibration_count]
+    # Previously evaluated lockboxes may become development data AFTER their
+    # evaluation is finalized. Only the newly declared lockbox stays sealed.
+    # This allows the bot to learn from earlier mistakes in later generations,
+    # rather than discarding them forever after one evaluation cycle.
+    calibration_start_ns = calibration_groups[0][1]
+    development_candidates = [
+        group for group in _metadata_groups(dataset_path)
+        if group[2] < calibration_start_ns
+    ]
 
     # Protect holdouts BEFORE reading a single mistake-pool case.
     allowed = {group[0] for group in development_candidates}
