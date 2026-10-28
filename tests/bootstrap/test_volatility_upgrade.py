@@ -109,3 +109,57 @@ def test_volatility_upgrade_path_is_an_explicit_separate_challenger_not_3_1_retr
     assert volatility_upgrade.MIN_FRESH_LOCKBOX_MARKETS >= 80
     assert 240.0 == volatility.FINAL_LOCK_SECONDS
     assert volatility_upgrade.UPGRADE_MARKER_DIR not in ("mistake_pool", "correct_pool")
+
+
+
+def test_upgrade_automatically_promotes_only_on_verified_evaluation_pass(tmp_path, monkeypatch):
+    from bootstrap.test_evaluate import _bundle
+    from kalshi_edge.bootstrap import evaluate
+
+    experiment = _bundle()
+    monkeypatch.setattr(
+        volatility_upgrade, "build_candidate",
+        lambda root, *, git_sha: (
+            experiment,
+            {"accepted_for_lockbox": True, "selected_weight": .2},
+        ),
+    )
+    monkeypatch.setattr(volatility_upgrade, "verify_challenger", lambda root, bundle: None)
+
+    class Outcome:
+        def __init__(self, promoted):
+            self.decision = SimpleNamespace(promoted=promoted, reason_codes=() if promoted else ("VOLATILITY_240_INCUMBENT_NOT_BEATEN",))
+            self.report_path = tmp_path / "reports" / "evaluation.json"
+            self.promoted_path = tmp_path / "models" / "promoted" / "new.json" if promoted else None
+            self.default_path = tmp_path / "models" / "default.json" if promoted else None
+
+    outcomes = [Outcome(False), Outcome(True)]
+    monkeypatch.setattr(evaluate, "run_lockbox_evaluation", lambda root, path: outcomes.pop(0))
+
+    fail = volatility_upgrade.run_upgrade(tmp_path, git_sha="a" * 40)
+    assert fail["promoted"] is False
+    assert fail["default_model_pointer"] is None
+    assert fail["reason_codes"] == ["VOLATILITY_240_INCUMBENT_NOT_BEATEN"]
+
+    success = volatility_upgrade.run_upgrade(tmp_path, git_sha="a" * 40)
+    assert success["promoted"] is True
+    assert success["default_model_pointer"].endswith("default.json")
+    assert success["lockbox_evaluated"] is True
+
+
+def test_no_calibration_gain_never_opens_evaluation_lockbox(tmp_path, monkeypatch):
+    from kalshi_edge.bootstrap import evaluate
+    monkeypatch.setattr(
+        volatility_upgrade, "build_candidate",
+        lambda root, *, git_sha: (None, {
+            "accepted_for_lockbox": False,
+            "reason": "no reliable validation improvement",
+        }),
+    )
+    monkeypatch.setattr(
+        evaluate, "run_lockbox_evaluation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not evaluate lockbox")),
+    )
+    result = volatility_upgrade.run_upgrade(tmp_path, git_sha="b" * 40)
+    assert result["promoted"] is False
+    assert result["lockbox_evaluated"] is False
