@@ -71,7 +71,10 @@ def test_blend_never_exceeds_bounded_probability_or_changes_unavailable_rows() -
 
 def test_chronological_calibration_selects_improving_volatility_candidate() -> None:
     rows = [_row(i, i % 2) for i in range(120)]
-    selection = volatility.select_volatility_overlay(rows, [0.5] * len(rows))
+    # The incumbent is consistently biased against the informative price
+    # distance feature; the held-out volatility overlay should correct it.
+    baseline = [.25 if row.label_yes else .75 for row in rows]
+    selection = volatility.select_volatility_overlay(rows, baseline)
     assert selection.accepted
     assert selection.overlay is not None
     assert selection.selected_weight in volatility.WEIGHTS[1:]
