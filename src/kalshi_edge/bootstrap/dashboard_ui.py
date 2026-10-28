@@ -163,7 +163,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
  </div>
 </section>
 <section aria-label="Final Forecast history">
- <div class="history-header"><div><div class="eyebrow">VERIFIED PERFORMANCE</div><h2>Final Forecast history</h2><p class="subtitle">Official Kalshi settlements only · Accuracy = correct + incorrect outcomes scored as correct ÷ total</p></div><span id="history-status" class="subtitle">Loading history…</span></div>
+ <div class="history-header"><div><div class="eyebrow">VERIFIED PERFORMANCE</div><h2>Final forecast history</h2><p class="subtitle">Official Kalshi settlements only · Accuracy = correct ÷ (correct + incorrect)</p></div><span id="history-status" class="subtitle">Loading history…</span></div>
  <div class="kpis">
   <div class="card kpi"><div class="kpi-label">Settled forecast accuracy</div><div class="kpi-num healthy" id="accuracy">—</div><div class="kpi-caption" id="accuracy-detail">Awaiting settled directions</div></div>
   <div class="card kpi"><div class="kpi-label">Correct / Incorrect</div><div class="kpi-num" id="correctness">0 / 0</div><div class="kpi-caption">Only settled ABOVE/BELOW</div></div>
