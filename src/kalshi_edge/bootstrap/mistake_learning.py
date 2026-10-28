@@ -215,13 +215,19 @@ def enroll_settled_forecasts(root: Path) -> dict[str, int]:
     return counts
 
 
-def verified_mistake_pool(root: Path) -> tuple[tuple[MistakeCase, Path, str], ...]:
+def verified_mistake_pool(
+    root: Path, *, allowed_tickers: set[str] | None = None,
+) -> tuple[tuple[MistakeCase, Path, str], ...]:
     """Strongly verify eligible candidate sources and provide immutable hashes."""
 
     root = root.resolve()
     result: list[tuple[MistakeCase, Path, str]] = []
     found: set[str] = set()
     for path in sorted((root / "mistake_pool").glob("*/*.json")):
+        # IMPORTANT: filtering filenames BEFORE loading cases prevents the training
+        # path from ever inspecting outcomes of calibration or lockbox markets.
+        if allowed_tickers is not None and path.stem not in allowed_tickers:
+            continue
         case = _load_case(root, path)
         if case.market_ticker in found:
             raise MistakePoolError("duplicate mistake case for one market")
