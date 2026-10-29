@@ -163,3 +163,25 @@ def test_no_calibration_gain_never_opens_evaluation_lockbox(tmp_path, monkeypatc
     result = volatility_upgrade.run_upgrade(tmp_path, git_sha="b" * 40)
     assert result["promoted"] is False
     assert result["lockbox_evaluated"] is False
+
+
+
+def test_incomplete_historical_volatility_never_consumes_lockbox(tmp_path, monkeypatch):
+    from kalshi_edge.bootstrap import evaluate
+    def missing_observations(root, *, git_sha):
+        raise volatility.VolatilityChallengerError(
+            "insufficient observed historical BTC volatility at 240s checkpoint: usable=23/120"
+        )
+    monkeypatch.setattr(volatility_upgrade, "build_candidate", missing_observations)
+    monkeypatch.setattr(
+        evaluate, "run_lockbox_evaluation",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("holdout lockbox was accessed despite missing volatility")
+        ),
+    )
+    result = volatility_upgrade.run_upgrade(tmp_path, git_sha="c" * 40)
+    assert result["promoted"] is False
+    assert result["lockbox_evaluated"] is False
+    assert result["decision"] == "INSUFFICIENT_CAUSAL_VOLATILITY_DATA"
+    assert "usable=23/120" in result["reason"]
+    assert result["accepted_for_lockbox"] is False

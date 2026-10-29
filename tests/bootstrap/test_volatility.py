@@ -46,8 +46,8 @@ def test_direction_reversal_and_invalid_volatility_are_fail_closed() -> None:
     assert below.probability_above < .5
 
     for fields in (
-        {"btc_realized_vol_60s": 0.0},
-        {"btc_realized_vol_60s": float("nan")},
+        {"btc_realized_vol_60s": 0.0, "btc_realized_vol_300s": 0.0},
+        {"btc_realized_vol_60s": float("nan"), "btc_realized_vol_300s": float("nan")},
         {"seconds_remaining": 59.0},
         {"btc_close": 0.0},
     ):
@@ -100,3 +100,77 @@ def test_duplicate_market_and_non_lock_checkpoint_rejected() -> None:
         volatility.select_volatility_overlay([rows[0], *rows[0:119]], [0.5] * 120)
     with pytest.raises(volatility.VolatilityChallengerError, match="non-final"):
         volatility.select_volatility_overlay([_row(0, 1, remaining=300), *rows[1:]], [0.5] * 120)
+
+
+
+def test_missing_60s_realized_volatility_uses_observed_300s_not_an_imputed_value() -> None:
+    row = _row(1, 1)
+    inputs = {**row.features, "btc_realized_vol_60s": 0.0}
+    long_only = volatility.analytic_estimate(inputs)
+    assert long_only is not None
+    assert long_only.volatility_per_second == pytest.approx(inputs["btc_realized_vol_300s"])
+    short_only = volatility.analytic_estimate({
+        **inputs, "btc_realized_vol_60s": .0002,
+        "btc_realized_vol_300s": float("nan"),
+    })
+    assert short_only is not None
+    assert short_only.volatility_per_second == pytest.approx(.0002)
+    # Both windows absent: do not invent a sigma or make a confident guess.
+    assert volatility.analytic_estimate({
+        **inputs, "btc_realized_vol_300s": 0.0,
+    }) is None
+
+
+def test_historical_missing_volatility_is_not_a_fatal_error_or_dropped_from_scoring() -> None:
+    rows = [_row(i, i % 2) for i in range(120)]
+    # 15 early and 5 later rows have no real observed volatility.
+    missing_indices = {*range(0, 15), *range(90, 95)}
+    incomplete = [
+        row.model_copy(update={"features": {
+            **row.features,
+            "btc_realized_vol_60s": 0.0,
+            "btc_realized_vol_300s": 0.0,
+        }}) if i in missing_indices else row
+        for i, row in enumerate(rows)
+    ]
+    baseline = [.25 if row.label_yes else .75 for row in incomplete]
+    selection = volatility.select_volatility_overlay(incomplete, baseline)
+    assert selection.fit_markets == 80
+    assert selection.validation_markets == 40
+    assert selection.usable_fit_markets == 65
+    assert selection.usable_validation_markets == 35
+    assert selection.unavailable_markets == 20
+    assert selection.accepted
+    assert selection.overlay is not None
+    # The actual held-out Brier score includes ALL 40 calibration examples,
+    # including the five missing-volatility examples left at incumbent p.
+    validation = incomplete[80:]
+    adjusted = [
+        selection.overlay.predict(base, row.features)
+        for row, base in zip(validation, baseline[80:])
+    ]
+    assert selection.validation_challenger.brier == pytest.approx(
+        volatility.probability_metrics(
+            [row.label_yes for row in validation], adjusted,
+        ).brier
+    )
+    assert adjusted[10] == baseline[90]
+
+
+def test_inadequate_observed_calibration_is_diagnosed_before_lockbox() -> None:
+    rows = [_row(i, i % 2) for i in range(120)]
+    # Starve the chronological validation block, even though 80 early markets
+    # have good observed volatility.
+    incomplete = [
+        row.model_copy(update={"features": {
+            **row.features,
+            "btc_realized_vol_60s": 0.0,
+            "btc_realized_vol_300s": 0.0,
+        }}) if i >= 80 else row
+        for i, row in enumerate(rows)
+    ]
+    with pytest.raises(
+        volatility.VolatilityChallengerError,
+        match=r"usable=80/120, fit=80/80, validation=0/40",
+    ):
+        volatility.select_volatility_overlay(incomplete, [.5] * 120)
