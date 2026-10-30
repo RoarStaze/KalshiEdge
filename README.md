@@ -202,3 +202,21 @@ Read `docs/PROJECT_CONTROL.md` for the authoritative gate/state summary. The Pha
 ## Source verification
 
 `docs/VERIFICATION_REPORT.md` records the official Kalshi/CF Benchmarks interfaces verified on 2026-08-31. Re-verify current first-party documentation whenever API or contract rules change.
+## AutoTrader (paper-only local preview)
+
+A separate loopback-only trading research page is available after installation:
+
+```powershell
+# Keep `kalshiedge start` running in another terminal.
+python -m kalshi_edge.trading
+```
+
+Open **http://127.0.0.1:8898/** or follow **AutoTrader (paper)** from the
+main dashboard. It reads V5's immutable 240-second final forecast, checks
+Kalshi's public market and orderbook data, and simulates a maximum **$0.10
+all-in stake** with a **$0.50 daily paper loss circuit breaker**. Optional
+Kalshi credentials may be encrypted locally with Windows DPAPI via the page;
+**they are not used to submit orders**. This release has **no live-order
+endpoint** and does not claim profitable performance.
+
+See [AutoTrader design, safeguards, and limitations](docs/autotrader-paper.md).
