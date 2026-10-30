@@ -44,3 +44,9 @@ def test_portable_fail_closed_when_dpapi_unavailable():
     if vault.os.name != "nt":
         with pytest.raises(vault.VaultError, match="Windows DPAPI"):
             vault._dpapi(b"secret", decrypt=False)
+
+def test_malformed_api_id_never_persists(tmp_path):
+    store = vault.CredentialVault(tmp_path / "creds.dpapi")
+    with pytest.raises(vault.VaultError, match="API key ID"):
+        store.save("bad\\r\\nX-Header: injection", sample_pem())
+    assert not store.exists()
