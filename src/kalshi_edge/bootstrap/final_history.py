@@ -336,7 +336,12 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
     from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
     trader = paper_trader if paper_trader is not None else PaperTrader(root)
-    vault = credential_vault if credential_vault is not None else CredentialVault()
+    try:
+        vault = credential_vault if credential_vault is not None else CredentialVault()
+    except VaultError:
+        # Linux CI and non-Windows hosts have no Windows DPAPI. Keep the
+        # read-only/paper dashboard functional, never persist secrets.
+        vault = None
 
     class HistoryHandler(BaseHTTPRequestHandler):
         def _json(self, status: int, data: dict) -> None:
@@ -381,6 +386,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                     return
                 trader.enable(self.path.endswith("/enable"))
                 self._json(200, {"mode": "PAPER_ONLY", "enabled": trader.enabled()})
+                return
+
+            if self.path.startswith("/api/autotrader/credentials") and vault is None:
+                self._json(503, {"error": "Windows DPAPI credential storage unavailable"})
                 return
 
             if self.path == "/api/autotrader/credentials/delete":
@@ -460,6 +469,8 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                     return
                 status = trader.status()
                 try:
+                    if vault is None:
+                        raise VaultError("Windows DPAPI credential storage unavailable")
                     status["credentials_saved"] = vault.exists()
                     status["credentials_supported"] = True
                 except (VaultError, OSError):
@@ -529,7 +540,10 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     worker = threading.Thread(target=resolve_loop, name="kalshi-final-settlement-reader", daemon=True)
     from kalshi_edge.trading.paper import PaperTrader  # lazy: avoid circular import
     paper_trader = PaperTrader(root)
-    credential_vault = CredentialVault()
+    try:
+        credential_vault = CredentialVault()
+    except VaultError:
+        credential_vault = None
     paper_worker = threading.Thread(
         target=paper_trader.run_forever, args=(stop,),
         name="kalshi-paper-autotrader", daemon=True,
