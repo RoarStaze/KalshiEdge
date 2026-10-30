@@ -25,6 +25,8 @@ from .final_forecast import FinalForecastGate, FinalForecastWriter
 from .live_binance import BinanceLiveFeed
 from .live_kalshi import BRTIObservation, KalshiLiveFeed, LiveMarket, LiveQuote, LiveTrade, MarketLifecycle
 from .types import FeedQuality, FeatureRow, MarketLabel, PredictionRecord
+from .v6_risk import compute_brti_strike_risk
+from .v61_shadow_policy import POLICY_ID, risk_adjusted_shadow_probability
 
 
 NS = 1_000_000_000
@@ -47,6 +49,17 @@ class LivePredictionRecord(PredictionRecord):
     kalshi_prior: float | None = Field(default=None, ge=0.0, le=1.0)
     brti_value: float | None = Field(default=None, gt=0.0)
     btc_reference: float | None = Field(default=None, gt=0.0)
+    brti_source_ts_ns: int | None = Field(default=None, gt=0)
+    binance_source_ts_ns: int | None = Field(default=None, gt=0)
+    brti_binance_gap_bps: float | None = None
+    brti_shadow_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    brti_shadow_expected_move_pct: float | None = Field(default=None, ge=0.0)
+    brti_shadow_risk_ratio: float | None = Field(default=None, ge=0.0)
+    brti_shadow_risk_sigma: float | None = Field(default=None, ge=0.0)
+    brti_shadow_risk_observed_seconds: float | None = Field(default=None, ge=0.0)
+    brti_shadow_risk_observation_count: int | None = Field(default=None, ge=0)
+    v61_shadow_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    v61_shadow_policy: str | None = None
     structural_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     ml_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     residual_probability: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -532,6 +545,37 @@ class LivePredictor:
         from .volatility import analytic_estimate
         overlay = getattr(self.pipeline, "volatility_overlay", None)
         vol_estimate = analytic_estimate(full_row.features) if overlay is not None and seconds_remaining >= 60 else None
+
+        # Independent, read-only V6 shadow estimate.
+        # BRTI replaces Binance as the starting settlement reference.
+        # Binance realized volatility remains an experimental proxy.
+        brti_shadow = (
+            analytic_estimate({
+                **full_row.features,
+                "btc_close": self.state.latest_brti.value,
+            })
+            if seconds_remaining >= 60.0 else None
+        )
+        # Research-only diagnostic: never gates, calibrates, or changes V5/V6.
+        # The feature filters out observations after now_ns.
+        shadow_risk = (
+            compute_brti_strike_risk(
+                [(item.source_ts_ns, item.value) for item in self.state.brti_observations],
+                checkpoint_ts_ns=now_ns,
+                brti_value=self.state.latest_brti.value,
+                strike=market.strike,
+                seconds_remaining=seconds_remaining,
+            )
+            if seconds_remaining >= 60.0 else None
+        )
+
+        # Frozen, research-only confidence shrinker. Not a fitted calibrator.
+        # V5 p_yes, V6 shadow, and FinalForecastGate remain unchanged.
+        v61_shadow_p = risk_adjusted_shadow_probability(
+            None if brti_shadow is None else brti_shadow.probability_above,
+            None if shadow_risk is None else shadow_risk.adjusted_distance,
+        )
+
         return LivePredictionRecord(
             prediction_ts_ns=now_ns,
             market_ticker=market.ticker,
@@ -549,12 +593,32 @@ class LivePredictor:
             kalshi_prior=values["kalshi_prior"],
             brti_value=self.state.latest_brti.value,
             btc_reference=self.state.latest_bar.close,
+            brti_source_ts_ns=self.state.latest_brti_ts_ns,
+            binance_source_ts_ns=self.state.latest_binance_ts_ns,
+            brti_binance_gap_bps=(
+                (self.state.latest_brti.value - self.state.latest_bar.close)
+                / market.strike * 10_000.0
+            ),
+            brti_shadow_probability=(
+                None if brti_shadow is None
+                else brti_shadow.probability_above
+            ),
+            brti_shadow_expected_move_pct=(
+                None if brti_shadow is None
+                else brti_shadow.expected_move_pct
+            ),
             structural_probability=values["structural"],
             ml_probability=values["historical_ml"],
             residual_probability=values["residual_corrected"],
             final_probability=p_yes,
             confidence=confidence,
             component_disagreement=disagreement,
+            brti_shadow_risk_ratio=None if shadow_risk is None else shadow_risk.adjusted_distance,
+            brti_shadow_risk_sigma=None if shadow_risk is None else shadow_risk.sigma_per_sqrt_second,
+            brti_shadow_risk_observed_seconds=None if shadow_risk is None else shadow_risk.observed_seconds,
+            brti_shadow_risk_observation_count=None if shadow_risk is None else shadow_risk.observation_count,
+            v61_shadow_probability=v61_shadow_p,
+            v61_shadow_policy=POLICY_ID if v61_shadow_p is not None else None,
             volatility_analytic_probability=None if vol_estimate is None else vol_estimate.probability_above,
             volatility_expected_move_pct=None if vol_estimate is None else vol_estimate.expected_move_pct,
             volatility_weight=None if vol_estimate is None else overlay.weight,

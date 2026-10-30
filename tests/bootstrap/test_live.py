@@ -670,3 +670,48 @@ def test_predict_live_cli_dispatches_only_to_task9_entrypoint(monkeypatch) -> No
     monkeypatch.setattr(live, "run_live", fake_run_live)
     assert main(["predict-live"]) == 0
     assert called == [True]
+
+
+def test_v6_brti_shadow_preserves_original_model_prediction():
+    now = CLOSE - 240 * NS
+    state = _healthy_state(now)
+    result = _predictor(state).predict(now)
+
+    assert result.status == "OK"
+    assert result.final_probability == pytest.approx(0.66)
+
+    assert result.brti_shadow_probability is not None
+    assert 0.0 <= result.brti_shadow_probability <= 1.0
+
+    assert result.brti_source_ts_ns == state.latest_brti_ts_ns
+    assert result.binance_source_ts_ns == state.latest_binance_ts_ns
+
+    expected_gap = (
+        (state.latest_brti.value - state.latest_bar.close)
+        / state.market.strike * 10_000
+    )
+    assert result.brti_binance_gap_bps == pytest.approx(expected_gap)
+
+
+def test_v6_shadow_fields_are_backward_compatible():
+    from kalshi_edge.bootstrap.live import LivePredictionRecord
+
+    now = CLOSE - 240 * NS
+    result = _predictor(_healthy_state(now)).predict(now)
+    data = result.model_dump(mode="json")
+
+    new_fields = (
+        "brti_source_ts_ns",
+        "binance_source_ts_ns",
+        "brti_binance_gap_bps",
+        "brti_shadow_probability",
+        "brti_shadow_expected_move_pct",
+    )
+
+    for field in new_fields:
+        data.pop(field, None)
+
+    restored = LivePredictionRecord.model_validate(data)
+
+    for field in new_fields:
+        assert getattr(restored, field) is None
