@@ -52,7 +52,7 @@ SECTION = r"""
   </div>
   <div class="auto-panel">
    <h3>Kalshi API credentials</h3>
-   <p>Optional in paper mode. Encrypt and save to your Windows account outside this repository. Credentials are not used for placing orders.</p>
+   <p>Save one API key here for the live Kalshi orderbook feed and future trading features. Encrypted to your Windows account outside the repository. Real-money order placement remains disabled.</p>
    <form id="autotrader-credentials" autocomplete="off">
     <label class="auto-field" for="auto-key">API Key ID</label>
     <input class="auto-input" id="auto-key" required maxlength="150" autocomplete="off" spellcheck="false">
