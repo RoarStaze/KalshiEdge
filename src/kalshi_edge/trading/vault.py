@@ -10,8 +10,10 @@ import ctypes
 from ctypes import wintypes
 import json
 import os
+import re
 from pathlib import Path
 
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 
@@ -67,13 +69,13 @@ def default_vault_path() -> Path:
 
 
 def validate_key(api_key_id: str, pem: str) -> None:
-    if not isinstance(api_key_id, str) or not 1 <= len(api_key_id) <= 150:
+    if not isinstance(api_key_id, str) or re.fullmatch(r"[A-Za-z0-9-]{1,150}", api_key_id) is None:
         raise VaultError("invalid API key ID")
     if not isinstance(pem, str) or len(pem) > 16000:
         raise VaultError("invalid private key")
     try:
         key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
-    except (TypeError, ValueError, OverflowError) as exc:
+    except (TypeError, ValueError, OverflowError, UnsupportedAlgorithm) as exc:
         raise VaultError("private key is not a supported unencrypted PEM key") from exc
     if not isinstance(key, (rsa.RSAPrivateKey, ed25519.Ed25519PrivateKey)):
         raise VaultError("only RSA or Ed25519 API keys are supported")
