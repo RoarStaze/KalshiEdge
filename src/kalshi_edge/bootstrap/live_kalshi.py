@@ -16,7 +16,8 @@ from pathlib import Path
 import websockets
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..auth import create_auth_headers, load_private_key
+from ..auth import create_auth_headers, load_private_key, load_private_key_pem
+from ..trading.vault import CredentialVault, VaultError
 from ..config import CollectorSettings
 from ..discovery import fetch_open_events_payload
 
@@ -186,6 +187,30 @@ def _needs_market_refresh(event: MarketLifecycle, market: LiveMarket | None, ser
         "settled",
         "metadata_updated",
     }
+
+
+def resolve_live_credentials(
+    settings: CollectorSettings, *, vault: CredentialVault | None = None
+):
+    """Use the main website's saved key first, then legacy KALSHI_ .env.
+
+    This keeps live read-only market data working after API-key rotation without
+    duplicating credentials in .env. A corrupt saved vault fails closed: it must
+    never silently fall back to a revoked or unintended key.
+    """
+    if vault is None:
+        try:
+            vault = CredentialVault()
+        except VaultError:
+            # Non-Windows / no DPAPI: preserve the original .env path.
+            vault = None
+    if vault is not None and vault.exists():
+        key_id, pem = vault.load()
+        key = load_private_key_pem(pem)
+        return key_id, key
+
+    key_id, private_key_path = settings.require_credentials()
+    return key_id, load_private_key(private_key_path)
 
 
 class KalshiLiveFeed:
@@ -470,8 +495,7 @@ class KalshiLiveFeed:
                 tickers = [market.ticker]
                 await _dispatch(callback, market)
 
-                key_id, private_key_path = self.settings.require_credentials()
-                private_key = load_private_key(private_key_path)
+                key_id, private_key = resolve_live_credentials(self.settings)
                 headers = create_auth_headers(
                     key_id=key_id,
                     private_key=private_key,
