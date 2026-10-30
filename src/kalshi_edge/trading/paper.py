@@ -5,6 +5,7 @@ retry uncertain attempts, or substitute live V6/V6.1 forecasts for V5 locks.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -46,10 +47,15 @@ class PaperLedger:
                 settled_ns INTEGER
             )""")
 
-    def _open(self) -> sqlite3.Connection:
+    @contextmanager
+    def _open(self):
         connection = sqlite3.connect(str(self.path), timeout=5)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def reserve(self, ticker: str, forecast: str, now_ns: int) -> bool:
         with self._mutex, self._open() as db:
