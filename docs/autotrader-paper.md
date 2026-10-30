@@ -1,40 +1,34 @@
 # KalshiEdge AutoTrader — paper-first design
 
-## Scope (this PR)
+## Scope
 
-A separate, loopback-only paper-trading companion that reads **immutable V5
-`final_forecasts`**. It never calls an authenticated Kalshi order endpoint.
-It does not modify the existing final forecast gate, model, V6/V6.1
-prospective records, settlement files, or model artifacts.
+A built-in **paper-only AutoTrader panel on the existing dashboard at
+http://127.0.0.1:8899/**. The existing `kalshiedge start` command runs
+the live predictor, settlement reader, paper-trading worker and website.
+The separate standalone AutoTrader site and port 8898 have been removed.
 
-### Launch on Windows
+It reads immutable V5 `final_forecasts` and cannot call authenticated
+Kalshi order endpoints. V5, V6, V6.1 experiments, immutable forecast
+records and settlement scoring remain unchanged. The paper engine is
+disabled on each server restart.
 
-With KalshiEdge installed in the same virtual environment, run the main
-predictor and history dashboard as usual:
+### Launch
 
 ```powershell
 kalshiedge start
 ```
 
-In a **second PowerShell terminal**, at the same project root:
+Open **http://127.0.0.1:8899/** and use the built-in **AutoTrader**
+section below the live prediction panel. The header link scrolls there
+on the same page.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m kalshi_edge.trading
-```
-
-Open **http://127.0.0.1:8898/**. Enable paper trading explicitly. The
-paper engine always starts disabled after restart. Leave both processes
-running to capture the 240-second locked forecast and official settlements.
-
-The website has a local credential form. Pasted API ID + unencrypted
-RSA/Ed25519 PEM are validated and encrypted with **Windows DPAPI** tied to
-your Windows user, saved under
-`%LOCALAPPDATA%\KalshiEdge\autotrader-credentials.dpapi`. They are not
-written to the repository, browser localStorage, or the paper-trading ledger.
-The paper service **does not use credentials to place orders**. You can delete
-the saved credentials through the page. Because the form runs over local
-HTTP, do not expose the port through tunnels, remote bindings, or proxies.
+The credential form saves unencrypted RSA/Ed25519 PEM only temporarily
+in process memory, then stores it through Windows DPAPI bound to the
+Windows user at
+`%LOCALAPPDATA%\\KalshiEdge\\autotrader-credentials.dpapi`.
+Nothing is saved to the Git repo or browser localStorage; the paper
+engine never uses it to place orders. Delete saved credentials directly
+from the same page. Do not expose the local server to the internet.
 
 ### Deterministic entry eligibility
 
