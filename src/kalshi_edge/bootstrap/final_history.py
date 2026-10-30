@@ -24,7 +24,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
 from .autotrader_ui import integrated_page
-from kalshi_edge.trading.paper import PaperTrader
 from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
 
@@ -334,6 +333,7 @@ def read_final_history(root: Path) -> dict[str, Any]:
 
 def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None) -> type[BaseHTTPRequestHandler]:
     from .training_cycle import TrainingController, CycleError
+    from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
     trader = paper_trader if paper_trader is not None else PaperTrader(root)
     vault = credential_vault if credential_vault is not None else CredentialVault()
@@ -527,6 +527,7 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     from .training_cycle import TrainingController
     controller = TrainingController(root)
     worker = threading.Thread(target=resolve_loop, name="kalshi-final-settlement-reader", daemon=True)
+    from kalshi_edge.trading.paper import PaperTrader  # lazy: avoid circular import
     paper_trader = PaperTrader(root)
     credential_vault = CredentialVault()
     paper_worker = threading.Thread(
