@@ -141,7 +141,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 <div class="shell">
 <header>
  <div class="identity"><div class="mark" aria-hidden="true">K</div><div><div class="name">KALSHIEDGE</div><div class="tag">BTC · 15-MINUTE RESEARCH</div></div></div>
- <div class="header-right"><span><span class="status-indicator" id="connection-dot"></span><span id="connection-label">Connecting</span></span><span class="chip">READ-ONLY</span></div>
+ <div class="header-right"><a href="http://127.0.0.1:8898/" title="Open local paper-only AutoTrader (start it separately)">AutoTrader (paper)</a><span><span class="status-indicator" id="connection-dot"></span><span id="connection-label">Connecting</span></span><span class="chip">READ-ONLY</span></div>
 </header>
 <div class="section-intro"><div class="eyebrow">LIVE PREDICTION ENGINE</div><h1>Bitcoin market outlook</h1>
 <p class="subtitle">Live model estimates, one immutable final forecast per market, and settlement-verified history. No automatic trades.</p></div>
