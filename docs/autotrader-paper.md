@@ -22,13 +22,17 @@ Open **http://127.0.0.1:8899/** and use the built-in **AutoTrader**
 section below the live prediction panel. The header link scrolls there
 on the same page.
 
-The credential form saves unencrypted RSA/Ed25519 PEM only temporarily
+The credential form handles RSA/Ed25519 PEM only temporarily
 in process memory, then stores it through Windows DPAPI bound to the
 Windows user at
 `%LOCALAPPDATA%\\KalshiEdge\\autotrader-credentials.dpapi`.
 Nothing is saved to the Git repo or browser localStorage; the paper
-engine never uses it to place orders. Delete saved credentials directly
-from the same page. Do not expose the local server to the internet.
+engine never uses it to place orders. The read-only Kalshi market-data
+WebSocket now reads this same saved API key (Ed25519 or RSA) on connection
+and reconnection, so a separately configured `.env` key is not required.
+Legacy `.env` credentials remain supported when no website key is saved.
+Delete saved credentials directly from the same page. Do not expose the
+local server to the internet.
 
 ### Deterministic entry eligibility
 
