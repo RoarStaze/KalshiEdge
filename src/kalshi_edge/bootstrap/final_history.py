@@ -23,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
+from .autotrader_ui import integrated_page
+from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
 
 LOG = logging.getLogger(__name__)
@@ -329,9 +331,17 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-def _make_handler(root: Path, controller=None) -> type[BaseHTTPRequestHandler]:
+def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None) -> type[BaseHTTPRequestHandler]:
     from .training_cycle import TrainingController, CycleError
+    from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
+    trader = paper_trader if paper_trader is not None else PaperTrader(root)
+    try:
+        vault = credential_vault if credential_vault is not None else CredentialVault()
+    except VaultError:
+        # Linux CI and non-Windows hosts have no Windows DPAPI. Keep the
+        # read-only/paper dashboard functional, never persist secrets.
+        vault = None
 
     class HistoryHandler(BaseHTTPRequestHandler):
         def _json(self, status: int, data: dict) -> None:
@@ -345,7 +355,73 @@ def _make_handler(root: Path, controller=None) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(content)
 
+        def _autotrader_post(self) -> None:
+            # Localhost Host + Origin checks prevent a malicious remote page
+            # from using the local credential/action endpoint.
+            origin = f"http://127.0.0.1:{self.server.server_port}"
+            if (
+                self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+                or self.headers.get("Origin") != origin
+                or self.headers.get("X-KalshiEdge-Action") != "autotrader"
+                or self.headers.get("Content-Type") != "application/json"
+                or self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none")
+            ):
+                self._json(403, {"error": "same-origin AutoTrader action required"})
+                return
+
+            try:
+                length = int(self.headers.get("Content-Length") or "-1")
+                if not 0 <= length <= 18000:
+                    raise ValueError("invalid content length")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("expected JSON object")
+            except (ValueError, UnicodeDecodeError):
+                self._json(400, {"error": "invalid AutoTrader action payload"})
+                return
+
+            if self.path in ("/api/autotrader/paper/enable", "/api/autotrader/paper/disable"):
+                if data != {}:
+                    self._json(400, {"error": "unexpected paper action options"})
+                    return
+                trader.enable(self.path.endswith("/enable"))
+                self._json(200, {"mode": "PAPER_ONLY", "enabled": trader.enabled()})
+                return
+
+            if self.path.startswith("/api/autotrader/credentials") and vault is None:
+                self._json(503, {"error": "Windows DPAPI credential storage unavailable"})
+                return
+
+            if self.path == "/api/autotrader/credentials/delete":
+                if data != {}:
+                    self._json(400, {"error": "unexpected delete action options"})
+                    return
+                try:
+                    vault.delete()
+                except (OSError, VaultError):
+                    self._json(503, {"error": "cannot delete local credentials"})
+                    return
+                self._json(200, {"saved": False})
+                return
+
+            if self.path == "/api/autotrader/credentials":
+                if set(data) != {"api_key_id", "private_key_pem"}:
+                    self._json(400, {"error": "invalid credential fields"})
+                    return
+                try:
+                    vault.save(data["api_key_id"], data["private_key_pem"])
+                except (VaultError, OSError, TypeError):
+                    self._json(400, {"error": "invalid credentials or Windows secure storage unavailable"})
+                    return
+                self._json(200, {"saved": True})
+                return
+
+            self._json(404, {"error": "unknown AutoTrader action"})
+
         def do_POST(self) -> None:
+            if self.path.startswith("/api/autotrader/"):
+                self._autotrader_post()
+                return
             if self.path != "/api/training/start":
                 self._json(404, {"error": "endpoint not found"})
                 return
@@ -387,8 +463,23 @@ def _make_handler(root: Path, controller=None) -> type[BaseHTTPRequestHandler]:
             self._json(202, result)
 
         def do_GET(self) -> None:
+            if self.path == "/api/autotrader/status":
+                if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+                    self._json(403, {"error": "invalid local host"})
+                    return
+                status = trader.status()
+                try:
+                    if vault is None:
+                        raise VaultError("Windows DPAPI credential storage unavailable")
+                    status["credentials_saved"] = vault.exists()
+                    status["credentials_supported"] = True
+                except (VaultError, OSError):
+                    status["credentials_saved"] = False
+                    status["credentials_supported"] = False
+                self._json(200, status)
+                return
             if self.path == "/":
-                content = _PAGE.encode("utf-8")
+                content = integrated_page(_PAGE).encode("utf-8")
                 kind = "text/html; charset=utf-8"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -447,9 +538,23 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     from .training_cycle import TrainingController
     controller = TrainingController(root)
     worker = threading.Thread(target=resolve_loop, name="kalshi-final-settlement-reader", daemon=True)
-    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(root, controller=controller))
+    from kalshi_edge.trading.paper import PaperTrader  # lazy: avoid circular import
+    paper_trader = PaperTrader(root)
+    try:
+        credential_vault = CredentialVault()
+    except VaultError:
+        credential_vault = None
+    paper_worker = threading.Thread(
+        target=paper_trader.run_forever, args=(stop,),
+        name="kalshi-paper-autotrader", daemon=True,
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", port),
+        _make_handler(root, controller=controller, paper_trader=paper_trader, credential_vault=credential_vault),
+    )
     server.daemon_threads = True
     worker.start()
+    paper_worker.start()
     print(f"KalshiEdge final history: http://127.0.0.1:{port}/", flush=True)
     print("Read-only local webpage; Ctrl+C to stop.", flush=True)
     try:
@@ -458,7 +563,10 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         pass
     finally:
         stop.set()
+        paper_trader.enable(False)
         controller.stop()
         server.server_close()
         worker.join(timeout=2)
+        paper_worker.join(timeout=3)
+        paper_trader.market_client.close()
     return 0
