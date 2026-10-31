@@ -18,6 +18,7 @@ from typing import Callable
 
 from .autotrade_history import AutoTradeHistory
 from .autotrade_pnl import enrich_history
+from .auto_edge import assess_auto_buy_edge
 from .manual_trade import MAX_REQUEST_DOLLARS
 
 LOG = logging.getLogger(__name__)
@@ -277,6 +278,13 @@ class ArmedAutoTrader:
                     return "NO_QUOTE", {}
             except (KeyError, InvalidOperation, ValueError):
                 return "NO_QUOTE", {}
+        if action == "BUY":
+            # Only a fresh quote with conservative, fee-inclusive model edge
+            # may reach the order journal or a live exchange POST. Never
+            # interfere with risk-reducing reversal SELL orders.
+            edge = assess_auto_buy_edge(preview, confidence)
+            if not edge["approved"]:
+                return "NO_EDGE", {"edge_diagnostics": edge}
         if not self._matches_signal(ticker,close,checkpoint,direction,trigger):
             return "NO_QUOTE", {}
         with self._lock:
@@ -424,6 +432,11 @@ class ArmedAutoTrader:
             if status in ("UNKNOWN","ERROR"):
                 self._status_after_order(status,"Early BUY not confirmed")
                 return
+            if status == "NO_EDGE":
+                self._set(state="WAITING", early_retry_after_ns=now+5*NS,
+                          last_result="NO_EDGE",
+                          message="Early BUY skipped: insufficient fee-adjusted model edge")
+                return
             if status == "NO_QUOTE":
                 self._set(state="WAITING", early_retry_after_ns=now+5*NS,
                           message="Early quote unavailable; waiting for final forecast")
@@ -448,7 +461,8 @@ class ArmedAutoTrader:
         direction=final["forecast"]
         confidence=final.get("confidence")
         if (direction=="SKIP" or type(confidence) not in (int,float)
-                or not math.isfinite(confidence) or confidence<0.69):
+                or not math.isfinite(confidence)
+                or not 0.69 <= confidence <= 1):
             self._finish("SKIPPED","Final SKIP or confidence below 69%; no order")
             return
         side="UP" if direction=="ABOVE" else "DOWN"
@@ -504,6 +518,10 @@ class ArmedAutoTrader:
                                      confidence=float(confidence))
             if status in ("UNKNOWN","ERROR"):
                 self._status_after_order(status,"Final BUY unconfirmed")
+                return
+            if status=="NO_EDGE":
+                self._finish("SKIPPED",
+                             "Final BUY skipped: insufficient fee-adjusted model edge")
                 return
             if status=="NO_QUOTE":
                 if not armed.get("continuous"):

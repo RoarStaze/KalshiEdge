@@ -62,7 +62,8 @@ class Exchange:
         self.quoted.append((ticker,action,side,units,amount))
         if self.on_preview:
             self.on_preview()
-        return {"ticker":ticker,"action":action,"outcome":side,"preview_id":"quoted"}
+        return {"ticker":ticker,"action":action,"outcome":side,"preview_id":"quoted", "count":"0.50", "unit_price":"0.4000",
+                "fee_estimate":"0.005000", "amount_estimate":"0.2050"}
     def place(self,preview_id,ticker):
         self.orders.append((preview_id,ticker))
         return {"status":"FILLED","fill_count":"0.50","order_id":f"order-{ticker}"}
