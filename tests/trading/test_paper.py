@@ -77,3 +77,35 @@ def test_risk_history_stays_in_local_database(tmp_path):
     db.reserve("KXBTC15M-ONE", "SKIP", SCHEDULED)
     db.finish("KXBTC15M-ONE", status="SKIP", reason="confidence too low")
     assert db.snapshot()[0]["reason"] == "confidence too low"
+
+def test_skip_diagnostics_persist_across_restart_with_existing_schema(tmp_path):
+    """Migrate old SQLite in place and expose typed diagnostics only in status."""
+    import sqlite3
+    dbpath = tmp_path / "paper.sqlite3"
+    old = sqlite3.connect(dbpath)
+    old.execute("""CREATE TABLE attempts (
+        ticker TEXT PRIMARY KEY, created_ns INTEGER NOT NULL,
+        forecast TEXT NOT NULL, status TEXT NOT NULL,
+        reason TEXT, price TEXT, quantity TEXT, fee_reserve TEXT,
+        debit TEXT, expected_profit TEXT, model_probability TEXT,
+        actual_side TEXT, net_profit TEXT, settled_ns INTEGER
+    )""")
+    old.commit()
+    old.close()
+    db = PaperLedger(dbpath)
+    db.reserve(TICKER, "ABOVE", SCHEDULED)
+    detail = {
+        "model_win_probability": "0.950000",
+        "entry_price": "0.8000",
+        "candidate_quantity": "0.10",
+        "fee_reserve": "0.020000",
+        "all_in_debit": "0.100000",
+        "expected_net_profit": "-0.005000",
+        "reference_fee_non_direct": "0.010000",
+        "fractional_execution_verified": False,
+    }
+    db.finish(TICKER, status="SKIP", reason="fee-aware cap", diagnostics=detail)
+    reopened = PaperLedger(dbpath).snapshot()[0]
+    assert reopened["status"] == "SKIP"
+    assert reopened["diagnostics"] == detail
+    assert reopened["price"] is None
