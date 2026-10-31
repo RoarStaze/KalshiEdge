@@ -192,8 +192,13 @@ def integrate_round_price_hero(page: str) -> str:
   </div>
 """
     old_clock = 'function clock(){if(!live||!live.market_close_ts_ns)return;text("round-countdown",countdown(live.market_close_ts_ns/1e6))}'
+    old_lock_render = """ if(data.market_close_ts_ns){
+   text("lock-time",local(data.checkpoint_ts_ns/1e6));
+   text("lock-time-label",locked?"Locked at":"Forecast locks at");
+ }else{text("lock-time","—");text("lock-time-label","Forecast locks at")}
+ clock();"""
     anchors = (
-        forecast_anchor, old_times, old_clock,
+        forecast_anchor, old_times, old_clock, old_lock_render,
         "function renderLive(data){", "</style>",
         '<article class="card forecast">',
     )
@@ -203,6 +208,7 @@ def integrate_round_price_hero(page: str) -> str:
     page = page.replace(forecast_anchor, HERO_MARKUP + "\n" + forecast_anchor, 1)
     page = page.replace(old_times, "", 1)
     page = page.replace(old_clock, "function clock(){updateRoundPriceClock();}", 1)
+    page = page.replace(old_lock_render, " clock();", 1)
     page = page.replace(
         "function renderLive(data){",
         HERO_SCRIPT + "\nfunction renderLive(data){\n renderRoundPriceHero(data);",
