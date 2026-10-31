@@ -59,7 +59,7 @@ def test_losing_auto_order_is_negative_not_zero():
     client = Client([fill("order1", "UP", "0.11", "0.9000", "0.1000", "0.0010")],
                     [settlement("no")])
     output = enrich_history(rows, client)[0]
-    assert output["realized_pnl_dollars"] == "-0.1000"
+    assert output["realized_pnl_dollars"] == "-0.10"
 
 
 def test_reversal_includes_both_buys_sell_and_all_fees():
