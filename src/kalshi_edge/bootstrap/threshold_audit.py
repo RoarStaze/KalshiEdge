@@ -106,7 +106,7 @@ def compare_thresholds(
         "brier_all_eligible": brier,
         "thresholds": results,
         "warning": (
-"            "Retrospective descriptive results only. Confidence is not the "
+            "Retrospective descriptive results only. Confidence is not the "
             "same as observed win probability or calibrated forecast probability. "
             "Not an independent validation or promotion decision. "
             "Do not reuse a consumed lockbox to select a threshold."
