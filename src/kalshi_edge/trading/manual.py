@@ -129,7 +129,7 @@ def plan_manual_order(quotes: dict, action: str, side: str, mode: str, amount: s
                              or quote["book_side"] == "ask" and side == "yes"
                              else Decimal("1")-price, ".4f"),
         "estimated_fee_reserve": format(fee, ".4f"),
-        "estimated_total": format(total, ".4f"),
+        "estimated_total": format(total if action == "buy" else max(Decimal("0"), price*count-fee), ".4f"),
         "reduce_only": action == "sell",
     }
     # All V2 quotes use YES book price: bid YES is YES price, ask YES is
@@ -184,6 +184,11 @@ class KalshiManualClient:
         if not isinstance(positions, list):
             raise ManualTradeError("Unexpected portfolio positions")
         return sum((decimal(p["position_fp"]) for p in positions if p.get("ticker") == ticker), Decimal("0"))
+
+    def fills(self, order_id):
+        if not REQUEST_RE.fullmatch(order_id):
+            raise ManualTradeError("Invalid order ID")
+        return self.request("GET", PREFIX+"/portfolio/fills", params={"order_id":order_id})
 
     def order(self, order_id):
         if not REQUEST_RE.fullmatch(order_id):
@@ -319,10 +324,31 @@ class ManualTrading:
             with self._mutex,sqlite3.connect(str(self.ledger)) as db:
                 db.execute("UPDATE clicks SET state=?,exchange_order_id=? WHERE request_id=?",
                            (state,exchange_id,request_id))
+            # After submission, reconcile exact exchange fills if already visible.
+            # Missing/delayed fill history is not a failure and is not fabricated.
+            actual_total = actual_fees = None
+            if fills > 0:
+                try:
+                    items = self.api.fills(exchange_id).get("fills", [])
+                    if isinstance(items, list) and items and all(
+                        row.get("order_id") == exchange_id for row in items
+                    ):
+                        seen = sum((decimal(row["count_fp"]) for row in items),Decimal("0"))
+                        if seen == fills:
+                            gross = sum((decimal(row["count_fp"])*decimal(
+                                row["yes_price_dollars"] if side == "yes"
+                                else row["no_price_dollars"]) for row in items),Decimal("0"))
+                            paid = sum((decimal(row["fee_cost"]) for row in items),Decimal("0"))
+                            actual_total = gross+paid if action == "buy" else gross-paid
+                            actual_fees = paid
+                except (httpx.HTTPError, KeyError, ValueError, TypeError):
+                    pass
             return {
                 "state": state, "ticker":ticker, "side":side, "action":action,
                 "order_id":exchange_id, "filled_shares":str(fills),
                 "requested_shares":plan["count"],
+                "actual_total_dollars": None if actual_total is None else str(actual_total),
+                "actual_fees_dollars": None if actual_fees is None else str(actual_fees),
                 "indicative_cost":plan["estimated_total"],
                 "indicative_fees":plan["estimated_fee_reserve"],
                 "limit_price":plan["outcome_price"], "remaining_count":result.get("remaining_count"),
