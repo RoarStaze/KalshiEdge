@@ -13,7 +13,7 @@ class _Vault:
         return False
 
 
-def test_unified_8899_dashboard_includes_live_price_hero_and_autotrader(tmp_path):
+def test_trade_route_retains_live_price_hero_without_autotrader(tmp_path):
     handler = _make_handler(
         tmp_path,
         paper_trader=PaperTrader(tmp_path),
@@ -32,12 +32,12 @@ def test_unified_8899_dashboard_includes_live_price_hero_and_autotrader(tmp_path
             assert response.text.index('id="lock-banner"') < response.text.index('id="round-price-hero"') < response.text.index('id="direction"')
             assert response.text.count('id="round-countdown"') == 0
             assert ".forecast .round-price-hero" in response.text
-            assert response.text.count('id="autotrader"') == 1
+            assert response.text.count('id="autotrader"') == 0
             assert 'id="hero-current"' in response.text
             assert 'id="hero-strike"' in response.text
             assert 'id="hero-countdown"' in response.text
             assert "renderRoundPriceHero(data);" in response.text
-            assert "setInterval(refreshLive,750)" in response.text
+            assert "setInterval(refreshLive,1000)" in response.text
             assert "setInterval(clock,250)" in response.text
             assert "renderLive(await response.json())" in response.text
             live = client.get(url + "/api/live")
