@@ -234,7 +234,7 @@ SCRIPT = r"""
   button.disabled=autoBusy||autoCurrent.state==="EXECUTING"||(!armed&&!canArm);
   const messages={
    WAITING:"ARMED · "+autoCurrent.amount+" USD each round · "+(autoCurrent.message||"Monitoring 90% live / final forecast")+" ("+(autoCurrent.ticker||"current round")+")",
-   EXECUTING:"Executing AutoTrade: "+(autoCurrent.outcome||"—")+" · "+(autoCurrent.message||"checking Kalshi")+",
+   EXECUTING:"Executing AutoTrade: "+(autoCurrent.outcome||"—")+" · "+(autoCurrent.message||"checking Kalshi"),
    FILLED:"Order filled · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
    NO_FILL:"No shares filled · no automatic retry",
