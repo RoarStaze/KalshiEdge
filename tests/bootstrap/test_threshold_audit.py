@@ -13,7 +13,7 @@ def row(p_yes, actual, *, forecast="ABOVE", reason=None, settled=True):
     }
 
 
-def test_threshold_comparison_and_skipped_forecasts():
+def test_threshold_comparison_uses_live_confidence_not_raw_side_probability():
     rows = [
         row(.90, "ABOVE"),
         row(.88, "BELOW"),
@@ -25,36 +25,27 @@ def test_threshold_comparison_and_skipped_forecasts():
             reason="STALE_BINANCE"),
         row(.99, None, settled=False),
     ]
-
     report = compare_thresholds(rows)
-
     assert report["settled_markets"] == 5
     assert report["eligible_markets"] == 4
     assert report["excluded_markets"] == 1
 
-    at69 = next(
-        x for x in report["thresholds"]
-        if x["minimum_probability"] == .69
-    )
-    assert at69["predictions"] == 3
-    assert at69["correct"] == 2
-    assert at69["accuracy"] == 2 / 3
-    assert at69["coverage"] == .75
+    at69 = next(x for x in report["thresholds"] if x["minimum_confidence"] == .69)
+    assert at69["minimum_probability"] == .845
+    assert at69["predictions"] == 2
+    assert at69["correct"] == 1
+    assert at69["coverage"] == .50
 
-    at845 = next(
-        x for x in report["thresholds"]
-        if x["minimum_probability"] == .845
-    )
-    assert at845["predictions"] == 2
-    assert at845["correct"] == 1
-    assert at845["coverage"] == .5
+    at80 = next(x for x in report["thresholds"] if x["minimum_confidence"] == .80)
+    assert at80["minimum_probability"] == .90
+    assert at80["predictions"] == 1
+    assert at80["correct"] == 1
 
-    at95 = next(
-        x for x in report["thresholds"]
-        if x["minimum_probability"] == .95
-    )
-    assert at95["predictions"] == 0
-    assert at95["accuracy"] is None
+    at90 = next(x for x in report["thresholds"] if x["minimum_confidence"] == .90)
+    assert at90["minimum_probability"] == .95
+    assert at90["predictions"] == 0
+    assert at90["accuracy"] is None
+    assert report["brier_all_eligible"] is not None
 
 
 def test_missing_settlements_do_not_create_accuracy():
@@ -62,7 +53,33 @@ def test_missing_settlements_do_not_create_accuracy():
         row(None, "ABOVE"),
         row(.9, None, settled=False),
     ])
-
     assert report["eligible_markets"] == 0
     assert report["thresholds"][0]["accuracy"] is None
     assert report["thresholds"][0]["coverage"] is None
+
+
+def test_skip_due_to_feed_quality_is_never_reinterpreted():
+    report = compare_thresholds([
+        row(.999, "ABOVE", forecast="SKIP", reason="STALE_FEED"),
+        row(.91, "ABOVE"),
+    ])
+    assert report["eligible_markets"] == 1
+    assert report["thresholds"][0]["predictions"] == 1
+
+
+def test_numerically_valid_probabilities_no_guarantee_model_confidence_is_calibrated():
+    report = compare_thresholds([row(.845, "BELOW")])
+    selected = next(x for x in report["thresholds"] if x["minimum_confidence"] == .69)
+    assert selected["predictions"] == 1
+    assert selected["accuracy"] == 0.0
+
+
+def test_bogus_probabilities_or_invalid_probability_sum_excluded():
+    records = [
+        row(.9, "ABOVE"),
+        row(float("nan"), "ABOVE"),
+        {**row(.80, "ABOVE"), "p_no": .80},
+        {**row(.78, "ABOVE"), "p_yes": True},
+    ]
+    result = compare_thresholds(records)
+    assert result["eligible_markets"] == 1
