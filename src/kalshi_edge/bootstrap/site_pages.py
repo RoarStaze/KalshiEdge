@@ -186,6 +186,19 @@ def render_site_page(page: str, section: str) -> str:
     active = f'<a class="site-nav-link" href="/{section}">{section.title()}</a>'
     page = page.replace(active,
                         f'<a class="site-nav-link is-active" href="/{section}" aria-current="page">{section.title()}</a>', 1)
+    # Replace the legacy read-only disclaimer with route-accurate copy.
+    footer_start = '<footer>Read-only research tool.'
+    footer_end = '</footer>'
+    start = page.find(footer_start)
+    end = page.find(footer_end, start)
+    if start < 0 or end < 0:
+        raise ValueError("Legacy footer not found")
+    disclaimers = {
+        "trade": "Trading is manual and uses real money. Prices, fees and displayed payouts can change until the exchange confirms your fill.",
+        "train": "Models train only when requested. Promotions require the existing independent evaluation checks.",
+        "history": "Accuracy includes settled correct and incorrect directional forecasts only. Pending and SKIP results are excluded.",
+    }
+    page = page[:start] + '<footer>' + disclaimers[section] + footer_end + page[end + len(footer_end):]
     # Background GETs for inactive views needlessly waste API budget.
     old_poll = ('refreshLive();refreshHistory();refreshTraining();\n'
                 'setInterval(refreshLive,750);setInterval(refreshHistory,5000);'
