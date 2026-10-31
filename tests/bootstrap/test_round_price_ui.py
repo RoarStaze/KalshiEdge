@@ -69,7 +69,7 @@ def test_integration_preserves_original_forecast_and_live_status_elements():
 def test_forecast_uses_full_width_primary_card_like_approved_screenshot():
     page=integrate_round_price_hero(PAGE)
     assert ".layout{grid-template-columns:minmax(0,1fr)" in page
-    assert ".hero-price-grid{display:grid;grid-template-columns:1fr 1fr" in page
+    assert ".hero-price-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)" in page
     assert "flex-direction:column" not in page[page.index(".hero-price-grid"):page.index(".hero-price-grid")+120]
     assert ".forecast .round-price-hero" in page
     assert "function clock(){updateRoundPriceClock();" in page
