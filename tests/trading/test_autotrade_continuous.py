@@ -165,3 +165,22 @@ def test_bad_continuous_flag_is_not_accepted(env):
     _,_,_,engine=env
     with pytest.raises(AutoTradeError):
         engine.arm("1",continuous="true",start_worker=False)
+
+
+def test_feed_gap_during_market_rollover_keeps_session_waiting(env):
+    _,feed,manual,engine=env
+    engine.arm("0.65",continuous=True,start_worker=False)
+    def missing():return {}
+    engine.read_live=missing
+    engine.tick()
+    assert engine.status()["state"]=="WAITING"
+    def unavailable():raise ConnectionError("temporary live data gap")
+    engine.read_live=unavailable
+    engine.tick()
+    assert engine.status()["state"]=="WAITING"
+    engine.read_live=feed
+    feed.rollover("KXBTC15M-SECOND")
+    engine.tick()
+    feed.lock("BELOW")
+    engine.tick()
+    assert len(manual.orders)==1
