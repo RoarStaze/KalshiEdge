@@ -20,6 +20,7 @@ from .autotrade_history import AutoTradeHistory
 from .autotrade_pnl import enrich_history
 from .autotrade_scorecard import summarize_autotrade_performance
 from .auto_edge import assess_auto_buy_edge
+from .autotrade_execution_audit import sanitize_quote_snapshot
 from .manual_trade import MAX_REQUEST_DOLLARS
 
 LOG = logging.getLogger(__name__)
@@ -269,6 +270,7 @@ class ArmedAutoTrader:
         checkpoint=armed["checkpoint_ts_ns"]
         try:
             preview=self.manual.preview(ticker,action,side,units,amount)
+            preview_received_at_ns = self.now_ns()
         except Exception:
             return "NO_QUOTE", {}
         if (preview.get("ticker") != ticker or preview.get("action") != action
@@ -286,8 +288,26 @@ class ArmedAutoTrader:
             # may reach the order journal or a live exchange POST. Never
             # interfere with risk-reducing reversal SELL orders.
             edge = assess_auto_buy_edge(preview, confidence)
+            quote_evidence = sanitize_quote_snapshot(
+                preview, edge, preview_received_at_ns=preview_received_at_ns,
+            )
             if not edge["approved"]:
+                # Best-effort RESEARCH telemetry only. Never let audit failure
+                # override the existing safety decision to reject this BUY.
+                if self.history_store is not None:
+                    try:
+                        self.history_store.record_quote_rejection(
+                            ticker=ticker, stage=stage, reason=edge["reason"],
+                            observed_at_ns=preview_received_at_ns,
+                            quote=quote_evidence,
+                        )
+                    except Exception:
+                        LOG.warning("Rejected quote evidence unavailable", exc_info=True)
                 return "NO_EDGE", {"edge_diagnostics": edge}
+        else:
+            quote_evidence = sanitize_quote_snapshot(
+                preview, None, preview_received_at_ns=preview_received_at_ns,
+            )
         if not self._matches_signal(ticker,close,checkpoint,direction,trigger):
             return "NO_QUOTE", {}
         with self._lock:
@@ -303,7 +323,8 @@ class ArmedAutoTrader:
                         outcome=side, amount=armed["amount"], confidence=confidence)
                 self.history_store.record_stage_attempt(
                     ticker=ticker, stage=stage, attempted_at_ns=self.now_ns(),
-                    outcome=side, amount=amount, confidence=confidence)
+                    outcome=side, amount=amount, confidence=confidence,
+                    quote=quote_evidence)
             with self._lock:
                 self._used.add(ticker)
         except Exception:
