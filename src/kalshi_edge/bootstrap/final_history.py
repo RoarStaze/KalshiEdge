@@ -26,6 +26,7 @@ from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
 from .round_price_ui import integrate_round_price_hero
 from .site_pages import render_site_page
+from .api_credentials_ui import integrate_api_credentials
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
@@ -354,9 +355,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
 
     # Build the three local routes once. Do not inject AutoTrader UI;
     # legacy signed API routes remain available to authorized localhost tools.
-    site_template = integrate_manual_trade(integrate_round_price_hero(_PAGE))
+    site_template = integrate_api_credentials(
+        integrate_manual_trade(integrate_round_price_hero(_PAGE)))
     routed_pages = {name: render_site_page(site_template, name).encode("utf-8")
-                    for name in ("trade", "train", "history")}
+                    for name in ("trade", "train", "history", "api")}
 
     class HistoryHandler(BaseHTTPRequestHandler):
         def _json(self, status: int, data: dict) -> None:
@@ -382,7 +384,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 self._json(403, {"error": "local host required"})
                 return
             if manual is None or vault is None or not vault.exists():
-                self._json(503, {"error": "Save Kalshi credentials in the AutoTrader settings first"})
+                self._json(503, {"error": "Connect your Kalshi API credentials on the API page first"})
                 return
             try:
                 parsed = urlsplit(self.path)
@@ -552,6 +554,21 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return
             self._json(202, result)
 
+        def _local_redirect(self, destination: str) -> None:
+            # Local-only fixed destinations; never redirect to a user-supplied URL.
+            self.send_response(302)
+            self.send_header("Location", destination)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _has_saved_credentials(self) -> bool:
+            try:
+                return vault is not None and vault.exists()
+            except (VaultError, OSError):
+                return False
+
         def do_GET(self) -> None:
             if urlsplit(self.path).path.startswith("/api/manual-trade/"):
                 self._manual_get()
@@ -572,9 +589,14 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 self._json(200, status)
                 return
             path = urlsplit(self.path).path
-            if path in ("/", "/trade", "/train", "/history"):
-                section = path[1:] if path != "/" else "trade"
-                content = routed_pages[section]
+            if path == "/":
+                self._local_redirect("/trade" if self._has_saved_credentials() else "/api")
+                return
+            if path == "/trade" and not self._has_saved_credentials():
+                self._local_redirect("/api")
+                return
+            if path in ("/trade", "/train", "/history", "/api"):
+                content = routed_pages[path[1:]]
                 kind = "text/html; charset=utf-8"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")

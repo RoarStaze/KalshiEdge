@@ -32,7 +32,7 @@ def test_manual_routes_require_explicit_same_origin_order_action(tmp_path,monkey
     try:
         origin=f"http://127.0.0.1:{server.server_port}"
         with httpx.Client(timeout=3,trust_env=False) as http:
-            page=http.get(origin+"/")
+            page=http.get(origin+"/trade")
             assert page.status_code==200
             assert 'id="manual-trade"' in page.text
             assert ".context>.context-header,.context>.health{display:none!important}" in page.text

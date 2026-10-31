@@ -25,7 +25,7 @@ def test_trade_route_retains_live_price_hero_without_autotrader(tmp_path):
     try:
         with httpx.Client(timeout=5, trust_env=False) as client:
             url = f"http://127.0.0.1:{server.server_port}"
-            response = client.get(url + "/")
+            response = client.get(url + "/train")
             assert response.status_code == 200
             assert response.text.count('id="round-price-hero"') == 1
             assert response.text.index('class="layout"') < response.text.index('id="round-price-hero"')
@@ -37,7 +37,7 @@ def test_trade_route_retains_live_price_hero_without_autotrader(tmp_path):
             assert 'id="hero-strike"' in response.text
             assert 'id="hero-countdown"' in response.text
             assert "renderRoundPriceHero(data);" in response.text
-            assert "setInterval(refreshLive,1000)" in response.text
+            assert "setInterval(refreshLive,5000)" in response.text
             assert "setInterval(clock,250)" in response.text
             assert "renderLive(await response.json())" in response.text
             live = client.get(url + "/api/live")

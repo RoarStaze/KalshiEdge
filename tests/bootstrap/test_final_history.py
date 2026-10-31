@@ -220,7 +220,7 @@ def test_localhost_dashboard_and_json_api(tmp_path: Path) -> None:
     try:
         with httpx.Client(timeout=5) as client:
             base = f"http://127.0.0.1:{server.server_address[1]}"
-            page = client.get(base + "/")
+            page = client.get(base + "/history")
             assert page.status_code == 200
             assert "Final forecast history" in page.text
             assert "correct + incorrect" in page.text

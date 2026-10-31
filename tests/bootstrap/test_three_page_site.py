@@ -5,6 +5,7 @@ for the legacy forecast/training/history renderers. No live trading performed.
 """
 from http.server import ThreadingHTTPServer
 import threading
+from types import SimpleNamespace
 import httpx
 
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
@@ -14,16 +15,16 @@ from kalshi_edge.bootstrap.site_pages import render_site_page
 from kalshi_edge.bootstrap.final_history import _make_handler
 
 
-def test_navigation_has_three_real_paths_and_active_link():
+def test_navigation_has_four_real_paths_and_active_link():
     template=integrate_manual_trade(integrate_round_price_hero(PAGE))
-    for section in ("trade", "train", "history"):
+    for section in ("trade", "train", "history", "api"):
         page=render_site_page(template,section)
         assert f'data-page="{section}"' in page
-        assert f'<title>KalshiEdge · {section.title()}</title>' in page
-        assert page.count('class="site-nav-link') == 3
-        for other in ("trade","train","history"):
+        assert f'<title>KalshiEdge · {"API" if section == "api" else section.title()}</title>' in page
+        assert page.count('class="site-nav-link') == 4
+        for other in ("trade","train","history","api"):
             assert f'href="/{other}"' in page
-        assert f'aria-current="page">{section.title()}</a>' in page
+        assert f'aria-current="page">{"API" if section == "api" else section.title()}</a>' in page
         assert 'role="navigation"' not in page
         assert 'aria-label="Primary navigation"' in page
 
@@ -70,14 +71,17 @@ def test_hidden_pages_do_not_run_manual_trade_account_poller():
 
 
 def test_real_routes_and_existing_api_remain_available(tmp_path):
-    handler=_make_handler(tmp_path)
+    handler=_make_handler(tmp_path,credential_vault=SimpleNamespace(exists=lambda:True))
     server=ThreadingHTTPServer(("127.0.0.1",0),handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True)
     thread.start()
     try:
         root=f"http://127.0.0.1:{server.server_port}"
         with httpx.Client(timeout=5,trust_env=False) as client:
-            for path,section in (("/","trade"),("/trade","trade"),
+            root_redirect=client.get(root+"/")
+            assert root_redirect.status_code==302
+            assert root_redirect.headers["location"]=="/trade"
+            for path,section in (("/trade","trade"),
                                  ("/train","train"),("/history","history")):
                 r=client.get(root+path)
                 assert r.status_code==200
