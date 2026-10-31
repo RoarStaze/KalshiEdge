@@ -28,7 +28,10 @@ def test_unified_8899_dashboard_includes_live_price_hero_and_autotrader(tmp_path
             response = client.get(url + "/")
             assert response.status_code == 200
             assert response.text.count('id="round-price-hero"') == 1
-            assert response.text.index('id="round-price-hero"') < response.text.index('class="layout"')
+            assert response.text.index('class="layout"') < response.text.index('id="round-price-hero"')
+            assert response.text.index('id="lock-banner"') < response.text.index('id="round-price-hero"') < response.text.index('id="direction"')
+            assert response.text.count('id="round-countdown"') == 0
+            assert ".forecast .round-price-hero" in response.text
             assert response.text.count('id="autotrader"') == 1
             assert 'id="hero-current"' in response.text
             assert 'id="hero-strike"' in response.text
