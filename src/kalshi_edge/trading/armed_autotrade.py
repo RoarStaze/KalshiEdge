@@ -46,6 +46,7 @@ class ArmedAutoTrader:
         # even if the remote response is lost or the fill is partial.
         self._used: set[str] = set()
         self._processed: set[str] = set()
+        self._generation = 0
         self.history_store = AutoTradeHistory(history_path) if history_path else None
 
     def status(self) -> dict:
@@ -105,16 +106,19 @@ class ArmedAutoTrader:
                 "message": ("Armed — waiting for the next market" if skip_current
                             else "Armed — waiting for locked final forecast"),
             }
+            self._generation += 1
+            generation=self._generation
             result = dict(self._state)
         if start_worker:
-            threading.Thread(target=self._loop, name="kalshiedge-armed-auto",
-                             daemon=True).start()
+            threading.Thread(target=self._loop, args=(generation,),
+                             name="kalshiedge-armed-auto",daemon=True).start()
         return result
 
     def cancel(self) -> dict:
         with self._lock:
             if self._state["state"] != "WAITING":
                 raise AutoTradeError("Only an armed, waiting trade can be cancelled")
+            self._generation += 1
             self._state.update(state="CANCELLED", continuous=False,
                                message="AutoTrade cancelled; no further markets")
             return dict(self._state)
@@ -147,15 +151,23 @@ class ArmedAutoTrader:
             # A failed status update leaves UNKNOWN in the history view.
             LOG.exception("AutoTrade history status update failed; verify exchange orders")
 
-    def _loop(self):
+    def _loop(self, generation: int):
         while not self._stop.is_set():
+            with self._lock:
+                if self._generation != generation or self._state["state"] != "WAITING":
+                    return
             try:
                 self.tick()
             except Exception:
-                self._finish("ERROR", "Automation error before order; inspect logs")
+                LOG.exception("AutoTrade worker error")
+                with self._lock:
+                    valid=self._generation == generation
+                if valid:
+                    self._finish("ERROR", "Automation error; inspect local logs")
                 return
-            if self.status()["state"] != "WAITING":
-                return
+            with self._lock:
+                if self._generation != generation or self._state["state"] != "WAITING":
+                    return
             self._stop.wait(0.6)
 
     def tick(self) -> None:
@@ -166,7 +178,15 @@ class ArmedAutoTrader:
         now = self.now_ns()
         ticker,close,checkpoint = (armed["ticker"],armed["market_close_ts_ns"],
                                    armed["checkpoint_ts_ns"])
-        live = self.read_live()
+        # Missing or transiently unavailable market data must not cancel the
+        # user's continuous arm between consecutive BTC markets.
+        try:
+            live = self.read_live()
+        except Exception as exc:
+            LOG.debug("AutoTrade awaiting valid market feed: %s", exc)
+            return
+        if not isinstance(live, dict):
+            return
         observed = live.get("market_ticker")
         if observed is not None and observed != ticker:
             if not armed.get("continuous"):
@@ -281,6 +301,7 @@ class ArmedAutoTrader:
     def close(self):
         self._stop.set()
         with self._lock:
+            self._generation += 1
             if self._state["state"] == "WAITING":
                 self._state.update(state="CANCELLED", continuous=False,
                                    message="Server stopped; disarmed")
