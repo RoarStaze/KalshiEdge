@@ -715,3 +715,82 @@ def test_v6_shadow_fields_are_backward_compatible():
 
     for field in new_fields:
         assert getattr(restored, field) is None
+
+
+def test_live_checkpoint_durable_lock_precedes_continuous_prediction_io():
+    """A slow or failed 1 Hz diagnostics write must not eat the final lock."""
+    from kalshi_edge.bootstrap.live import persist_prediction_tick
+
+    events = []
+    market = SimpleNamespace(ticker="KXBTC15M-TEST", close_ts_ns=CLOSE)
+    prediction = SimpleNamespace(prediction_ts_ns=CLOSE - 240 * NS)
+    final = SimpleNamespace(market_ticker=market.ticker)
+
+    class Gate:
+        def evaluate(self, market_arg, *, now_ns, prediction):
+            assert market_arg is market
+            assert now_ns == CLOSE - 240 * NS
+            events.append("gate")
+            return final
+
+    class FinalWriter:
+        def save(self, value, *, market_close_ts_ns):
+            assert value is final
+            assert market_close_ts_ns == CLOSE
+            events.append("immutable_final_saved")
+            return Path("final.json")
+
+    class ContinuousWriter:
+        def append(self, value):
+            assert value is prediction
+            events.append("continuous_prediction_saved")
+
+    result, saved_path = persist_prediction_tick(
+        market, prediction, now_ns=CLOSE - 240 * NS,
+        final_gate=Gate(), final_writer=FinalWriter(),
+        prediction_writer=ContinuousWriter(),
+    )
+    assert result is final
+    assert saved_path == Path("final.json")
+    assert events == [
+        "gate", "immutable_final_saved", "continuous_prediction_saved"
+    ]
+
+
+def test_checkpoint_lock_survives_failure_of_diagnostics_append():
+    from kalshi_edge.bootstrap.live import persist_prediction_tick
+
+    events = []
+    market = SimpleNamespace(ticker="KXBTC15M-TEST", close_ts_ns=CLOSE)
+    prediction = SimpleNamespace(prediction_ts_ns=CLOSE - 240 * NS)
+
+    class Gate:
+        def evaluate(self, market_arg, *, now_ns, prediction):
+            events.append("gate")
+            return SimpleNamespace(market_ticker=market.ticker)
+
+    class FinalWriter:
+        def save(self, value, *, market_close_ts_ns):
+            events.append("saved")
+            return Path("final.json")
+
+    class FailedContinuousWriter:
+        def append(self, value):
+            events.append("continuous_io_failed")
+            raise OSError("Disk write failed")
+
+    with pytest.raises(OSError, match="Disk write failed"):
+        persist_prediction_tick(
+            market, prediction, now_ns=CLOSE - 240 * NS,
+            final_gate=Gate(), final_writer=FinalWriter(),
+            prediction_writer=FailedContinuousWriter(),
+        )
+    assert events == ["gate", "saved", "continuous_io_failed"]
+
+
+def test_live_prediction_loop_uses_checkpoint_first_persistence():
+    import inspect
+    from kalshi_edge.bootstrap.live import _run_live_async
+    code = inspect.getsource(_run_live_async)
+    assert "persist_prediction_tick(" in code
+    assert "writer.append(prediction)" not in code
