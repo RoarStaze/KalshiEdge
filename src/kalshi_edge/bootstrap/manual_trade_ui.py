@@ -45,6 +45,18 @@ STYLE = r"""
 .manual-trade .mt-auto-arm:disabled{opacity:.45;cursor:not-allowed}
 .manual-trade .mt-auto-arm.armed{background:#3a3020;color:#f6d889;border-color:#a18748}
 .manual-trade .mt-auto-status{font-size:12px;line-height:1.6;margin-top:9px;color:#f1cc70;min-height:19px}
+.manual-trade .mt-auto-history{margin-top:22px;border-top:1px solid #49433a;padding-top:17px}
+.manual-trade .mt-auto-history-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:12px;color:#ebd18f;font-weight:800}
+.manual-trade .mt-auto-history-list{display:grid;gap:9px;max-height:260px;overflow-y:auto;scrollbar-width:thin}
+.manual-trade .mt-auto-history-count,.manual-trade .mt-auto-record-sub{font-size:11px;color:#9daeb0;font-weight:400}
+.manual-trade .mt-auto-record{border:1px solid #353e41;border-radius:11px;background:#152024;padding:11px;display:grid;gap:6px}
+.manual-trade .mt-auto-record-top,.manual-trade .mt-auto-record-sub{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.manual-trade .mt-auto-record-top{font-size:13px;font-weight:800}
+.manual-trade .mt-auto-record-side.up,.manual-trade .mt-auto-record-status.filled{color:#32dba8}
+.manual-trade .mt-auto-record-side.down{color:#ff738f}
+.manual-trade .mt-auto-record-status.warn{color:#f1c46b}
+.manual-trade .mt-auto-record-ticker{font:10px ui-monospace,Consolas,monospace;color:#849a9c;overflow-wrap:anywhere}
+.manual-trade .mt-auto-empty{color:#9faeb0;font-size:12px;line-height:1.6;padding:8px 0}
 .manual-trade .mt-inputbox{height:55px;border:1px solid #32353a;border-radius:10px;display:flex;
   align-items:center;gap:8px;padding:0 18px;margin:18px 0 11px}
 .manual-trade .mt-inputbox:focus-within{border-color:#e3c45c}
@@ -137,6 +149,10 @@ SECTION = r"""
    <div class="mt-auto-status mt-hidden" id="manual-auto-status" role="status" aria-live="polite"></div>
    <div class="mt-warning" id="manual-status" role="status" aria-live="polite">Awaiting a live Kalshi market…</div>
    <div class="mt-fine">Real orders · quotes and fees can change · unfilled IOC quantity is canceled</div>
+   <section class="mt-auto-history mt-hidden" id="manual-auto-history" aria-label="AutoTrade execution history">
+    <div class="mt-auto-history-head"><span>AutoTrade History</span><span class="mt-auto-history-count" id="manual-auto-history-count"></span></div>
+    <div class="mt-auto-history-list" id="manual-auto-history-list" aria-live="polite"><div class="mt-auto-empty">No AutoTrades recorded yet.</div></div>
+   </section>
   </div>
  </div>
  <div id="manual-confirm" class="mt-confirm" aria-live="polite">
@@ -170,7 +186,7 @@ SCRIPT = r"""
  const probabilityPercent=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
  let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false,previewGeneration=0;
  let buyUnits="DOLLARS",marketGeneration=0,autoSelected=false,autoBusy=false;
- let autoCurrent={state:"IDLE"};
+ let autoCurrent={state:"IDLE"},lastHistoryFetch=0;
  const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
  function renderAccountSummary(value){
   shown("manual-cash",value?money(value.available_balance):"—");
@@ -206,6 +222,7 @@ SCRIPT = r"""
   byId("manual-down").classList.toggle("active",!autoSelected&&outcome==="DOWN");
   byId("manual-auto-arm").classList.toggle("mt-hidden",!selected);
   byId("manual-auto-status").classList.toggle("mt-hidden",!selected);
+  byId("manual-auto-history").classList.toggle("mt-hidden",!selected);
   byId("manual-auto-arm").classList.toggle("armed",armed);
   byId("manual-units").value=selected?"DOLLARS":action==="SELL"?"SHARES":buyUnits;
   byId("manual-units").disabled=selected||action==="SELL"||armed;
@@ -263,6 +280,7 @@ SCRIPT = r"""
   if(!autoSelected)buyUnits=byId("manual-units").value;
   autoSelected=true;
   renderAuto();
+  refreshAutoHistory(true);
   refreshPreview();
  }
  const url=path=>"/api/manual-trade/"+path;
@@ -273,11 +291,61 @@ SCRIPT = r"""
   if(!response.ok)throw Error(body.error||"HTTP "+response.status);
   return body;
  }
+
+ async function refreshAutoHistory(force=false){
+  if(!autoSelected||action!=="BUY")return;
+  if(!force&&Date.now()-lastHistoryFetch<8000)return;
+  lastHistoryFetch=Date.now();
+  const list=byId("manual-auto-history-list");
+  try{
+   const result=await autoJSON("history");
+   if(!autoSelected||action!=="BUY")return;
+   if(!Array.isArray(result.entries))throw Error("Invalid history response");
+   list.replaceChildren();
+   shown("manual-auto-history-count",result.entries.length?result.entries.length+" recent markets":"");
+   if(!result.entries.length){
+    const empty=document.createElement("div");empty.className="mt-auto-empty";
+    empty.textContent="No AutoTrades recorded yet.";list.appendChild(empty);return;
+   }
+   for(const entry of result.entries){
+    const item=document.createElement("div");item.className="mt-auto-record";
+    const header=document.createElement("div");header.className="mt-auto-record-top";
+    const side=document.createElement("span");
+    side.className="mt-auto-record-side "+(entry.outcome==="UP"?"up":"down");
+    side.textContent=entry.outcome==="UP"?"UP":"DOWN";
+    const state=document.createElement("span");
+    state.className="mt-auto-record-status "+(entry.status==="FILLED"?"filled":"warn");
+    state.textContent=entry.status==="NO_FILL"?"NO FILL":String(entry.status||"UNKNOWN");
+    header.append(side,state);item.appendChild(header);
+    const meta=document.createElement("div");meta.className="mt-auto-record-sub";
+    const amount=document.createElement("span");amount.textContent="Amount "+money(entry.amount);
+    const time=document.createElement("span");
+    const ms=Number(entry.attempted_at_ns)/1000000;
+    time.textContent=Number.isFinite(ms)?new Date(ms).toLocaleString():"Time unavailable";
+    meta.append(amount,time);item.appendChild(meta);
+    const detail=document.createElement("div");detail.className="mt-auto-record-sub";
+    const confidence=document.createElement("span");
+    confidence.textContent=entry.confidence!=null?"Confidence "+(100*Number(entry.confidence)).toFixed(1)+"%":"";
+    const fill=document.createElement("span");
+    fill.textContent=entry.fill_count!=null?"Filled "+entry.fill_count+" shares":entry.status==="UNKNOWN"?"Verify Kalshi order":"";
+    detail.append(confidence,fill);item.appendChild(detail);
+    const ticker=document.createElement("div");ticker.className="mt-auto-record-ticker";
+    ticker.textContent=String(entry.ticker||"");
+    item.appendChild(ticker);list.appendChild(item);
+   }
+  }catch(e){
+   if(!autoSelected)return;
+   list.replaceChildren();
+   const el=document.createElement("div");el.className="mt-auto-empty";
+   el.textContent="History unavailable: "+e.message;list.appendChild(el);
+  }
+ }
  async function refreshAuto(){
   try{
    autoCurrent=await autoJSON("status");
    if(autoPending()&&action==="BUY"&&!autoSelected){autoSelected=true;renderAuto();refreshPreview();}
    renderAuto();
+   if(autoSelected)refreshAutoHistory();
   }catch(e){if(autoSelected)shown("manual-auto-status","AutoTrade status unavailable: "+e.message)}
  }
  async function armOrCancel(){
