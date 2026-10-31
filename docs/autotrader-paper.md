@@ -41,8 +41,12 @@ local server to the internet.
 - No trade later than 20 seconds after that recorded checkpoint.
 - Require original V5 directional probability at least 84.5%, matching the
   immutable confidence gate (69% scaled confidence).
-- Confirm matching market ticker, strike, close time, active status, and
-  fractional-contract support from Kalshi's public API.
+- Confirm matching market ticker, strike, close time and active status.
+  Kalshi's single-market response may omit `fractional_trading_enabled`.
+  In **paper-only mode**, an omitted flag permits an explicitly **unverified**
+  fractional-fill simulation using 0.01-contract sizing; a present non-true
+  flag rejects entry. This is **not evidence that KXBTC15M supports live
+  fractional orders**; demo/live eligibility requires separate confirmation.
 - Derive best BUY ask from the **opposite** bid side of the `orderbook_fp`.
   For YES/ABOVE ask = 1 - best NO bid; for NO/BELOW ask = 1 - best YES bid.
 - Round quantity DOWN to 0.01 contract granularity, never crossing total
