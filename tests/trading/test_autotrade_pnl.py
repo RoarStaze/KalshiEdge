@@ -131,6 +131,27 @@ def test_missing_marked_price_or_fee_refuses_exact_pnl():
     assert output["realized_pnl_dollars"] is None
 
 
+def test_reversed_market_card_shows_final_bought_side_and_quantity():
+    rows = [entry([stage("EARLY_BUY", "UP", "0.10", "first"),
+                   stage("REVERSAL_SELL", "UP", "0.10", "second"),
+                   stage("FINAL_BUY", "DOWN", "0.11", "third")])]
+    output = enrich_history(rows, None)[0]
+    assert output["outcome"] == "DOWN"
+    assert output["status"] == "FILLED"
+    assert output["fill_count"] == "0.11"
+
+
+def test_retry_market_card_does_not_report_initial_no_fill():
+    row = entry([stage("EARLY_BUY", "UP", "0.00", "empty", "NO_FILL"),
+                 stage("FINAL_BUY", "DOWN", "0.11", "filled")])
+    row["status"] = "NO_FILL"
+    row["fill_count"] = "0.00"
+    output = enrich_history([row], None)[0]
+    assert output["status"] == "FILLED"
+    assert output["outcome"] == "DOWN"
+    assert output["max_payout_dollars"] == "0.1100"
+
+
 def test_ui_shows_signed_green_max_payout_and_signed_realized_pnl():
     from kalshi_edge.bootstrap.dashboard_ui import PAGE
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
