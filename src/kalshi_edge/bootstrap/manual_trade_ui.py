@@ -38,6 +38,8 @@ STYLE = r"""
   color:#f4f4f4;border:0;outline:0}
 .manual-trade .mt-inputbox .mt-inputunit{color:#9d9fa4;font-size:17px;font-weight:750}
 .manual-trade .mt-sub{color:#a4a3aa;font-size:13px;line-height:1.6;min-height:19px;margin-bottom:24px}
+.manual-trade .mt-liquidity{display:none;margin:-10px 0 18px;color:#ff9c43;font-size:13px;font-weight:750}
+.manual-trade .mt-liquidity.show{display:block}
 .manual-trade .mt-rows{display:grid;gap:14px;margin:0 0 24px}
 .manual-trade .mt-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:#a4a5ad;font-size:14px}
 .manual-trade .mt-row .mt-number{color:#f4f4f4;font-weight:550;white-space:nowrap;text-align:right}
@@ -86,6 +88,7 @@ SECTION = r"""
     <span class="mt-inputunit" id="manual-inputunit">$</span>
    </div>
    <div class="mt-sub" id="manual-account">Connecting to Kalshi account…</div>
+   <div class="mt-liquidity" id="manual-liquidity" role="status">ⓘ No liquidity</div>
    <div class="mt-rows">
     <div class="mt-row"><span id="manual-quote-label">Odds</span><span class="mt-number" id="manual-odds">—</span></div>
     <div class="mt-row"><span id="manual-cost-label">Estimated cost incl. fee</span><span class="mt-number" id="manual-estimated">—</span></div>
@@ -121,11 +124,16 @@ SCRIPT = r"""
 (function(){
  const byId=id=>document.getElementById(id);
  const shown=(id,value)=>{byId(id).textContent=value};
- const money=v=>Number.isFinite(Number(v))?"$"+Number(v).toFixed(2):"—";
- const cents=v=>Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"¢":"—";
+ const money=v=>v!=null&&Number.isFinite(Number(v))?"$"+Number(v).toFixed(2):"—";
+ const cents=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"¢":"—";
  const priceCents=cents;
- const probabilityPercent=v=>Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
- let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false;
+ const probabilityPercent=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
+ let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false,previewGeneration=0;
+ const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
+ function clearQuote(){
+  quote=null;byId("manual-submit").disabled=true;
+  shown("manual-odds","—");shown("manual-estimated","—");shown("manual-payout","—");
+ }
  function setMode(next){action=next;byId("manual-buy").classList.toggle("active",next==="BUY");
   byId("manual-sell").classList.toggle("active",next==="SELL");
   byId("manual-submit").classList.toggle("sell",next==="SELL");
@@ -151,31 +159,47 @@ SCRIPT = r"""
    const value=await fetchJSON("market");
    snapshot=value;shown("manual-account",action==="BUY"?"Predictions account · "+money(value.available_balance)+" available":
      "Your position: "+(Math.abs(Number(value.position_yes))||0).toFixed(2)+" "+(Number(value.position_yes)>=0?"Yes":"No"));
-   shown("manual-up","UP "+priceCents(value.up_ask));
-   shown("manual-down","DOWN "+priceCents(value.down_ask));
+   shown("manual-up",value.up_ask==null?"UP —":"UP "+priceCents(value.up_ask));
+   shown("manual-down",value.down_ask==null?"DOWN —":"DOWN "+priceCents(value.down_ask));
    await refreshPreview();
-  }catch(e){snapshot=null;quote=null;byId("manual-submit").disabled=true;shown("manual-status",e.message);
+  }catch(e){snapshot=null;previewGeneration++;clearQuote();setLiquidity(false);shown("manual-status",e.message);
    shown("manual-account","Kalshi market or credentials unavailable");
   }
  }
  async function refreshPreview(){
   if(placing)return;
-  quote=null;byId("manual-submit").disabled=true;
+  const generation=++previewGeneration;
+  clearQuote();setLiquidity(false);
   const amount=byId("manual-amount").value,units=byId("manual-units").value;
   shown("manual-inputunit",units==="DOLLARS"?"$":"SHARES");
   if(!snapshot){shown("manual-status","Awaiting live market");return}
+  // Buying a side with an empty book is not a zero-percent quote.
+  // SELL uses the opposite book and is independently checked by preview.
+  const ask=outcome==="UP"?snapshot.up_ask:snapshot.down_ask;
+  if(action==="BUY"&&ask==null){
+   setLiquidity(true);
+   shown("manual-status","Selected side has no liquidity");
+   return;
+  }
   if(!(Number(amount)>0)){shown("manual-status","Enter a trade amount to receive a live quote.");return}
   try{
    const qs=new URLSearchParams({action,outcome,units,amount});
    const value=await fetchJSON("preview?"+qs.toString());
-   if(value.ticker!==snapshot.ticker||value.action!==action||value.outcome!==outcome
+   if(generation!==previewGeneration||!snapshot||value.ticker!==snapshot.ticker
+     ||value.action!==action||value.outcome!==outcome
      ||value.units!==units||byId("manual-amount").value!==amount)return;
    quote=value;shown("manual-odds",probabilityPercent(value.unit_price));
    shown("manual-estimated",money(value.amount_estimate)+" est.");
    shown("manual-payout",action==="BUY"?money(value.maximum_payout):Number(value.count).toFixed(2));
    byId("manual-submit").disabled=false;
    shown("manual-status","Live quote · "+Number(value.count).toFixed(2)+" shares · est. fee "+money(value.fee_estimate));
-  }catch(e){shown("manual-status",e.message);shown("manual-estimated","—");shown("manual-payout","—")}
+  }catch(e){
+   if(generation!==previewGeneration)return;
+   clearQuote();
+   const missing=e.message.includes("No liquidity");
+   setLiquidity(missing);
+   shown("manual-status",missing?"Selected side has no liquidity":e.message);
+  }
  }
  async function place(){
   if(placing||!quote)return;
