@@ -17,11 +17,11 @@ HERO_STYLE = r"""
 .forecast .hero-price-half+.hero-price-half{border-left:1px solid #345269;padding-left:12px;margin-left:10px}
 .forecast .hero-price-label{display:flex;align-items:center;gap:5px;font-size:clamp(9px,2.4cqw,16px);line-height:1.35;font-weight:800;letter-spacing:.6px;color:#a3bdd9;white-space:nowrap}
 .forecast .hero-info{display:inline-grid;place-items:center;width:15px;height:15px;flex:none;border:1.5px solid #6984a1;border-radius:50%;color:#93b1ce;font-size:10px;font-weight:800;letter-spacing:0}
-.forecast .hero-price-number{display:block;margin:11px 0 9px;font-size:clamp(18px,6.15cqw,72px);font-weight:800;line-height:1.12;letter-spacing:-.9px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.forecast .hero-price-number{display:block;margin:11px 0 9px;font-size:clamp(20px,7.15cqw,72px);font-weight:800;line-height:1.12;letter-spacing:-.9px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .forecast .hero-price-number.up{color:#18dfa0;text-shadow:0 0 20px #18dfa01a}
 .forecast .hero-price-number.down{color:#ff647e;text-shadow:0 0 20px #ff647e1a}
 .forecast .hero-price-number.flat{color:#f5f9fc}
-.forecast .hero-change{min-height:20px;line-height:1.4;font-weight:700;font-size:clamp(11px,3cqw,30px);white-space:nowrap;letter-spacing:-.2px;font-variant-numeric:tabular-nums}
+.forecast .hero-change{min-height:20px;line-height:1.4;font-weight:700;font-size:clamp(11px,3.5cqw,30px);white-space:nowrap;letter-spacing:-.2px;font-variant-numeric:tabular-nums}
 .forecast .hero-change.up{color:#18dfa0}.forecast .hero-change.down{color:#ff647e}.forecast .hero-change.flat{color:#acc0d5}
 .forecast .hero-meta{font-size:clamp(10px,2.15cqw,17px);color:#9db8d5;line-height:1.45}
 .forecast .hero-meta.source{font-size:10px;color:#819fb6;margin-top:2px}
@@ -31,7 +31,7 @@ HERO_STYLE = r"""
 .forecast .hero-clock-left{display:flex;gap:9px;min-width:0;align-items:center}
 .forecast .hero-hourglass{width:clamp(18px,5cqw,47px);height:clamp(26px,6.6cqw,64px);color:#ff8b40;flex:none}
 .forecast .hero-clock-label{color:#afc1d4;letter-spacing:.6px;font-size:clamp(8px,2cqw,16px);font-weight:800;white-space:nowrap}
-.forecast .hero-clock-number{color:#ff923f;font-size:clamp(26px,7cqw,67px);line-height:1.08;font-weight:850;letter-spacing:.1px;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.forecast .hero-clock-number{color:#ff923f;font-size:clamp(26px,7.8cqw,67px);line-height:1.08;font-weight:850;letter-spacing:.1px;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .forecast .hero-clock-right{border-left:1px solid #614c43;padding-left:10px;min-width:0}
 .forecast .hero-lock-time{color:#f5f4f2;font-size:clamp(13px,3.65cqw,34px);font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.4px;margin-top:7px}
 .forecast .record-note{border:1px solid #345167;border-left:3px solid #7da1bd;border-radius:8px;background:#112334;padding:13px 14px;margin-top:18px}
