@@ -188,7 +188,7 @@ def render_site_page(page: str, section: str) -> str:
                         f'<a class="site-nav-link is-active" href="/{section}" aria-current="page">{section.title()}</a>', 1)
     # Background GETs for inactive views needlessly waste API budget.
     old_poll = ('refreshLive();refreshHistory();refreshTraining();\n'
-                ' setInterval(refreshLive,750);setInterval(refreshHistory,5000);'
+                'setInterval(refreshLive,750);setInterval(refreshHistory,5000);'
                 'setInterval(refreshTraining,5000);setInterval(clock,250);')
     new_poll = ('const sitePage=document.body.dataset.page;\n'
                 ' if(sitePage==="trade"){refreshLive();setInterval(refreshLive,1000);setInterval(clock,250);}\n'
