@@ -109,7 +109,8 @@ class ArmedAutoTrader:
                 "continuous": continuous, "amount": format(d, ".2f"),
                 "checkpoint_ts_ns": checkpoint, "market_close_ts_ns": close,
                 "armed_at_ns": now, "last_result": None,
-                "outcome": None, "order_id": None,
+                "outcome": None, "order_id": None, "trigger": None,
+                "early_retry_after_ns": 0,
                 "message": ("Armed — waiting for next BTC market"
                             if skip_current and continuous
                             else "Armed — waiting for locked final forecast"),
@@ -169,6 +170,17 @@ class ArmedAutoTrader:
                 return
             self._stop.wait(0.6)
 
+
+    def _defer_early(self, ticker: str, message: str) -> None:
+        """No order was sent. Leave this ticker available for final fallback."""
+        with self._lock:
+            if self._state.get("ticker") != ticker or self._state["state"] != "EXECUTING":
+                return
+            self._state.update(
+                state="WAITING", outcome=None, trigger=None,
+                early_retry_after_ns=self.now_ns() + 5 * NS,
+                message=message + " · will use the final forecast if needed",
+            )
 
     def _early_signal(self, live: dict, *, now: int, ticker: str,
                       close: int, checkpoint: int) -> tuple[str, float] | None:
@@ -243,7 +255,7 @@ class ArmedAutoTrader:
                     ticker=observed,
                     market_close_ts_ns=new_close,
                     checkpoint_ts_ns=new_checkpoint,
-                    outcome=None, order_id=None,
+                    outcome=None, order_id=None, trigger=None, early_retry_after_ns=0,
                     message=("Waiting for the following BTC market"
                              if missed else
                              "New market found — waiting for locked final forecast"),
@@ -261,6 +273,8 @@ class ArmedAutoTrader:
             return
         early = None
         if now < checkpoint:
+            if now < armed.get("early_retry_after_ns", 0):
+                return
             early = self._early_signal(
                 live, now=now, ticker=ticker, close=close, checkpoint=checkpoint
             )
@@ -324,7 +338,10 @@ class ArmedAutoTrader:
                     or after.get("checkpoint_ts_ns") != checkpoint
                     or not valid_signal
                     or check_now >= close - MIN_EXECUTION_REMAINING_NS):
-                self._finish("EXPIRED", "Market or signal changed before order")
+                if trigger == "EARLY":
+                    self._defer_early(ticker, "Early signal changed before order")
+                else:
+                    self._finish("EXPIRED", "Market or signal changed before order")
                 return
             # Record the market before POST; failure to persist blocks the
             # exchange operation. This also prevents replay after a restart.
@@ -354,9 +371,12 @@ class ArmedAutoTrader:
             self._finish(status, "Exchange confirmed "+status.replace("_", " ").lower(),
                          order_id=result.get("order_id"), result=result)
         except Exception:
-            # No exchange POST if preview fails. The user explicitly requested
-            # that ordinary no-liquidity rounds not cancel continuous arming.
-            if armed.get("continuous"):
+            # An early quote failure is not a completed trading decision.
+            # Retain this market for final-lock fallback; prevent rapid
+            # repeated quote attempts against an empty order book.
+            if trigger == "EARLY":
+                self._defer_early(ticker, "No executable early quote")
+            elif armed.get("continuous"):
                 self._finish("NO_QUOTE", "Could not obtain executable quote; no order")
             else:
                 self._finish("ERROR", "Could not obtain executable quote; no order")
