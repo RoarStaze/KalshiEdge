@@ -12,7 +12,7 @@ from kalshi_edge.bootstrap.manual_trade_ui import SCRIPT, integrate_manual_trade
 
 
 def _script_blocks(markup: str) -> list[str]:
-    return re.findall(r"<script(?:\\s[^>]*)?>([\\s\\S]*?)</script>", markup, re.I)
+    return re.findall(r"<script(?:\s[^>]*)?>([\s\S]*?)</script>", markup, re.I)
 
 
 def test_manual_trade_script_is_valid_javascript():
