@@ -20,7 +20,7 @@ class FakeVault:
         self.saved = None
 
 
-def test_unified_dashboard_contains_autotrader_and_same_origin_controls(tmp_path):
+def test_modern_dashboard_hides_autotrader_controls_but_keeps_protected_backend_routes(tmp_path):
     vault = FakeVault()
     trader = PaperTrader(tmp_path)
     handler = _make_handler(tmp_path, paper_trader=trader, credential_vault=vault)
@@ -32,10 +32,13 @@ def test_unified_dashboard_contains_autotrader_and_same_origin_controls(tmp_path
         with httpx.Client(timeout=5, trust_env=False) as client:
             main = client.get(origin + "/")
             assert main.status_code == 200
-            assert "Final forecast history" in main.text
-            assert "AutoTrader" in main.text
-            assert 'id="autotrader"' in main.text
-            assert 'id="autotrader-credentials"' in main.text
+            assert 'data-page="trade"' in main.text
+            assert 'href="/trade"' in main.text
+            assert 'href="/train"' in main.text
+            assert 'href="/history"' in main.text
+            assert 'id="autotrader"' not in main.text
+            assert 'id="autotrader-credentials"' not in main.text
+            assert 'AutoTrader (paper)' not in main.text
             assert '127.0.0.1:8898' not in main.text
 
             status = client.get(origin + "/api/autotrader/status")
