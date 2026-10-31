@@ -12,14 +12,19 @@ STYLE = r"""
   flex:1;border:1px solid #2a2d34;background:#101116;box-shadow:none;color:#e9e9eb;
   font-family:system-ui,-apple-system,Segoe UI,sans-serif;border-radius:19px;overflow:hidden}
 .manual-trade *{box-sizing:border-box}
-.manual-trade .mt-top{height:68px;display:flex;justify-content:space-between;align-items:center;
+.manual-trade .mt-top{height:68px;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;
   border-bottom:1px solid #26282e;padding:0 20px}
-.manual-trade .mt-tabs{display:flex;gap:18px}
+.manual-trade .mt-tabs{display:flex;gap:18px;justify-self:start}
+.manual-trade .mt-account-summary{display:flex;align-items:center;justify-content:center;gap:19px;min-width:0}
+.manual-trade .mt-account-item{display:flex;align-items:center;flex-direction:column;gap:4px;white-space:nowrap}
+.manual-trade .mt-account-value{font-size:12px;font-weight:720;line-height:1.15;font-variant-numeric:tabular-nums}
+.manual-trade .mt-account-label{font-size:11px;font-weight:550;line-height:1.2}
+.manual-trade .mt-account-item.portfolio{color:#20d6a0}
 .manual-trade .mt-tab{font-size:14px;font-weight:850;letter-spacing:2px;color:#67666c;background:none;
   border:0;cursor:pointer;padding:23px 0}
 .manual-trade .mt-tab.active{color:#f4f4f4}
 .manual-trade .mt-units{background:transparent;color:#f1f1f4;border:0;font-weight:850;font-size:12px;
-  letter-spacing:2px;cursor:pointer;padding:10px}
+  letter-spacing:2px;cursor:pointer;padding:10px;justify-self:end}
 .manual-trade .mt-main{padding:22px 20px 25px}
 .manual-trade .mt-title{display:flex;gap:12px;align-items:center;font-size:clamp(15px,1.5vw,23px);
   font-weight:850;letter-spacing:-.5px;line-height:1.3;margin-bottom:22px}
@@ -67,7 +72,10 @@ STYLE = r"""
 .manual-trade .mt-confirm .mt-action{margin-top:30px;background:#17d99c;border:0;outline:0}
 .manual-trade .mt-confirm-note{color:#a9aab0;font-size:12px;margin-top:14px}
 .manual-trade .mt-hidden{display:none!important}
-@media(max-width:650px){.context>.manual-trade{min-height:530px}.manual-trade .mt-top{padding:0 16px}.manual-trade .mt-main{padding:21px 17px}}
+@media(max-width:650px){.context>.manual-trade{min-height:530px}.manual-trade .mt-top{padding:0 12px}.manual-trade .mt-main{padding:21px 17px}
+ .manual-trade .mt-tabs{gap:11px}.manual-trade .mt-tab{font-size:12px;letter-spacing:1px}
+ .manual-trade .mt-account-summary{gap:12px}.manual-trade .mt-account-value{font-size:11px}
+ .manual-trade .mt-account-label{font-size:10px}.manual-trade .mt-units{font-size:10px;letter-spacing:1px;padding:6px 0}}
 """
 
 SECTION = r"""
@@ -77,6 +85,16 @@ SECTION = r"""
    <div class="mt-tabs">
     <button type="button" id="manual-buy" class="mt-tab active">BUY</button>
     <button type="button" id="manual-sell" class="mt-tab">SELL</button>
+   </div>
+   <div class="mt-account-summary" role="group" aria-label="Predictions account balances" title="Portfolio includes cash plus marked positions; it is not a guaranteed cash-out value.">
+    <div class="mt-account-item">
+     <strong class="mt-account-value" id="manual-cash">—</strong>
+     <span class="mt-account-label">Cash</span>
+    </div>
+    <div class="mt-account-item portfolio">
+     <strong class="mt-account-value" id="manual-portfolio">—</strong>
+     <span class="mt-account-label">Portfolio</span>
+    </div>
    </div>
    <select id="manual-units" class="mt-units" aria-label="Dollars or shares">
     <option value="DOLLARS">DOLLARS</option><option value="SHARES">SHARES</option>
@@ -141,6 +159,10 @@ SCRIPT = r"""
  let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false,previewGeneration=0;
  let buyUnits="DOLLARS",marketGeneration=0;
  const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
+ function renderAccountSummary(value){
+  shown("manual-cash",value?money(value.available_balance):"—");
+  shown("manual-portfolio",value?money(value.portfolio_total):"—");
+ }
  function clearQuote(){
   quote=null;byId("manual-submit").disabled=true;
   shown("manual-odds","—");shown("manual-estimated","—");shown("manual-payout","—");
@@ -202,6 +224,7 @@ SCRIPT = r"""
    const value=await fetchJSON("market");
    if(generation!==marketGeneration||placing)return;
    snapshot=value;
+   renderAccountSummary(value);
    renderHolding();
    shown("manual-up",value.up_ask==null?"UP —":"UP "+priceCents(value.up_ask));
    shown("manual-down",value.down_ask==null?"DOWN —":"DOWN "+priceCents(value.down_ask));
@@ -209,6 +232,7 @@ SCRIPT = r"""
   }catch(e){
    if(generation!==marketGeneration||placing)return;
    snapshot=null;previewGeneration++;clearQuote();setLiquidity(false);
+   renderAccountSummary(null);
    shown("manual-status",e.message);
    shown("manual-account","Kalshi market or credentials unavailable");
   }
