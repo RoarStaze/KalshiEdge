@@ -69,3 +69,46 @@ def test_manual_trade_does_not_submit_without_user_request(tmp_path):
                         "mode": "dollars", "amount": "1", "request_id": "8c35ecb3-328f-4f52-8c7c-0f4b9862f8d1",
                         "quoted_price": "0.7300"})
     service.close()
+
+
+def test_same_origin_manual_order_requires_direct_browser_action(tmp_path):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from kalshi_edge.bootstrap.final_history import _make_handler
+
+    class Vault:
+        def exists(self): return True
+        def save(self, a, b): pass
+        def delete(self): pass
+    class Manual:
+        calls = 0
+        def status(self): return {"available":False,"credentials_saved":True}
+        def submit(self, request):
+            self.calls += 1
+            return {"state":"FILLED","order_id":"confirmed-in-test"}
+    manual = Manual()
+    server=ThreadingHTTPServer(("127.0.0.1",0),_make_handler(
+        tmp_path,credential_vault=Vault(),manual_service=manual))
+    worker=threading.Thread(target=server.serve_forever,daemon=True)
+    worker.start()
+    try:
+        origin=f"http://127.0.0.1:{server.server_port}"
+        with httpx.Client(timeout=4,trust_env=False) as http:
+            page=http.get(origin+"/")
+            assert page.status_code==200
+            assert 'id="manual-trader"' in page.text
+            assert ".context.manual-trade-context>.context-header" in page.text
+            assert http.get(origin+"/api/manual/status").json()["credentials_saved"] is True
+            def post(host):
+                return http.post(origin+"/api/manual/order",json={"amount":"1.00"},
+                    headers={"Origin":host,"X-KalshiEdge-Action":"manual",
+                             "Sec-Fetch-Site":"same-origin"})
+            assert post("http://malicious.example").status_code==403
+            assert manual.calls==0
+            accepted=post(origin)
+            assert accepted.status_code==200
+            assert manual.calls==1
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=3)
