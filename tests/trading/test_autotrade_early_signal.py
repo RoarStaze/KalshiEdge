@@ -174,6 +174,38 @@ def test_early_cancel_before_eight_minutes_prevents_order(env):
     engine.tick()
     assert not orders.orders
 
+def test_early_signal_change_falls_back_to_final_forecast(env):
+    _,feed,orders,engine=env
+    engine.arm("1.00",continuous=True,start_worker=False)
+    feed.minutes_left(7)
+    orders.on_preview=lambda:setattr(feed,"conf",.65)
+    engine.tick()
+    assert not orders.orders
+    assert engine.status()["state"]=="WAITING"
+    orders.on_preview=None
+    feed.lock("BELOW",confidence=.75)
+    engine.tick()
+    assert orders.quoted[-1][2]=="DOWN"
+    assert len(orders.orders)==1
+
+
+def test_early_no_quote_keeps_final_fallback_available(env):
+    _,feed,orders,engine=env
+    engine.arm("1.00",continuous=True,start_worker=False)
+    feed.minutes_left(7)
+    def fail_quote():
+        raise ValueError("No liquidity")
+    orders.on_preview=fail_quote
+    engine.tick()
+    assert not orders.orders
+    assert engine.status()["state"]=="WAITING"
+    orders.on_preview=None
+    feed.conf=.85
+    feed.lock("ABOVE",confidence=.71)
+    engine.tick()
+    assert len(orders.orders)==1
+
+
 def test_quote_at_early_time_does_not_override_market_rollover(env):
     _,feed,orders,engine=env
     engine.arm("1.00",continuous=True,start_worker=False)
