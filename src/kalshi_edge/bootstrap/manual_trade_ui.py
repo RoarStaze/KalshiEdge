@@ -102,9 +102,11 @@ SECTION = r"""
    <div class="mt-confirm-title"><span class="mt-btc" aria-hidden="true">₿</span>
     <span id="manual-confirm-title">BTC Up or Down - 15 minutes</span></div>
    <div class="mt-rows">
-    <div class="mt-row"><span>Filled shares</span><span class="mt-number" id="manual-confirm-count">—</span></div>
-    <div class="mt-row"><span>Average price (YES)</span><span class="mt-number" id="manual-confirm-price">—</span></div>
-    <div class="mt-row"><span>Average fee per contract</span><span class="mt-number" id="manual-confirm-fee">—</span></div>
+    <div class="mt-row"><span>Shares filled</span><span class="mt-number" id="manual-confirm-count">—</span></div>
+    <div class="mt-row"><span>Odds</span><span class="mt-number" id="manual-confirm-price">—</span></div>
+    <div class="mt-row"><span id="manual-confirm-cost-label">Cost</span><span class="mt-number" id="manual-confirm-cost">—</span></div>
+    <div class="mt-row"><span>Fees</span><span class="mt-number" id="manual-confirm-fee">—</span></div>
+    <div class="mt-row"><span id="manual-confirm-payout-label">Max payout</span><span class="mt-number mt-big" id="manual-confirm-payout">—</span></div>
     <div class="mt-row"><span>Exchange order</span><span class="mt-number" id="manual-confirm-order">—</span></div>
    </div>
    <div class="mt-confirm-note" id="manual-confirm-note">Figures shown are exchange-reported, not simulated.</div>
@@ -124,7 +126,7 @@ SCRIPT = r"""
  function setMode(next){action=next;byId("manual-buy").classList.toggle("active",next==="BUY");
   byId("manual-sell").classList.toggle("active",next==="SELL");
   byId("manual-submit").classList.toggle("sell",next==="SELL");
-  shown("manual-quote-label",next==="BUY"?"Odds":"Average price");
+  shown("manual-quote-label",next==="BUY"?"Odds":"Current exit price");
   shown("manual-cost-label",next==="BUY"?"Estimated cost incl. fee":"Estimated cash out");
   shown("manual-payout-label",next==="BUY"?"Max payout":"Shares to sell");
   shown("manual-submit",next==="BUY"?"Buy with 1-Click":"Sell with 1-Click");
@@ -163,7 +165,8 @@ SCRIPT = r"""
   try{
    const qs=new URLSearchParams({action,outcome,units,amount});
    const value=await fetchJSON("preview?"+qs.toString());
-   if(value.ticker!==snapshot.ticker)return;
+   if(value.ticker!==snapshot.ticker||value.action!==action||value.outcome!==outcome
+     ||value.units!==units||byId("manual-amount").value!==amount)return;
    quote=value;shown("manual-odds",Math.round(Number(value.unit_price)*100)+"% chance");
    shown("manual-estimated",money(value.amount_estimate)+" est.");
    shown("manual-payout",action==="BUY"?money(value.maximum_payout):Number(value.count).toFixed(2));
@@ -185,8 +188,12 @@ SCRIPT = r"""
      result.status==="PARTIAL"?"ORDER PARTIALLY FILLED":"ORDER COMPLETED");
    shown("manual-confirm-title",(result.action==="BUY"?"Buy ":"Sell ")+result.outcome+" · BTC Up or Down - 15 minutes");
    shown("manual-confirm-count",result.fill_count);
-   shown("manual-confirm-price",result.average_yes_price||"Not filled");
-   shown("manual-confirm-fee",result.average_fee_paid||"Check exchange fills");
+   shown("manual-confirm-price",result.actual_unit_price?Math.round(Number(result.actual_unit_price)*100)+"% chance":"Not filled");
+   shown("manual-confirm-cost-label",result.action==="BUY"?"Cost":"Shares sold");
+   shown("manual-confirm-cost",result.action==="BUY"?money(result.actual_cost):result.fill_count);
+   shown("manual-confirm-fee",result.actual_fees===null?"Check exchange fills":money(result.actual_fees));
+   shown("manual-confirm-payout-label",result.action==="BUY"?"Max payout":"Cash out");
+   shown("manual-confirm-payout",result.action==="BUY"?money(result.max_payout):money(result.actual_proceeds));
    shown("manual-confirm-order",result.order_id.slice(0,14)+"…");
    shown("manual-confirm-note","Exchange-reported result only. Check Kalshi for final balance and fills.");
    byId("manual-entry").classList.add("mt-hidden");
@@ -218,6 +225,8 @@ def integrate_manual_trade(page: str) -> str:
     if '<div class="context">' not in page or 'id="market-ticker"' not in page:
         raise ValueError("Original dashboard context not found; will not alter layout")
     page = page.replace("</style>", STYLE + "\n</style>", 1)
+    page = page.replace('<span class="chip">READ-ONLY</span>', '<span class="chip">MANUAL TRADING</span>', 1)
+    page = page.replace('No automatic trades.</p>', 'User-initiated real orders; no automatic trades.</p>', 1)
     page = page.replace('<div class="context">', '<div class="context">\n' + SECTION, 1)
     page = page.replace("</body>", SCRIPT + "\n</body>", 1)
     return page
