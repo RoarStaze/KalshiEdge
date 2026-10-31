@@ -181,6 +181,9 @@ SCRIPT = r"""
  const byId=id=>document.getElementById(id);
  const shown=(id,value)=>{byId(id).textContent=value};
  const money=v=>v!=null&&Number.isFinite(Number(v))?"$"+Number(v).toFixed(2):"—";
+ // Account display values arrive already formatted from Kalshi's integer cents.
+ // Do not round spending balances up in the Cash/Portfolio header.
+ const exactMoney=v=>typeof v==="string"&&/^\d+\.\d{2}$/.test(v)?"$"+v:"—";
  const cents=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"¢":"—";
  const priceCents=cents;
  const probabilityPercent=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
@@ -189,8 +192,8 @@ SCRIPT = r"""
  let autoCurrent={state:"IDLE"},lastHistoryFetch=0;
  const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
  function renderAccountSummary(value){
-  shown("manual-cash",value?money(value.available_balance):"—");
-  shown("manual-portfolio",value?money(value.portfolio_total):"—");
+  shown("manual-cash",value?exactMoney(value.cash_display):"—");
+  shown("manual-portfolio",value?exactMoney(value.portfolio_display):"—");
  }
  function clearQuote(){
   quote=null;byId("manual-submit").disabled=true;
@@ -209,7 +212,7 @@ SCRIPT = r"""
    shown("manual-held-side",held>0?"Up · ":held<0?"Down · ":"");
    shown("manual-account",snapshot?(held!==0?"Your position: "+Math.abs(held).toFixed(2)+" "+(held>0?"Yes":"No"):"No position held in this round"):"Loading your position…");
   }else{
-   shown("manual-account",snapshot?"Predictions account · "+money(snapshot.available_balance)+" available":"Connecting to Kalshi account…");
+   shown("manual-account",snapshot?"Predictions account · "+exactMoney(snapshot.cash_display)+" available":"Connecting to Kalshi account…");
   }
  }
  const autoPending=()=>["WAITING","EXECUTING"].includes(autoCurrent.state);
