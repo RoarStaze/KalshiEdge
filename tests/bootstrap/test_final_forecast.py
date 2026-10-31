@@ -181,3 +181,47 @@ def test_final_forecast_writer_disallows_raw_data_paths_and_path_traversal(tmp_p
     )
     with pytest.raises(ValueError, match="ticker"):
         FinalForecastWriter(tmp_path / "bootstrap").save(record, market_close_ts_ns=CLOSE)
+
+
+def test_locked_forecast_preserves_checkpoint_kalshi_bid_ask_for_future_baselines(tmp_path):
+    """Never reconstruct a market baseline from post-settlement prices."""
+    from kalshi_edge.bootstrap.final_history import read_final_history
+    market = _market()
+    prediction = _prediction(DUE).model_copy(update={
+        "kalshi_yes_bid": 0.71, "kalshi_yes_ask": 0.73,
+    })
+    locked = FinalForecastGate().evaluate(market, now_ns=DUE, prediction=prediction)
+    assert locked.kalshi_yes_bid == 0.71
+    assert locked.kalshi_yes_ask == 0.73
+    writer = FinalForecastWriter(tmp_path / "bootstrap")
+    assert writer.save(locked, market_close_ts_ns=CLOSE) is not None
+    saved = read_final_history(tmp_path / "bootstrap")["forecasts"][0]
+    assert saved["kalshi_yes_bid"] == 0.71
+    assert saved["kalshi_yes_ask"] == 0.73
+
+
+def test_reference_quote_is_not_fabricated_when_prediction_has_no_valid_two_sided_book():
+    market = _market()
+    blank = FinalForecastGate().evaluate(market, now_ns=DUE,
+                                          prediction=_prediction(DUE))
+    assert blank.kalshi_yes_bid is None
+    assert blank.kalshi_yes_ask is None
+    inverted = _prediction(DUE).model_copy(update={
+        "kalshi_yes_bid": 0.80, "kalshi_yes_ask": 0.70,
+    })
+    locked = FinalForecastGate().evaluate(market, now_ns=DUE, prediction=inverted)
+    assert locked.forecast == "ABOVE"
+    assert locked.kalshi_yes_bid is None
+    assert locked.kalshi_yes_ask is None
+
+
+def test_legacy_final_forecast_json_without_market_reference_still_parses():
+    from kalshi_edge.bootstrap.final_forecast import FinalForecastRecord
+    record = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE, prediction=_prediction(DUE)
+    ).model_dump(mode="json")
+    record.pop("kalshi_yes_bid", None)
+    record.pop("kalshi_yes_ask", None)
+    old = FinalForecastRecord.model_validate(record)
+    assert old.kalshi_yes_bid is None
+    assert old.kalshi_yes_ask is None
