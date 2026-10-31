@@ -112,7 +112,7 @@ class KalshiOrderClient:
 
     def send_order(self, request: dict):
         required = {"ticker", "client_order_id", "side", "count", "price"}
-        if set(request) != required:
+        if set(request) != required | {"reduce_only"}:
             raise TradingError("Invalid signed order fields")
         if not request["ticker"].startswith("KXBTC15M-"):
             raise TradingError("Non-BTC market rejected")
@@ -122,7 +122,7 @@ class KalshiOrderClient:
             "self_trade_prevention_type": "taker_at_cross",
             "post_only": False,
             "cancel_order_on_pause": True,
-            "reduce_only": False,
+            "reduce_only": bool(request.get("reduce_only")),
             "exchange_index": -1,
         }
         return self._request("POST", "/portfolio/events/orders", body=payload)
@@ -223,6 +223,24 @@ class ManualTrader:
         plan["ticker"] = ticker
         return plan
 
+    def market(self, ticker):
+        if not ticker.startswith("KXBTC15M-") or not ticker.replace("-", "").isalnum():
+            raise TradingError("Unsupported market ticker")
+        market, book = self.market_client.quote(ticker)
+        if market.get("market", {}).get("ticker") != ticker:
+            raise TradingError("Market ticker mismatch")
+        balance, position = self._account(ticker)
+        up = quote_from_book(book, "BUY", "UP")
+        down = quote_from_book(book, "BUY", "DOWN")
+        return {
+            "ticker": ticker,
+            "status": market["market"].get("status"),
+            "up_ask": _money(up["unit_cash"]),
+            "down_ask": _money(down["unit_cash"]),
+            "available_balance": _money(balance),
+            "position_yes": _money(position),
+        }
+
     def preview(self, ticker, action, outcome, units, amount):
         plan = self._prepare(ticker, action, outcome, units, amount)
         preview_id = str(uuid.uuid4())
@@ -258,6 +276,7 @@ class ManualTrader:
         order = {
             "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
             "side": old["side"], "price": old["price"], "count": old["count"],
+            "reduce_only": data["action"] == "SELL",
         }
         # The exchange enforces IOC; no unfilled shares remain resting.
         result = self.client.send_order(order)
