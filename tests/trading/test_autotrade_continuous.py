@@ -58,7 +58,9 @@ class Orders:
         self.fail=None
     def preview(self,ticker,action,side,units,amount):
         self.previews.append((ticker,action,side,units,amount))
-        return {"ticker":ticker,"action":"BUY","outcome":side,"preview_id":f"q-{ticker}"}
+        return {"ticker":ticker,"action":"BUY","outcome":side,"preview_id":f"q-{ticker}",
+                "count":"0.25", "unit_price":"0.4000",
+                "fee_estimate":"0.005000", "amount_estimate":"0.1050"}
     def place(self,preview_id,ticker):
         self.orders.append((preview_id,ticker))
         if self.fail is not None:
