@@ -40,6 +40,16 @@ def test_subcent_buy_uses_cent_aligned_exchange_fee_estimate():
     assert Decimal(result["count"]) * Decimal(result["unit_price"]) + Decimal(result["fee_estimate"]) <= Decimal("1.00")
 
 
+def test_one_cent_budget_can_buy_minimum_fractional_contract():
+    result = ManualTrader.size_order(
+        None, Decimal("0.01"), "BUY", "UP", "DOLLARS",
+        Decimal("0.01"), Decimal("0"),
+        book(yes_bid="0.1000"), market(True),
+    )
+    assert result["count"] == "0.01"
+    assert result["amount_estimate"] == "0.0100"
+
+
 def test_sizing_respects_actual_bid_depth():
     result = plan(ask="0.0080", available="41.25")
     assert result["count"] == "41.25"
