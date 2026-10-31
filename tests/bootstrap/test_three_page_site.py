@@ -5,6 +5,7 @@ for the legacy forecast/training/history renderers. No live trading performed.
 """
 from http.server import ThreadingHTTPServer
 import threading
+from types import SimpleNamespace
 import httpx
 
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
@@ -70,14 +71,17 @@ def test_hidden_pages_do_not_run_manual_trade_account_poller():
 
 
 def test_real_routes_and_existing_api_remain_available(tmp_path):
-    handler=_make_handler(tmp_path)
+    handler=_make_handler(tmp_path,credential_vault=SimpleNamespace(exists=lambda:True))
     server=ThreadingHTTPServer(("127.0.0.1",0),handler)
     thread=threading.Thread(target=server.serve_forever,daemon=True)
     thread.start()
     try:
         root=f"http://127.0.0.1:{server.server_port}"
         with httpx.Client(timeout=5,trust_env=False) as client:
-            for path,section in (("/","trade"),("/trade","trade"),
+            root_redirect=client.get(root+"/")
+            assert root_redirect.status_code==302
+            assert root_redirect.headers["location"]=="/trade"
+            for path,section in (("/trade","trade"),
                                  ("/train","train"),("/history","history")):
                 r=client.get(root+path)
                 assert r.status_code==200
