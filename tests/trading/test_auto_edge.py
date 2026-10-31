@@ -116,4 +116,7 @@ def test_auto_ui_displays_value_edge_skip_reason_instead_of_low_confidence():
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
     html = integrate_manual_trade(PAGE)
     assert 'SKIPPED:autoCurrent.message||' in html
-    assert 'insufficient fee-adjusted model edge' in html
+    assert 'SKIPPED:"Final forecast SKIP' not in html
+    import inspect
+    from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
+    assert "insufficient fee-adjusted model edge" in inspect.getsource(ArmedAutoTrader._tick)
