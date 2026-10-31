@@ -408,6 +408,9 @@ class ArmedAutoTrader:
                           message="Early quote unavailable; waiting for final forecast")
                 return
             fill=Decimal(str(result["fill_count"]))
+            if status=="NO_FILL" and not armed.get("continuous"):
+                self._finish("NO_FILL","Early IOC completed with zero shares")
+                return
             self._set(state="WAITING",early_attempts=armed["early_attempts"]+1,
                       last_result=status,early_retry_after_ns=now+RETRY_DELAY_NS,
                       early_side=side if fill>0 else None,
@@ -482,12 +485,18 @@ class ArmedAutoTrader:
                 self._status_after_order(status,"Final BUY unconfirmed")
                 return
             if status=="NO_QUOTE":
+                if not armed.get("continuous"):
+                    self._finish("EXPIRED","Final quote unavailable or market changed")
+                    return
                 self._set(state="WAITING",final_retry_after_ns=now+RETRY_DELAY_NS,
                           message="Final quote unavailable; awaiting fresh book")
                 return
             self._set(final_attempts=armed.get("final_attempts",0)+1,
                       final_retry_after_ns=now+RETRY_DELAY_NS)
             if status=="NO_FILL":
+                if not armed.get("continuous"):
+                    self._finish("NO_FILL","Exchange confirmed no executed shares")
+                    return
                 self._set(state="WAITING",last_result="NO_FILL",
                           message="Confirmed NO FILL; trying another fresh quote")
                 return
