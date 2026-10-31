@@ -237,16 +237,17 @@ def render_site_page(page: str, section: str) -> str:
     page = page.replace(original_intro, new_intro, 1)
     page = page.replace('<section aria-label="Final Forecast history">',
                         '<section class="history-view" aria-label="Final Forecast history">', 1)
+    label = "API" if section == "api" else section.title()
     page = page.replace('<title>KalshiEdge — Live Forecast &amp; History</title>',
-                        f'<title>KalshiEdge · {section.title()}</title>', 1)
+                        f'<title>KalshiEdge · {label}</title>', 1)
     # The user wants an uncluttered trading workspace with the two cards only.
     # Leave the underlying renderers mounted; the visible intro is removed.
     if section == "trade":
         page = page.replace(new_intro, "", 1)
     # Only one route is active. The links use real URLs, not in-page fake tabs.
-    active = f'<a class="site-nav-link" href="/{section}">{section.title()}</a>'
+    active = f'<a class="site-nav-link" href="/{section}">{label}</a>'
     page = page.replace(active,
-                        f'<a class="site-nav-link is-active" href="/{section}" aria-current="page">{section.title()}</a>', 1)
+                        f'<a class="site-nav-link is-active" href="/{section}" aria-current="page">{label}</a>', 1)
     # Replace the legacy read-only disclaimer with route-accurate copy.
     footer_start = '<footer>Read-only research tool.'
     footer_end = '</footer>'
