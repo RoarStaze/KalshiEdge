@@ -24,6 +24,7 @@ def test_counts_only_unique_settled_valid_markets_and_exposes_scoring():
         record("market-a", .90, "ABOVE"),
         record("market-a", .90, "ABOVE"),
         record("market-b", .10, "BELOW"),
+        record("market-e", .90, "ABOVE"),
         record("market-c", .99, "ABOVE", settled=False),
         record("market-d", .98, "BELOW", decision="SKIP", reason="STALE_FEED"),
     ]
