@@ -147,3 +147,77 @@ def test_rate_limit_retries_using_retry_after(tmp_path: Path) -> None:
 
     assert calls == 2
     assert sleeps == [0.25]
+
+
+def test_backfill_uses_website_ed25519_key_instead_of_revoked_legacy_key(tmp_path: Path) -> None:
+    """Historic read-only REST requests use the same DPAPI key as live WS."""
+    from types import SimpleNamespace
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private = Ed25519PrivateKey.generate()
+    pem = private.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()
+    ).decode()
+    class StoredVault:
+        def exists(self):
+            return True
+        def load(self):
+            return ("fresh-website-key", pem)
+    def revoked():
+        raise AssertionError("must not load revoked old KALSHI_API_KEY_ID")
+    settings = SimpleNamespace(
+        require_credentials=revoked,
+        rest_base_url="https://example.test/trade-api/v2"
+    )
+    seen = []
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={
+            "market_settled_ts": "2026-08-01T00:00:00Z",
+            "trades_created_ts": "2026-08-01T00:00:00Z",
+            "orders_updated_ts": "2026-08-01T00:00:00Z",
+            "market_positions_last_updated_ts": "2026-08-01T00:00:00Z",
+        })
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        client = KalshiHistoricalClient(
+            settings, BootstrapSettings(), http=http, vault=StoredVault()
+        )
+        client.get_cutoff()
+    assert len(seen) == 1
+    assert seen[0].headers["KALSHI-ACCESS-KEY"] == "fresh-website-key"
+    import base64
+    sig = base64.b64decode(seen[0].headers["KALSHI-ACCESS-SIGNATURE"])
+    ts = seen[0].headers["KALSHI-ACCESS-TIMESTAMP"]
+    private.public_key().verify(
+        sig, (ts + "GET/trade-api/v2/historical/cutoff").encode()
+    )
+
+
+def test_historical_client_falls_back_only_when_no_saved_website_key(tmp_path: Path) -> None:
+    class EmptyVault:
+        def exists(self):
+            return False
+    settings = _settings(tmp_path)
+    client = KalshiHistoricalClient(settings, BootstrapSettings(), vault=EmptyVault())
+    try:
+        assert client.key_id == "test-key"
+        assert isinstance(client.private_key, rsa.RSAPrivateKey)
+    finally:
+        client.close()
+
+
+def test_historical_client_corrupt_saved_vault_fails_closed(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    import pytest
+    from kalshi_edge.trading.vault import VaultError
+    class BrokenVault:
+        def exists(self):
+            return True
+        def load(self):
+            raise VaultError("saved DPAPI key cannot be decrypted")
+    settings = SimpleNamespace(require_credentials=lambda: (_ for _ in ()).throw(
+        AssertionError("unsafe revoked-key fallback")
+    ))
+    with pytest.raises(VaultError, match="cannot be decrypted"):
+        KalshiHistoricalClient(settings, BootstrapSettings(), vault=BrokenVault())
