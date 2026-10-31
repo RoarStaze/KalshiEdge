@@ -126,3 +126,58 @@ def test_metrics_not_computed_for_empty_or_all_pending_history():
     assert report["metrics"] is None
     assert report["markets_scored"] == 0
     assert report["readiness"] == "INSUFFICIENT_SAMPLE"
+
+
+def test_market_midpoint_score_compared_to_ai_on_exact_same_settled_markets():
+    rows = [
+        {**record("a", .80, "ABOVE"), "kalshi_yes_bid": .60, "kalshi_yes_ask": .80},
+        {**record("b", .20, "BELOW", decision="BELOW"),
+         "kalshi_yes_bid": .30, "kalshi_yes_ask": .50},
+        record("c", .60, "ABOVE"),
+    ]
+    result = evaluate_forward_reliability(rows, min_sample=3)
+    comparison = result["market_midpoint_comparison"]
+    assert comparison["matched_markets"] == 2
+    assert comparison["total_scored_markets"] == 3
+    assert math.isclose(comparison["ai_brier"], .04, abs_tol=1e-9)
+    assert math.isclose(comparison["market_midpoint_brier"], .125, abs_tol=1e-9)
+    assert math.isclose(comparison["brier_improvement"], .085, abs_tol=1e-9)
+    assert comparison["ai_log_loss"] < comparison["market_midpoint_log_loss"]
+    assert math.isclose(comparison["mean_market_spread"], .20, abs_tol=1e-9)
+    assert comparison["baseline_type"] == "DECISION_TIME_KALSHI_YES_BID_ASK_MIDPOINT"
+
+
+def test_market_midpoint_never_infers_missing_or_invalid_quotes():
+    records = [
+        record("a", .70, "ABOVE"),
+        {**record("b", .70, "ABOVE"), "kalshi_yes_bid": .90, "kalshi_yes_ask": .10},
+        {**record("c", .70, "ABOVE"), "kalshi_yes_bid": -.10, "kalshi_yes_ask": .10},
+        {**record("d", .70, "ABOVE"), "kalshi_yes_bid": .50, "kalshi_yes_ask": .70},
+    ]
+    result = evaluate_forward_reliability(records, min_sample=4)
+    comparison = result["market_midpoint_comparison"]
+    assert comparison["matched_markets"] == 1
+    assert comparison["total_scored_markets"] == 4
+    assert comparison["markets_without_valid_reference_quote"] == 3
+
+
+def test_no_checkpoint_quote_means_no_claim_of_beating_market_baseline():
+    rows = [record("a", .95, "ABOVE"), record("b", .10, "BELOW")]
+    comparison = evaluate_forward_reliability(rows)["market_midpoint_comparison"]
+    assert comparison["matched_markets"] == 0
+    assert comparison["brier_improvement"] is None
+    assert comparison["ai_brier"] is None
+
+
+def test_market_baseline_comparison_stays_separate_by_model_version():
+    rows = [
+        {**record("a", .95, "ABOVE", model="v5"),
+         "kalshi_yes_bid": .60, "kalshi_yes_ask": .70},
+        {**record("b", .95, "BELOW", model="v6"),
+         "kalshi_yes_bid": .80, "kalshi_yes_ask": .90},
+    ]
+    result = evaluate_forward_reliability(rows, min_sample=2)
+    assert result["market_midpoint_by_model"]["v5"]["matched_markets"] == 1
+    assert result["market_midpoint_by_model"]["v6"]["matched_markets"] == 1
+    assert result["market_midpoint_by_model"]["v5"]["brier_improvement"] > 0
+    assert result["market_midpoint_by_model"]["v6"]["brier_improvement"] < 0
