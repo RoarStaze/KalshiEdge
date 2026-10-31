@@ -17,6 +17,7 @@ import time
 from typing import Callable
 
 from .autotrade_history import AutoTradeHistory
+from .autotrade_pnl import enrich_history
 from .manual_trade import MAX_REQUEST_DOLLARS
 
 LOG = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ class ArmedAutoTrader:
         self._used: set[str] = set()
         self._processed: set[str] = set()
         self.history_store = AutoTradeHistory(history_path) if history_path else None
+        self._history_fetch_lock = threading.Lock()
+        self._history_cache = None
 
     def status(self) -> dict:
         with self._lock:
@@ -64,7 +67,25 @@ class ArmedAutoTrader:
         rows = self.history_store.recent()
         for row in rows:
             row["stages"] = self.history_store.recent_stages(row["ticker"])
-        return {"entries": rows}
+        # API history reads may be relatively expensive. Only reuse cached
+        # reconciliation while the underlying journal remains unchanged.
+        fingerprint = tuple(
+            (row["ticker"], row["status"], row["fill_count"],
+             tuple((stage["stage"], stage["status"], stage["order_id"],
+                    stage["fill_count"]) for stage in row["stages"]))
+            for row in rows
+        )
+        with self._history_fetch_lock:
+            cached = self._history_cache
+            now = time.monotonic()
+            if (cached and cached["fingerprint"] == fingerprint
+                    and now - cached["at"] < 30):
+                return {"entries": [dict(entry) for entry in cached["entries"]]}
+            client = getattr(self.manual, "client", None)
+            enriched = enrich_history(rows, client)
+            self._history_cache = {"fingerprint": fingerprint,
+                                   "at": time.monotonic(), "entries": enriched}
+            return {"entries": [dict(entry) for entry in enriched]}
 
     def _attempted(self, ticker: str) -> bool:
         return ticker in self._used or bool(
