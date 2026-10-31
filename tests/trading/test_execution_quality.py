@@ -103,7 +103,7 @@ def test_reversal_sell_low_price_and_higher_fee_means_adverse_cost():
 
 
 def test_partial_fill_compares_per_share_not_unfilled_full_order():
-    s=stage("FINAL_BUY","buy",qty="0.25",q_count="0.50")
+    s=stage("FINAL_BUY","buy",qty="0.25",q_count="0.50",q_fee="0.012000")
     quality=measure_execution_quality([s],[fill("buy")],TICKER)["stages"][0]
     assert quality["quote_count_fp"]=="0.50"
     assert quality["filled_count_fp"]=="0.25"
