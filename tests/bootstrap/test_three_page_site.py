@@ -41,6 +41,12 @@ def test_trade_only_shows_forecast_and_manual_trade_cards():
     assert "127.0.0.1:8898" not in page
 
 
+def test_real_money_trade_page_does_not_claim_to_be_read_only():
+    page=render_site_page(integrate_manual_trade(integrate_round_price_hero(PAGE)),"trade")
+    assert "Read-only research tool" not in page
+    assert "Trading is manual and uses real money" in page
+
+
 def test_train_and_history_have_exclusive_visible_sections():
     template=integrate_manual_trade(integrate_round_price_hero(PAGE))
     train=render_site_page(template,"train")
