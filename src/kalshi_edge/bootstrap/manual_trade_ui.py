@@ -83,6 +83,7 @@ SECTION = r"""
   <div class="mt-detail"><span id="mt-quantity-label">Estimated shares</span><strong id="mt-quantity">—</strong></div>
   <div class="mt-detail mt-large"><span id="mt-total-label">Max payout</span><strong id="mt-total">—</strong></div>
   <div class="mt-detail"><span>Estimated fee reserve</span><strong id="mt-fee">—</strong></div>
+  <div class="mt-detail" id="mt-average-row"><span>Average entry price</span><strong id="mt-average">—</strong></div>
   <button class="mt-submit" type="button" id="mt-submit" disabled>⚡ Buy with 1-Click</button>
   <div class="mt-flash" id="mt-message" role="status" aria-live="polite">Waiting for active market and saved credentials.</div>
   <p class="mt-footnote">Real Kalshi orders. One click submits one immediate-or-cancel limit order at the displayed price. Actual fills, costs and fees can differ.</p>
@@ -168,6 +169,11 @@ SCRIPT = r"""
       (Number.isFinite(held)?held.toFixed(2)+" shares":"—");
    el("mt-total").textContent=Number.isFinite(qty)&&qty>0?fmt(action==="buy"?qty:total):"—";
    el("mt-fee").textContent=Number.isFinite(fee)&&qty>0?fmt(fee):"—";
+   el("mt-average-row").classList.toggle("mt-hidden",action!=="sell");
+   el("mt-average").textContent="—"; // Average cost basis cannot be inferred reliably from net position alone.
+   if(action==="sell"&&Number.isFinite(total)&&Number.isFinite(fee)&&qty>0){
+     el("mt-total").textContent=fmt(Math.max(0,total-fee));
+   }
    const okay=!!(state?.available&&state?.credentials_saved&&q&&
                    Number.isFinite(balance)&&Number.isFinite(position)&&
                    Number.isFinite(qty)&&qty>=step&&val>0&&!busy);
@@ -209,8 +215,8 @@ SCRIPT = r"""
      el("mt-result-action").textContent=chosenAction.toUpperCase()+" "+chosenSide.toUpperCase();
      el("mt-result-shares").textContent=data.filled_shares+" of "+data.requested_shares;
      el("mt-result-price").textContent=fmt(Number(data.limit_price));
-     el("mt-result-cost").textContent=fmt(Number(data.indicative_cost))+" est.";
-     el("mt-result-fees").textContent=fmt(Number(data.indicative_fees))+" est.";
+     el("mt-result-cost").textContent=fmt(Number(data.actual_total_dollars??data.indicative_cost))+(data.actual_total_dollars==null?" est.":" actual");
+     el("mt-result-fees").textContent=fmt(Number(data.actual_fees_dollars??data.indicative_fees))+(data.actual_fees_dollars==null?" est.":" actual");
      el("mt-result-id").textContent=data.order_id||"—";
      el("mt-confirm").classList.add("show");
      el("mt-main").classList.add("mt-hidden");
