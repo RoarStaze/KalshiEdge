@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from .metrics import probability_metrics
+from .paired_skill import paired_market_skill_interval
 
 CONFIDENCE_COHORTS = (0.0, 0.69, 0.80, 0.90)
 
@@ -83,6 +84,10 @@ def _market_comparison(matched, total: int) -> dict[str, Any]:
         "markets_without_valid_reference_quote": total - len(matched),
         "independent_validation": False,
         "warning": "Bid/ask midpoint is not executable price, true probability, or verified trading edge.",
+        "paired_uncertainty": paired_market_skill_interval([
+            (row[0], row[2], midpoint, int(row[3] == "ABOVE"))
+            for row, midpoint, _spread in matched
+        ]),
     }
     if not matched:
         return {
