@@ -7,6 +7,9 @@ ambiguous exchange results, and no attempt is made after a missed checkpoint.
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+import logging
+from .autotrade_history import AutoTradeHistory
 import re
 import threading
 import time
@@ -20,6 +23,7 @@ FINAL_CHECKPOINT_SECONDS = 240
 MAX_LOCK_DELAY_NS = 30 * NS
 MIN_EXECUTION_REMAINING_NS = 40 * NS
 TICKER_PATTERN = re.compile(r"^KXBTC15M-[A-Z0-9-]+$")
+LOG = logging.getLogger(__name__)
 
 
 class AutoTradeError(ValueError):
@@ -30,7 +34,8 @@ class ArmedAutoTrader:
     """One-at-a-time, ticker-scoped live order intent, not a recurring bot."""
 
     def __init__(self, manual, read_live: Callable[[], dict], *,
-                 now_ns: Callable[[], int] = time.time_ns):
+                 now_ns: Callable[[], int] = time.time_ns,
+                 history_path: Path | None = None):
         self.manual = manual
         self.read_live = read_live
         self.now_ns = now_ns
@@ -40,10 +45,14 @@ class ArmedAutoTrader:
         # No second attempt for a market after ANY exchange order attempt,
         # even if the remote response is lost or the fill is partial.
         self._used: set[str] = set()
+        self.history_store = AutoTradeHistory(history_path) if history_path else None
 
     def status(self) -> dict:
         with self._lock:
             return dict(self._state)
+
+    def history(self) -> dict:
+        return {"entries": self.history_store.recent() if self.history_store else []}
 
     def arm(self, amount: str, *, start_worker: bool = True) -> dict:
         try:
@@ -62,7 +71,7 @@ class ArmedAutoTrader:
         if not isinstance(ticker, str) or not TICKER_PATTERN.fullmatch(ticker):
             raise AutoTradeError("No readable current BTC 15-minute market")
         with self._lock:
-            if ticker in self._used:
+            if ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker)):
                 raise AutoTradeError("AutoTrade already used on this market")
         if type(close) is not int or type(checkpoint) is not int or close - checkpoint != FINAL_CHECKPOINT_SECONDS * NS:
             raise AutoTradeError("Current market checkpoint is unavailable")
@@ -73,7 +82,7 @@ class ArmedAutoTrader:
         with self._lock:
             if self._state["state"] in ("WAITING", "EXECUTING"):
                 raise AutoTradeError("AutoTrade already armed")
-            if ticker in self._used:
+            if ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker)):
                 raise AutoTradeError("AutoTrade already used on this market")
             self._state = {
                 "state": "WAITING", "ticker": ticker,
@@ -98,6 +107,28 @@ class ArmedAutoTrader:
     def _finish(self, state: str, message: str, **details) -> None:
         with self._lock:
             self._state.update(state=state, message=message, **details)
+            snapshot = dict(self._state)
+        if state not in ("FILLED", "PARTIAL", "NO_FILL", "UNKNOWN"):
+            return
+        if self.history_store is None or snapshot.get("outcome") not in ("UP", "DOWN"):
+            return
+        try:
+            result = details.get("result") or {}
+            ticker = snapshot["ticker"]
+            if not self.history_store.has_attempt(ticker):
+                self.history_store.record_attempt(
+                    ticker=ticker, attempted_at_ns=self.now_ns(),
+                    outcome=snapshot["outcome"], amount=snapshot["amount"],
+                    confidence=float(snapshot.get("confidence") or 0),
+                )
+            self.history_store.record_result(
+                ticker=ticker, status=state,
+                order_id=result.get("order_id") or details.get("order_id"),
+                fill_count=result.get("fill_count"),
+            )
+        except Exception:
+            # Failed history persistence never triggers an order retry.
+            LOG.exception("AutoTrade history write failed; verify exchange orders")
 
     def _loop(self):
         while not self._stop.is_set():
@@ -151,6 +182,7 @@ class ArmedAutoTrader:
             if self._state["state"] != "WAITING" or self._state["ticker"] != ticker:
                 return
             self._state.update(state="EXECUTING", outcome=side,
+                               confidence=float(confidence),
                                message="Locked forecast received — checking live quote")
         try:
             preview = self.manual.preview(ticker, "BUY", side, "DOLLARS", armed["amount"])
