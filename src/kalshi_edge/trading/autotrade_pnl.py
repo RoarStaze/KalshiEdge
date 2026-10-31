@@ -161,6 +161,19 @@ def enrich_history(entries: list[dict], client=None) -> list[dict]:
         row = dict(original)
         row.update(max_payout_dollars=None, realized_pnl_dollars=None,
                    pnl_status="UNAVAILABLE")
+        stages = _stages(row)
+        # A market may first buy UP, sell it on reversal, then buy DOWN,
+        # or have a zero-fill first attempt followed by a successful retry.
+        # Display the latest confirmed BUY, not the immutable first attempt.
+        last_buy = next((stage for stage in reversed(stages)
+                         if stage.get("stage") != "REVERSAL_SELL"
+                         and stage.get("status") in ("FILLED", "PARTIAL")),
+                        None)
+        if last_buy is not None:
+            row["outcome"] = last_buy["outcome"]
+            row["status"] = last_buy["status"]
+            row["fill_count"] = last_buy["fill_count"]
+            row["order_id"] = last_buy["order_id"]
         plan = _plan(row)
         if plan is not None:
             contracts, stages = plan
