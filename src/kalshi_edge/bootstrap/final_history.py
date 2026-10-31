@@ -335,7 +335,7 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_trader=None) -> type[BaseHTTPRequestHandler]:
+def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_trader=None, auto_trader=None) -> type[BaseHTTPRequestHandler]:
     from .training_cycle import TrainingController, CycleError
     from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
@@ -348,10 +348,15 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
         vault = None
 
     from kalshi_edge.trading.manual_trade import ManualTrader, TradingError
+    from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader, AutoTradeError
     try:
         manual = manual_trader if manual_trader is not None else ManualTrader(root, vault=vault)
     except VaultError:
         manual = None
+    auto = auto_trader if auto_trader is not None else (
+        ArmedAutoTrader(manual, lambda: read_live_dashboard(root))
+        if manual is not None else None
+    )
 
     # Build the three local routes once. Do not inject AutoTrader UI;
     # legacy signed API routes remain available to authorized localhost tools.
@@ -371,6 +376,50 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        def _auto_get(self) -> None:
+            if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+                self._json(403, {"error":"Local host required"})
+                return
+            if auto is None or vault is None or not vault.exists():
+                self._json(503, {"error":"Connect Kalshi API credentials first"})
+                return
+            self._json(200, auto.status())
+
+        def _auto_post(self) -> None:
+            expected = f"http://127.0.0.1:{self.server.server_port}"
+            if (self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+                or self.headers.get("Origin") != expected
+                or self.headers.get("X-KalshiEdge-Action") != "armed-trade"
+                or self.headers.get("Content-Type") != "application/json"
+                or self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none")):
+                self._json(403, {"error":"Same-origin AutoTrade action required"})
+                return
+            if auto is None or vault is None or not vault.exists():
+                self._json(503, {"error":"Live Kalshi credentials unavailable"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "-1")
+                if not 0 <= length <= 160:
+                    raise AutoTradeError("Invalid AutoTrade request length")
+                payload = json.loads(self.rfile.read(length))
+                if self.path == "/api/armed-trade/arm":
+                    if not isinstance(payload, dict) or set(payload) != {"amount"} or not isinstance(payload["amount"], str):
+                        raise AutoTradeError("Only a dollar amount may be armed")
+                    result = auto.arm(payload["amount"])
+                elif self.path == "/api/armed-trade/cancel":
+                    if payload != {}:
+                        raise AutoTradeError("Cancel accepts no parameters")
+                    result = auto.cancel()
+                else:
+                    self._json(404, {"error":"Unknown AutoTrade action"})
+                    return
+                self._json(200, result)
+            except (AutoTradeError, ValueError, TypeError, KeyError) as exc:
+                self._json(409, {"error":str(exc)[:180]})
+            except Exception:
+                LOG.exception("AutoTrade control action failed")
+                self._json(503, {"error":"AutoTrade control failed; inspect local logs"})
 
         def _manual_ticker(self) -> str:
             data = read_live_dashboard(root)
@@ -508,6 +557,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self._json(404, {"error": "unknown AutoTrader action"})
 
         def do_POST(self) -> None:
+            if self.path.startswith("/api/armed-trade/"):
+                self._auto_post()
+                return
             if self.path == "/api/manual-trade/order":
                 self._manual_post()
                 return
@@ -570,6 +622,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return False
 
         def do_GET(self) -> None:
+            if self.path == "/api/armed-trade/status":
+                self._auto_get()
+                return
             if urlsplit(self.path).path.startswith("/api/manual-trade/"):
                 self._manual_get()
                 return
@@ -666,13 +721,16 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         manual_trader = ManualTrader(root, vault=credential_vault) if credential_vault is not None else None
     except VaultError:
         manual_trader = None
+    from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
+    auto_trader = ArmedAutoTrader(manual_trader, lambda: read_live_dashboard(root)) if manual_trader else None
     paper_worker = threading.Thread(
         target=paper_trader.run_forever, args=(stop,),
         name="kalshi-paper-autotrader", daemon=True,
     )
     server = ThreadingHTTPServer(
         ("127.0.0.1", port),
-        _make_handler(root, controller=controller, paper_trader=paper_trader, credential_vault=credential_vault, manual_trader=manual_trader),
+        _make_handler(root, controller=controller, paper_trader=paper_trader,
+                      credential_vault=credential_vault, manual_trader=manual_trader, auto_trader=auto_trader),
     )
     server.daemon_threads = True
     worker.start()
@@ -691,6 +749,8 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         worker.join(timeout=2)
         paper_worker.join(timeout=3)
         paper_trader.market_client.close()
+        if auto_trader is not None:
+            auto_trader.close()
         if manual_trader is not None:
             manual_trader.close()
     return 0
