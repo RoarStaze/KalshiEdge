@@ -20,6 +20,7 @@ class FakeAuto:
         self.actions=[]
         self.current={"state":"IDLE","ticker":None}
     def status(self):return self.current
+    def history(self):return {"entries":[{"ticker":"KXBTC15M-TEST","outcome":"UP","status":"FILLED","amount":"1.00"}]}
     def arm(self,amount):
         self.actions.append(("arm",amount))
         self.current={"state":"WAITING","ticker":"KXBTC15M-TEST","amount":amount}
@@ -61,6 +62,9 @@ def test_auto_api_requires_explicit_same_origin_arm_and_cancel(tmp_path,monkeypa
         with httpx.Client(timeout=5,trust_env=False) as client:
             initial=client.get(origin+"/api/armed-trade/status")
             assert initial.status_code==200 and initial.json()["state"]=="IDLE"
+            recent=client.get(origin+"/api/armed-trade/history")
+            assert recent.status_code==200
+            assert recent.json()["entries"][0]["ticker"]=="KXBTC15M-TEST"
             bad=client.post(origin+"/api/armed-trade/arm",json={"amount":"1.00"})
             assert bad.status_code==403 and auto.actions==[]
             bad=client.post(origin+"/api/armed-trade/arm",json={"amount":"1.00"},
