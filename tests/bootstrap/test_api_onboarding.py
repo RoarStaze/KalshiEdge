@@ -42,7 +42,7 @@ def test_four_link_navigation_and_no_intro_on_trade():
         assert page.count('class="site-nav-link') == 4
         for link in ("trade", "train", "history", "api"):
             assert f'href="/{link}"' in page
-        assert f'aria-current="page">{section.title()}</a>' in page
+        assert f'aria-current="page">{"API" if section == "api" else section.title()}</a>' in page
     trade = render_site_page(template(), "trade")
     assert 'Trade / Live Markets' not in trade
     assert 'Bitcoin, in real time.' not in trade
