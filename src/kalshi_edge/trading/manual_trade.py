@@ -188,6 +188,16 @@ class ManualTrader:
             balance = decimal(balance_raw.get("balance_dollars",
                                   Decimal(str(balance_raw["balance"])) / 100
                                   if "balance" in balance_raw else None))
+            # Kalshi's integer-cent balance is authoritative for a two-decimal
+            # account header. Preserve balance_dollars (up to four decimals)
+            # separately for trading calculations and available-funds checks.
+            cash_cents = balance_raw.get("balance")
+            if cash_cents is None:
+                # Compatibility with older/fake transports that only return
+                # the fixed-point dollar balance; never round up spendable cash.
+                cash_cents = int((balance * 100).to_integral_value(rounding=ROUND_FLOOR))
+            elif type(cash_cents) is not int or cash_cents < 0:
+                raise TradingError("Invalid Kalshi cash balance")
             marked_cents = balance_raw.get("portfolio_value")
             # Kalshi returns the marked value of held contracts in integer cents.
             # Cash is returned separately as a fixed-point dollar string.
@@ -218,6 +228,11 @@ class ManualTrader:
                 "ticker": ticker, "balance": balance, "position": position,
                 "exposure": exposure if has_exposure and exposure >= 0 else None,
                 "portfolio_total": portfolio_total,
+                "cash_display": format(Decimal(cash_cents) / 100, ".2f"),
+                "portfolio_display": (
+                    format(Decimal(cash_cents + marked_cents) / 100, ".2f")
+                    if marked_cents is not None else None
+                ),
                 "at": time.monotonic(),
             }
             return balance, position
@@ -342,6 +357,10 @@ class ManualTrader:
             "up_ask": _money(up["unit_cash"]) if up else None,
             "down_ask": _money(down["unit_cash"]) if down else None,
             "available_balance": _money(balance),
+            "cash_display": cache["cash_display"]
+            if cache is not None and cache["ticker"] == ticker else None,
+            "portfolio_display": cache["portfolio_display"]
+            if cache is not None and cache["ticker"] == ticker else None,
             "portfolio_total": _money(cache["portfolio_total"])
             if cache is not None and cache["ticker"] == ticker
             and cache.get("portfolio_total") is not None else None,
