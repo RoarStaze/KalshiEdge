@@ -149,3 +149,93 @@ def test_no_fill_diagnostics_include_quote_and_order_data(env):
     assert row["status"]=="NO_FILL"
     assert row["order_id"]=="early-no-fill"
     assert "0.00"==row["fill_count"]
+
+def test_confirmed_no_fill_early_retries_once_with_fresh_quote(env):
+    clock,feed,manual,engine=env
+    manual.first_buy_status="NO_FILL"
+    engine.arm("0.50",continuous=True,start_worker=False)
+    feed.early();engine.tick()
+    assert engine.status()["state"]=="WAITING"
+    clock.t += 2*NS
+    engine.tick()
+    assert [o[0] for o in manual.orders]==["BUY","BUY"]
+    assert engine.status()["early_filled"]=="0.40"
+    assert [x["stage"] for x in engine.history_store.recent_stages(feed.ticker)] == [
+        "EARLY_BUY", "EARLY_BUY_2"
+    ]
+    engine.tick()
+    assert len(manual.orders)==2
+
+
+def test_confirmed_final_no_fill_retries_within_final_lock_window(env):
+    clock,feed,manual,engine=env
+    manual.first_buy_status="NO_FILL"
+    engine.arm("0.50",continuous=True,start_worker=False)
+    feed.conf=.70
+    feed.early();engine.tick()
+    assert not manual.orders
+    feed.lock("BELOW");engine.tick()
+    assert manual.orders==[("BUY","DOWN","0.50")]
+    clock.t+=2*NS
+    engine.tick()
+    assert manual.orders==[("BUY","DOWN","0.50"),("BUY","DOWN","0.50")]
+    assert [x["stage"] for x in engine.history_store.recent_stages(feed.ticker)]==[
+        "FINAL_BUY","FINAL_BUY_2"
+    ]
+
+
+def test_no_selling_when_final_confidence_is_below_gate(env):
+    _,feed,manual,engine=env
+    engine.arm("1.00",continuous=True,start_worker=False)
+    feed.early();engine.tick()
+    feed.lock("BELOW")
+    feed.final["confidence"]=0.55
+    engine.tick()
+    assert [o[0] for o in manual.orders]==["BUY"]
+    assert engine.status()["last_result"]=="SKIPPED"
+
+
+def test_reversal_unknown_sell_never_submits_opposite_buy(env):
+    _,feed,manual,engine=env
+    engine.arm("1.00",continuous=True,start_worker=False)
+    feed.early();engine.tick()
+    original_place=manual.place
+    def fail_sell(preview_id,ticker):
+        if manual.quoted[-1][1]=="SELL":
+            raise TimeoutError("Exchange may have accepted the sell")
+        return original_place(preview_id,ticker)
+    manual.place=fail_sell
+    feed.lock("BELOW");engine.tick()
+    assert [o[0] for o in manual.orders]==["BUY"]
+    assert engine.status()["state"]=="UNKNOWN"
+    assert [a["stage"] for a in engine.history_store.recent_stages(feed.ticker)] == [
+        "EARLY_BUY","REVERSAL_SELL"
+    ]
+
+
+def test_reversal_no_sell_liquidity_does_not_buy_opposite(env):
+    _,feed,manual,engine=env
+    engine.arm("1.00",continuous=True,start_worker=False)
+    feed.early();engine.tick()
+    original_preview=manual.preview
+    def short_sell(ticker,action,outcome,units,amount):
+        quote=original_preview(ticker,action,outcome,units,amount)
+        if action=="SELL":
+            quote["count"]="0.01"
+        return quote
+    manual.preview=short_sell
+    feed.lock("BELOW");engine.tick()
+    assert len(manual.orders)==1
+    assert engine.status()["state"]=="REVIEW"
+
+
+def test_rearm_after_no_fill_requires_waiting_until_new_market(env):
+    _,feed,manual,engine=env
+    manual.first_buy_status="NO_FILL"
+    engine.arm("1.00",continuous=True,start_worker=False)
+    feed.early();engine.tick()
+    engine.cancel()
+    another=ArmedAutoTrader(manual,feed,now_ns=feed.c.now,
+                             history_path=engine.history_store.path)
+    with pytest.raises(ValueError,match="already used"):
+        another.arm("1.00",start_worker=False)
