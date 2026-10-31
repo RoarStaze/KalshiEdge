@@ -31,7 +31,7 @@ def test_manual_quote_book_mapping(action,outcome,expected_yes_price,expected_bo
 def test_no_buy_without_balance_or_sell_without_position(tmp_path):
     trader=ManualTrader(tmp_path, vault=SimpleNamespace(exists=lambda:True),client=None)
     with pytest.raises(TradingError):
-        trader.size_order(Decimal("0.01"),"BUY","UP","DOLLARS",Decimal("2"),Decimal("0"),
+        trader.size_order(Decimal("0"),"BUY","UP","DOLLARS",Decimal("2"),Decimal("0"),
                           orderbook(),market())
     with pytest.raises(TradingError):
         trader.size_order(Decimal("10.00"),"SELL","UP","SHARES",Decimal("1"),Decimal("0"),
