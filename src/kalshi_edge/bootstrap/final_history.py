@@ -308,6 +308,8 @@ def read_final_history(root: Path) -> dict[str, Any]:
             "directional_probability": forecast.directional_probability,
             "p_yes": forecast.p_yes,
             "p_no": forecast.p_no,
+            "kalshi_yes_bid": forecast.kalshi_yes_bid,
+            "kalshi_yes_ask": forecast.kalshi_yes_ask,
             "strike": forecast.strike,
             "seconds_remaining": forecast.seconds_remaining,
             "reason": forecast.reason,
