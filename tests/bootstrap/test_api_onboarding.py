@@ -68,7 +68,7 @@ def test_api_is_last_page_with_credential_form_and_no_other_cards():
     assert 'id="api-private-key"' in page
     assert 'id="api-delete"' in page
     assert 'Save encrypted locally' in page
-    assert 'api/autotrader' not in page  # API uses existing authenticated URL through distinct JS string
+    assert '"/api/autotrader/credentials"' in page  # Reuses the secure DPAPI credential endpoint
     assert 'body[data-page="api"] .layout' in page
     assert 'body[data-page="api"] .training-card' in page
     assert 'body[data-page="api"] .history-view' in page
