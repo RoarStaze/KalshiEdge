@@ -197,3 +197,27 @@ def test_ed25519_signatures_use_v2_path_without_query_signature():
         assert received[1][1]=="/trade-api/v2/portfolio/events/orders"
     finally:
         client.close()
+
+
+def test_rsa_pss_production_api_key_authentication():
+    import base64
+    from cryptography.hazmat.primitives.asymmetric import rsa, padding
+    from cryptography.hazmat.primitives import serialization, hashes
+    from kalshi_edge.trading.manual import KalshiManualClient
+    key=rsa.generate_private_key(public_exponent=65537,key_size=2048)
+    pem=key.private_bytes(serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,serialization.NoEncryption()).decode()
+    class Vault:
+        def load(self): return "rsa-test",pem
+    def handler(req):
+        sig=base64.b64decode(req.headers["KALSHI-ACCESS-SIGNATURE"])
+        signed=(req.headers["KALSHI-ACCESS-TIMESTAMP"]+req.method+req.url.path).encode()
+        key.public_key().verify(sig,signed,
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
+                        salt_length=hashes.SHA256().digest_size),hashes.SHA256())
+        return httpx.Response(200,json={"balance_dollars":"3.1400"})
+    client=KalshiManualClient(Vault(),transport=httpx.MockTransport(handler))
+    try:
+        assert client.balance()==Decimal("3.1400")
+    finally:
+        client.close()
