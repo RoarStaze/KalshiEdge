@@ -61,6 +61,10 @@ h1{font-size:clamp(30px,3.7vw,49px);font-weight:760;letter-spacing:-1.9px;line-h
 .context>.manual-trade{min-height:100%;height:100%;background:linear-gradient(165deg,#15191e,#111519);
  border-color:#30383e;border-radius:20px;box-shadow:0 14px 50px #0000002b}
 .manual-trade .mt-top{border-bottom-color:#2a3438}
+/* Avoid stray grey hairline seams between rounded header controls and the
+   two Trade cards. Keep the surrounding card borders and focus indicators. */
+body[data-page="trade"] .site-header{border-bottom:0}
+body[data-page="trade"] .manual-trade .mt-top{border-bottom:0}
 .manual-trade .mt-pills{border-color:#34413f}
 .manual-trade .mt-inputbox{border-color:#384246;background:#10191b}
 .manual-trade .mt-action{background:#28d2a0;border:0;outline:0;box-shadow:0 10px 28px #18c98c1b;
