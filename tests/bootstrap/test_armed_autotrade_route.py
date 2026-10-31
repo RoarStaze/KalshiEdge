@@ -21,9 +21,9 @@ class FakeAuto:
         self.current={"state":"IDLE","ticker":None}
     def status(self):return self.current
     def history(self):return {"entries":[{"ticker":"KXBTC15M-TEST","outcome":"UP","status":"FILLED","amount":"1.00"}]}
-    def arm(self,amount):
-        self.actions.append(("arm",amount))
-        self.current={"state":"WAITING","ticker":"KXBTC15M-TEST","amount":amount}
+    def arm(self,amount,*,continuous=False):
+        self.actions.append(("arm",amount,continuous))
+        self.current={"state":"WAITING","ticker":"KXBTC15M-TEST","amount":amount,"continuous":continuous}
         return self.current
     def cancel(self):
         self.actions.append(("cancel",))
@@ -76,7 +76,8 @@ def test_auto_api_requires_explicit_same_origin_arm_and_cancel(tmp_path,monkeypa
             correct=client.post(origin+"/api/armed-trade/arm",json={"amount":"1.00"},
                 headers={"Origin":origin,"X-KalshiEdge-Action":"armed-trade"})
             assert correct.status_code==200
-            assert auto.actions==[("arm","1.00")]
+            assert auto.actions==[("arm","1.00",True)]
+            assert correct.json()["continuous"] is True
             assert client.get(origin+"/api/armed-trade/status").json()["state"]=="WAITING"
             cancelled=client.post(origin+"/api/armed-trade/cancel",json={},
                 headers={"Origin":origin,"X-KalshiEdge-Action":"armed-trade"})
