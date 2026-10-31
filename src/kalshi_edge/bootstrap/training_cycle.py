@@ -177,15 +177,18 @@ def inspect_training_readiness(root: Path) -> dict[str, Any]:
     try:
         previous_end = training._previous_lockbox_end_ts_ns(root)
         if previous_end is None:
-            result["reason"] = "Promote a baseline model before starting the learning cycle."
+            result["status"] = "BLOCKED"
+            result["reason"] = "Promote and independently evaluate a baseline model before starting the learning cycle."
             return result
         root_models = root / "models" / "default.json"
         if not root_models.is_file():
+            result["status"] = "BLOCKED"
             result["reason"] = "A promoted baseline model is required."
             return result
 
         path = root / "derived" / "features.parquet"
         if not path.is_file():
+            result["status"] = "BLOCKED"
             result["reason"] = "Historical feature dataset is missing. Backfill and rebuild it."
             return result
 
@@ -204,14 +207,17 @@ def inspect_training_readiness(root: Path) -> dict[str, Any]:
         result["eligible_markets"] = len(cases)
         result["outcome_classes"] = len({case.selected_label for case, _, _ in cases})
 
-        # Overall eligibility is gated by three INDEPENDENT requirements.
-        progress = min(
-            len(cases) / TARGET_CASE_MARKETS,
-            len(fresh) / TARGET_NEW_MARKETS,
-            result["outcome_classes"] / 2,
-            1,
+        # Display partial evidence collection, not the minimum gate ratio.
+        # Using min() makes the UI read 0% whenever even one prerequisite
+        # is missing, despite growth in the other independent categories.
+        # These weights are a *readiness indicator*, not a fraction of
+        # completed training, and NEVER authorize training by themselves.
+        case_ratio = min(1.0, len(cases) / TARGET_CASE_MARKETS)
+        class_ratio = min(1.0, result["outcome_classes"] / 2)
+        fresh_ratio = min(1.0, len(fresh) / TARGET_NEW_MARKETS)
+        result["progress_percent"] = min(
+            99, int(100 * (0.4 * case_ratio + 0.2 * class_ratio + 0.4 * fresh_ratio))
         )
-        result["progress_percent"] = min(99, int(progress * 100))
         result["total_enrolled"] = len(_learning_pool(root, mode))
         if len(fresh) < TARGET_NEW_MARKETS:
             result["reason"] = (
