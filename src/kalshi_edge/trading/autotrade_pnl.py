@@ -10,6 +10,8 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .execution_quality import measure_execution_quality
+
 
 MAX_PAGES = 5
 
@@ -171,7 +173,7 @@ def enrich_history(entries: list[dict], client=None) -> list[dict]:
     for original in entries:
         row = dict(original)
         row.update(max_payout_dollars=None, realized_pnl_dollars=None,
-                   pnl_status="UNAVAILABLE")
+                   pnl_status="UNAVAILABLE", execution_quality=None)
         stages = _stages(row)
         # A market may first buy UP, sell it on reversal, then buy DOWN,
         # or have a zero-fill first attempt followed by a successful retry.
@@ -225,6 +227,13 @@ def enrich_history(entries: list[dict], client=None) -> list[dict]:
                     contracts, stages, by_market.get(ticker, []),
                     found[ticker]["market_result"], ticker)
                 row["pnl_status"] = "SETTLED"
+                # Only after the exchange fills and official settlement have
+                # fully reconciled may archived pretrade quotes be compared
+                # with real fill prices/fees. Historical absent quotes stay
+                # MISSING_QUOTE; no extra exchange requests or order changes.
+                row["execution_quality"] = measure_execution_quality(
+                    _stages(row), by_market.get(ticker, []), ticker,
+                )
             except RuntimeError as exc:
                 row["pnl_status"] = "MIXED" if str(exc) == "MIXED" else "UNAVAILABLE"
             except (ValueError, InvalidOperation, TypeError, KeyError):
