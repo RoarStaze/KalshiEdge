@@ -47,7 +47,9 @@ class FakeManual:
     def preview(self,ticker,action,outcome,units,amount):
         self.previews.append((ticker,action,outcome,units,str(amount)))
         return {"ticker":ticker,"action":action,"outcome":outcome,
-                "preview_id":"preview-once", "count":"0.15"}
+                "preview_id":"preview-once", "count":"0.15",
+                "unit_price":"0.4000", "fee_estimate":"0.003000",
+                "amount_estimate":"0.0630"}
     def place(self,preview_id,ticker):
         self.orders.append((preview_id,ticker))
         if self.failure:
