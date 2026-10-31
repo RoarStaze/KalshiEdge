@@ -9,7 +9,9 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from ..auth import create_auth_headers, load_private_key
+from ..auth import create_auth_headers
+from ..trading.vault import CredentialVault
+from .live_kalshi import resolve_live_credentials
 from ..config import CollectorSettings
 from .config import BootstrapSettings
 
@@ -38,12 +40,13 @@ class KalshiHistoricalClient:
         http: httpx.Client | None = None,
         sleep: Callable[[float], None] = default_sleep,
         max_attempts: int = 4,
+        vault: CredentialVault | None = None,
     ) -> None:
-        key_id, private_key_path = settings.require_credentials()
+        key_id, private_key = resolve_live_credentials(settings, vault=vault)
         self.settings = settings
         self.bootstrap = bootstrap
         self.key_id = key_id
-        self.private_key = load_private_key(private_key_path)
+        self.private_key = private_key
         self._http = http or httpx.Client(timeout=20.0)
         self._owns_http = http is None
         self._sleep = sleep
