@@ -174,7 +174,7 @@ SCRIPT = r"""
    el("mt-submit").disabled=!okay;
  }
  async function refresh(){
-   if(busy || !el("mt-confirm").classList.contains("mt-hidden")&&el("mt-confirm").classList.contains("show"))return;
+   if(busy || el("mt-confirm").classList.contains("show"))return;
    try{
      const response=await fetch("/api/manual/status",{cache:"no-store"});
      const value=await response.json();
@@ -240,6 +240,8 @@ def integrate_manual_trade_card(page: str) -> str:
     page = page.replace(anchor, ' <div class="context manual-trade-context">\n' + SECTION + '\n', 1)
     if "</style>" not in page or "</body>" not in page:
         raise ValueError("Dashboard markup incomplete")
+    page = page.replace('<span class="chip">READ-ONLY</span>', '<span class="chip">MANUAL REAL ORDERS</span>', 1)
+    page = page.replace("Read-only research tool.", "Forecast research and explicitly authorized manual orders.", 1)
     page = page.replace("</style>", STYLE+"\n</style>", 1)
     page = page.replace("</body>", SCRIPT+"\n</body>", 1)
     return page
