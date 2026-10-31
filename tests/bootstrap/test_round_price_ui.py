@@ -33,8 +33,8 @@ def test_approved_price_and_time_hero_is_in_main_dashboard():
 
 def test_live_tick_uses_correct_benchmark_and_resets_on_stale_or_new_market():
     page = integrate_round_price_hero(PAGE)
-    assert "prediction.brti_value" in page
-    assert "prediction.brti_source_ts_ns" in page
+    assert "prediction?.brti_value" in page
+    assert "prediction?.brti_source_ts_ns" in page
     assert "data.strike" in page
     assert "Math.abs(delta)" in page
     assert "delta / data.strike" in page
@@ -45,7 +45,7 @@ def test_live_tick_uses_correct_benchmark_and_resets_on_stale_or_new_market():
     assert "hero-current" in page
     assert "hero-delta" in page
     assert "price-source" in page
-    assert "fetch(" not in page[page.index('function renderRoundPriceHero'):page.index('function updateRoundPriceClock')]
+    assert "fetch(" not in page[page.index('function renderRoundPriceHero'):page.index('function renderLive(data){')]
 
 
 def test_integration_preserves_original_forecast_and_live_status_elements():
