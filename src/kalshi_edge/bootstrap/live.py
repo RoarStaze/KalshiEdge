@@ -645,6 +645,31 @@ class PredictionJsonlWriter:
         return path
 
 
+def persist_prediction_tick(
+    market: LiveMarket | None,
+    prediction: LivePredictionRecord,
+    *,
+    now_ns: int,
+    final_gate: FinalForecastGate,
+    final_writer: FinalForecastWriter,
+    prediction_writer: PredictionJsonlWriter,
+):
+    """Persist the deadline-sensitive immutable decision BEFORE the 1 Hz archive.
+
+    The continuous prediction JSONL is useful for diagnostics, but each append
+    flushes and fsyncs. It must not sit on the critical path before the 240s
+    decision lock. Only the existing fail-closed gate decides the forecast.
+    """
+    final = final_gate.evaluate(market, now_ns=now_ns, prediction=prediction)
+    saved_path = None
+    if final is not None and market is not None:
+        saved_path = final_writer.save(
+            final, market_close_ts_ns=market.close_ts_ns,
+        )
+    prediction_writer.append(prediction)
+    return final, saved_path
+
+
 async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSettings) -> None:
     bundle, pipeline = load_default_model(bootstrap.bootstrap_dir)
     state = LiveFeatureState()
@@ -673,12 +698,12 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
             # and the independent single-shot 240s final-forecast gate.
             market = state.market
             prediction = predictor.predict(now_ns)
-            writer.append(prediction)
-            final = final_gate.evaluate(market, now_ns=now_ns, prediction=prediction)
-            if final is not None and market is not None:
-                saved_path = final_writer.save(final, market_close_ts_ns=market.close_ts_ns)
-                if saved_path is not None:
-                    print(
+            final, saved_path = persist_prediction_tick(
+                market, prediction, now_ns=now_ns, final_gate=final_gate,
+                final_writer=final_writer, prediction_writer=writer,
+            )
+            if saved_path is not None:
+                print(
                         f"FINAL FORECAST: {final.market_ticker} "
                         f"{final.forecast} confidence={final.confidence} "
                         f"remaining={final.seconds_remaining:.3f}s "
