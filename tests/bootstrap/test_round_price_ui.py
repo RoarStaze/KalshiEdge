@@ -6,7 +6,7 @@ unchanged. The same /api/live prediction payload supplies the BRTI reference.
 from __future__ import annotations
 
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
-from kalshi_edge.bootstrap.round_price_ui import integrate_round_price_hero
+from kalshi_edge.bootstrap.round_price_ui import HERO_STYLE, integrate_round_price_hero
 
 
 def test_approved_price_and_time_hero_is_in_main_dashboard():
@@ -66,12 +66,30 @@ def test_integration_preserves_original_forecast_and_live_status_elements():
     assert "FINAL FORECAST" in page
     assert "setInterval(refreshLive" in page
 
-def test_forecast_uses_full_width_primary_card_like_approved_screenshot():
+def test_forecast_retains_original_page_grid_and_card_dimensions():
     page=integrate_round_price_hero(PAGE)
-    assert ".layout{grid-template-columns:minmax(0,1fr)" in page
-    assert ".hero-price-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)" in page
+    # Original 445px forecast column and outer card CSS must remain unchanged.
+    assert ".layout{display:grid;grid-template-columns:minmax(325px,445px) minmax(0,1fr)" in page
+    assert ".forecast{position:relative;padding:25px 26px 23px;border-top:2px solid var(--cyan);min-height:535px}" in page
+    assert ".layout{" not in HERO_STYLE
+    assert ".layout>" not in HERO_STYLE
+    assert ".forecast{padding:" not in HERO_STYLE
+    assert ".forecast{min-height:" not in HERO_STYLE
+    assert ".context{" not in HERO_STYLE
+    assert "container-type:inline-size" in HERO_STYLE
+    assert "grid-template-columns:repeat(2,minmax(0,1fr))" in HERO_STYLE
     assert "flex-direction:column" not in page[page.index(".hero-price-grid"):page.index(".hero-price-grid")+120]
     assert ".forecast .round-price-hero" in page
     assert "function clock(){updateRoundPriceClock();" in page
     assert 'id="hero-lock-at"' in page
     assert '<span id="hero-delta">' in page
+
+
+def test_mockup_css_scoped_and_other_cards_preserved():
+    page=integrate_round_price_hero(PAGE)
+    assert page.count('id="round-price-hero"') == 1
+    assert page.index('<article class="card forecast">') < page.index('id="round-price-hero"') < page.index('</article>')
+    assert 'class="context"' in page
+    assert '.forecast .hero-clock-panel' in HERO_STYLE
+    assert '.forecast .hero-price-number' in HERO_STYLE
+    assert "@container" in HERO_STYLE
