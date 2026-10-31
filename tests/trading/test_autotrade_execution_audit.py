@@ -194,7 +194,7 @@ def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_pa
         orders = []
         def preview(self,*args):
             return {**quote(), "unit_price":"0.9900",
-                    "amount_estimate":"0.2500"}
+                    "amount_estimate":"0.2535"}
         def place(self,*args):
             self.orders.append(args)
             raise AssertionError("Uneconomic quote must not trade")
