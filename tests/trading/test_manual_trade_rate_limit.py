@@ -103,7 +103,7 @@ def test_ticker_change_does_not_burst_balance_requests(session):
 def test_live_order_rechecks_balance_even_with_recent_preview(session):
     _, sleeps, client, trader = session
     preview = trader.preview(TICKER, "BUY", "DOWN", "DOLLARS", "1.00")
-    client.balance = "0.01"
+    client.balance = "0.00"
     with pytest.raises(TradingError, match="(Insufficient cash|smaller than one executable)"):
         trader.place(preview["preview_id"], TICKER)
     assert not client.submitted
