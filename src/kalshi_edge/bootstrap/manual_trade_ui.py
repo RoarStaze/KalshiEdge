@@ -233,8 +233,8 @@ SCRIPT = r"""
   button.textContent=armed?(autoCurrent.state==="EXECUTING"?"Executing locked forecast…":"Cancel AutoTrade"):"Arm AutoTrade";
   button.disabled=autoBusy||autoCurrent.state==="EXECUTING"||(!armed&&!canArm);
   const messages={
-   WAITING:"ARMED · "+autoCurrent.amount+" USD · Waiting for the locked final forecast ("+(autoCurrent.ticker||"current round")+")",
-   EXECUTING:"Locked final forecast: "+(autoCurrent.outcome||"—")+" · checking exchange order",
+   WAITING:"ARMED · "+autoCurrent.amount+" USD each round · "+(autoCurrent.message||"Monitoring 90% live / final forecast")+" ("+(autoCurrent.ticker||"current round")+")",
+   EXECUTING:"Executing AutoTrade: "+(autoCurrent.outcome||"—")+" · "+(autoCurrent.message||"checking Kalshi")+",
    FILLED:"Order filled · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
    NO_FILL:"No shares filled · no automatic retry",
@@ -242,9 +242,10 @@ SCRIPT = r"""
    EXPIRED:"Market changed or final forecast too late · no trade",
    CANCELLED:"AutoTrade cancelled. Nothing submitted.",
    ERROR:"AutoTrade stopped before order · check live market and quote",
-   UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry"
+   UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry",
+   REVIEW:"Reversal not confirmed · manual review required before further AUTO orders"
   };
-  shown("manual-auto-status",messages[autoCurrent.state]||"Auto waits for final ABOVE / BELOW and buys only its direction. Click Arm AutoTrade to enable one trade.");
+  shown("manual-auto-status",messages[autoCurrent.state]||"Live ≥90% at ≤8m, otherwise final lock. Opposite final after early fill sells then buys the final side. Arm AutoTrade to begin.");
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
  }
  function setMode(next){
@@ -329,6 +330,17 @@ SCRIPT = r"""
     const fill=document.createElement("span");
     fill.textContent=entry.fill_count!=null?"Filled "+entry.fill_count+" shares":entry.status==="UNKNOWN"?"Verify Kalshi order":"";
     detail.append(confidence,fill);item.appendChild(detail);
+    if(Array.isArray(entry.stages)&&entry.stages.length){
+      const details=document.createElement("div");details.className="mt-auto-record-sub";
+      const words=entry.stages.map(stage=>{
+        const name=String(stage.stage||"").replaceAll("_"," ");
+        const dir=stage.outcome==="UP"?"UP":"DOWN";
+        const outcome=String(stage.status||"UNKNOWN").replaceAll("_"," ");
+        return name+" "+dir+": "+outcome+(stage.fill_count!=null?" ("+stage.fill_count+" shares)":"");
+      });
+      details.textContent=words.join(" · ");
+      item.appendChild(details);
+    }
     const ticker=document.createElement("div");ticker.className="mt-auto-record-ticker";
     ticker.textContent=String(entry.ticker||"");
     item.appendChild(ticker);list.appendChild(item);
@@ -412,7 +424,7 @@ SCRIPT = r"""
   if(!snapshot){shown("manual-status","Awaiting live market");return}
   if(action==="BUY"&&autoSelected){
    shown("manual-odds","At final lock");
-   shown("manual-status",autoPending()?"Waiting for final forecast to lock":"Enter dollars and click Arm AutoTrade. SKIP means no trade.");
+   shown("manual-status",autoPending()?(autoCurrent.message||"Waiting for 90% live signal or locked final forecast"):"Enter dollars to Arm AutoTrade. It can enter early at ≥90% confidence and reverse on an opposite final lock.");
    return;
   }
   if(action==="SELL"){

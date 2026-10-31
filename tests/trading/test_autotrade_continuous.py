@@ -63,7 +63,8 @@ class Orders:
         self.orders.append((preview_id,ticker))
         if self.fail is not None:
             raise self.fail
-        return {"status":self.status,"order_id":f"order-{ticker}","fill_count":"0.25"}
+        return {"status":self.status,"order_id":f"order-{ticker}",
+                "fill_count":"0.00" if self.status=="NO_FILL" else "0.25"}
 
 
 @pytest.fixture

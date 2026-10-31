@@ -37,6 +37,20 @@ class AutoTradeHistory:
                     fill_count TEXT
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS auto_trade_stages (
+                    ticker TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    attempted_at_ns INTEGER NOT NULL,
+                    outcome TEXT NOT NULL,
+                    amount TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    order_id TEXT,
+                    fill_count TEXT,
+                    PRIMARY KEY (ticker, stage)
+                )
+            """)
             db.commit()
         if os.name != "nt":
             os.chmod(self.path, 0o600)
@@ -74,6 +88,51 @@ class AutoTradeHistory:
                 """, (status, order_id, fill_count, ticker))
                 if cursor.rowcount != 1:
                     raise ValueError("Cannot update missing AutoTrade attempt")
+
+    def record_stage_attempt(self, *, ticker: str, stage: str,
+                             attempted_at_ns: int, outcome: str, amount: str,
+                             confidence: float) -> None:
+        allowed = ("EARLY_BUY", "EARLY_BUY_2", "REVERSAL_SELL",
+                   "FINAL_BUY", "FINAL_BUY_2")
+        if stage not in allowed or outcome not in ("UP", "DOWN"):
+            raise ValueError("Invalid AutoTrade order stage")
+        with closing(sqlite3.connect(self.path, timeout=5.0)) as db:
+            with db:
+                db.execute("""
+                    INSERT INTO auto_trade_stages
+                    (ticker,stage,attempted_at_ns,outcome,amount,confidence,status)
+                    VALUES (?,?,?,?,?,?,'ATTEMPTED')
+                """, (ticker,stage,attempted_at_ns,outcome,amount,confidence))
+
+    def record_stage_result(self, *, ticker: str, stage: str,
+                            status: str, order_id: str | None,
+                            fill_count: str | None) -> None:
+        if status not in ("FILLED", "PARTIAL", "NO_FILL", "UNKNOWN"):
+            raise ValueError("Invalid exchange execution status")
+        with closing(sqlite3.connect(self.path, timeout=5.0)) as db:
+            with db:
+                row = db.execute("""
+                    UPDATE auto_trade_stages SET status=?, order_id=?, fill_count=?
+                    WHERE ticker=? AND stage=? AND status='ATTEMPTED'
+                """, (status,order_id,fill_count,ticker,stage))
+                if row.rowcount != 1:
+                    raise ValueError("Stage already finalized or missing")
+
+    def recent_stages(self, ticker: str) -> list[dict]:
+        with closing(sqlite3.connect(self.path, timeout=5.0)) as db:
+            rows = db.execute("""
+                SELECT ticker,stage,attempted_at_ns,outcome,amount,confidence,
+                       status,order_id,fill_count FROM auto_trade_stages
+                WHERE ticker=? ORDER BY attempted_at_ns,
+                    CASE stage WHEN 'EARLY_BUY' THEN 0
+                    WHEN 'EARLY_BUY_2' THEN 1
+                    WHEN 'REVERSAL_SELL' THEN 2
+                    WHEN 'FINAL_BUY' THEN 3 ELSE 4 END
+            """, (ticker,)).fetchall()
+        names = ("ticker","stage","attempted_at_ns","outcome","amount",
+                 "confidence","status","order_id","fill_count")
+        return [{**dict(zip(names,r)),
+                 "status":"UNKNOWN" if r[6]=="ATTEMPTED" else r[6]} for r in rows]
 
     def recent(self, limit: int = 25) -> list[dict]:
         limit = max(1, min(int(limit), 100))
