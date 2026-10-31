@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
+import httpx
 
 import kalshi_edge.trading.manual_trade as manual_trade
 from kalshi_edge.trading.manual_trade import ManualTrader, TradingError
@@ -107,3 +108,24 @@ def test_live_order_rechecks_balance_even_with_recent_preview(session):
     assert not client.submitted
     assert balance_reads(client) == 2
     assert sum(sleeps) >= 1.0
+
+
+def test_transient_balance_429_is_retried_once_as_read_only(session):
+    _, sleeps, client, trader = session
+    original_get = client.get
+    failures = [1]
+
+    def flaky_get(path, *, params=None):
+        if path == "/portfolio/balance" and failures[0]:
+            failures[0] -= 1
+            client.calls.append((path, params))
+            request = httpx.Request("GET", "https://external-api.kalshi.com/trade-api/v2/portfolio/balance")
+            response = httpx.Response(429, request=request)
+            raise httpx.HTTPStatusError("Too many requests", request=request, response=response)
+        return original_get(path, params=params)
+
+    client.get = flaky_get
+    assert trader._account(TICKER)[0] == Decimal("3.16")
+    assert balance_reads(client) == 2
+    assert sum(sleeps) >= 1.0
+    assert not client.submitted
