@@ -152,6 +152,21 @@ def test_retry_market_card_does_not_report_initial_no_fill():
     assert output["max_payout_dollars"] == "0.1100"
 
 
+def test_history_displays_only_realized_profit_or_loss_not_gross_payout():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
+    page = integrate_manual_trade(PAGE)
+    history = page.split('async function refreshAutoHistory(', 1)[1].split('async function refreshAuto(', 1)[0]
+    assert 'entry.realized_pnl_dollars' in history
+    assert 'Max payout +' not in history
+    assert 'entry.max_payout_dollars' not in history
+    assert 'finance.append(pnl);' in history
+    assert 'pnl.textContent="Profit "+signedPnl' in history
+    assert 'pnl.textContent="Loss "+signedPnl' in history
+    assert 'P/L pending settlement' in history
+    assert 'renderAutoPayout()' in page  # max payout remains in main Buy card
+
+
 def test_ui_shows_signed_green_max_payout_and_signed_realized_pnl():
     from kalshi_edge.bootstrap.dashboard_ui import PAGE
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
