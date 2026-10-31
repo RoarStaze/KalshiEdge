@@ -39,6 +39,10 @@ def _money(value):
     return format(value.quantize(Decimal("0.0001")), ".4f")
 
 
+def _shares(value):
+    return format(value.quantize(Decimal("0.01")), ".2f")
+
+
 def _top(rows):
     if not isinstance(rows, list):
         raise TradingError("Market orderbook missing bid levels")
@@ -198,11 +202,11 @@ class ManualTrader:
         return {
             "side": price["book_side"], "action": action, "outcome": outcome,
             "price": _money(price["yes_price"]), "unit_price": _money(per),
-            "count": _money(count), "fee_estimate": _money(fee),
+            "count": _shares(count), "fee_estimate": _money(fee),
             "amount_estimate": _money(effective),
             "maximum_payout": _money(count if action == "BUY" else Decimal("0")),
             "available_balance": _money(balance),
-            "position_yes": _money(position),
+            "position_yes": _shares(position),
         }
 
     def _prepare(self, ticker, action, outcome, units, amount):
@@ -254,7 +258,8 @@ class ManualTrader:
                 "outcome": outcome, "units": units, "amount": str(amount),
                 "plan": plan,
             }
-        return {"preview_id": preview_id, "expires_in_seconds": QUOTE_LIFETIME_SECONDS, **plan}
+        return {"preview_id": preview_id, "expires_in_seconds": QUOTE_LIFETIME_SECONDS,
+                "units": units, "input_amount": str(amount), **plan}
 
     def place(self, preview_id, current_ticker):
         # Atomically consume BEFORE doing anything that may submit an order.
@@ -312,7 +317,7 @@ class ManualTrader:
             "status": "FILLED" if fills == Decimal(old["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
             "order_id": order_id, "ticker": data["ticker"],
             "action": data["action"], "outcome": data["outcome"],
-            "fill_count": _money(fills),
+            "fill_count": _shares(fills),
             "average_yes_price": average if fills else None,
             "actual_unit_price": actual_unit,
             "average_fee_paid": fees if fills else None,
