@@ -37,7 +37,8 @@ def test_live_tick_uses_correct_benchmark_and_resets_on_stale_or_new_market():
     assert "prediction?.brti_source_ts_ns" in page
     assert "data.strike" in page
     assert "Math.abs(delta)" in page
-    assert "delta / data.strike" in page
+    assert "const delta=price-strike;" in page
+    assert "Math.abs(delta)/strike*100" in page
     assert "lastMarketTicker" in page
     assert "lastObservedPrice" in page
     assert "setInterval" in page
