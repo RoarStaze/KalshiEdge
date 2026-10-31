@@ -55,6 +55,11 @@ STYLE = r"""
 .manual-trade .mt-auto-record-side.up,.manual-trade .mt-auto-record-status.filled{color:#32dba8}
 .manual-trade .mt-auto-record-side.down{color:#ff738f}
 .manual-trade .mt-auto-record-status.warn{color:#f1c46b}
+.manual-trade .mt-auto-pnl-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;font-variant-numeric:tabular-nums}
+.manual-trade .mt-auto-pnl-gain{color:#29d599;font-weight:800}
+.manual-trade .mt-auto-pnl-loss{color:#ff5567;font-weight:800}
+.manual-trade .mt-auto-pnl-pending{color:#9daeb0;font-weight:500}
+.manual-trade #manual-payout,.manual-trade #manual-confirm-payout{color:#29d599}
 .manual-trade .mt-auto-record-ticker{font:10px ui-monospace,Consolas,monospace;color:#849a9c;overflow-wrap:anywhere}
 .manual-trade .mt-auto-empty{color:#9faeb0;font-size:12px;line-height:1.6;padding:8px 0}
 .manual-trade .mt-inputbox{height:55px;border:1px solid #32353a;border-radius:10px;display:flex;
@@ -189,7 +194,16 @@ SCRIPT = r"""
  const probabilityPercent=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
  let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false,previewGeneration=0;
  let buyUnits="DOLLARS",marketGeneration=0,autoSelected=false,autoBusy=false;
- let autoCurrent={state:"IDLE"},lastHistoryFetch=0;
+ let autoCurrent={state:"IDLE"},lastHistoryFetch=0,autoHistoryRows=[];
+ const signedPnl=v=>typeof v==="string"&&/^-?\d+(\.\d+)?$/.test(v)?
+    (v.startsWith("-")?"−":"+")+"$"+v.replace(/^-/, ""):"—";
+ function renderAutoPayout(){
+  if(action!=="BUY"||!autoSelected)return;
+  const current=autoHistoryRows.find(entry=>snapshot&&entry.ticker===snapshot.ticker&&entry.max_payout_dollars!=null);
+  const latest=current||autoHistoryRows.find(entry=>entry.max_payout_dollars!=null);
+  shown("manual-payout-label",current?"Max payout (this trade)":latest?"Last AutoTrade max payout":"Max payout");
+  shown("manual-payout",latest?"+"+money(latest.max_payout_dollars):"—");
+ }
  const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
  function renderAccountSummary(value){
   shown("manual-cash",value?exactMoney(value.cash_display):"—");
@@ -250,6 +264,7 @@ SCRIPT = r"""
   };
   shown("manual-auto-status",messages[autoCurrent.state]||"Live ≥90% at ≤8m, otherwise final lock. Opposite final after early fill sells then buys the final side. Arm AutoTrade to begin.");
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
+  if(selected)renderAutoPayout();
  }
  function setMode(next){
   if(placing)return;
@@ -270,6 +285,7 @@ SCRIPT = r"""
   shown("manual-quote-label",next==="BUY"?"Odds":"Average price");
   shown("manual-cost-label",next==="BUY"?"Estimated cost incl. fee":"Cash out (estimated)");
   shown("manual-submit",next==="BUY"?"Buy with 1-Click":"Sell with 1-Click");
+  shown("manual-payout-label","Max payout");
   renderAuto();renderHolding();refreshPreview();
  }
  function setSide(next){
@@ -305,6 +321,8 @@ SCRIPT = r"""
    const result=await autoJSON("history");
    if(!autoSelected||action!=="BUY")return;
    if(!Array.isArray(result.entries))throw Error("Invalid history response");
+   autoHistoryRows=result.entries;
+   renderAutoPayout();
    list.replaceChildren();
    shown("manual-auto-history-count",result.entries.length?result.entries.length+" recent markets":"");
    if(!result.entries.length){
@@ -333,6 +351,20 @@ SCRIPT = r"""
     const fill=document.createElement("span");
     fill.textContent=entry.fill_count!=null?"Filled "+entry.fill_count+" shares":entry.status==="UNKNOWN"?"Verify Kalshi order":"";
     detail.append(confidence,fill);item.appendChild(detail);
+    const finance=document.createElement("div");finance.className="mt-auto-pnl-row";
+    const possible=document.createElement("span");possible.className="mt-auto-pnl-gain";
+    possible.textContent=entry.max_payout_dollars!=null?"Max payout +"+money(entry.max_payout_dollars):"Max payout —";
+    const pnl=document.createElement("strong");
+    if(entry.realized_pnl_dollars!=null){
+     pnl.className=String(entry.realized_pnl_dollars).startsWith("-")?"mt-auto-pnl-loss":"mt-auto-pnl-gain";
+     pnl.textContent="Net P/L "+signedPnl(entry.realized_pnl_dollars);
+    }else{
+     pnl.className="mt-auto-pnl-pending";
+     pnl.textContent=entry.pnl_status==="PENDING"?"P/L pending settlement":
+       entry.pnl_status==="MIXED"?"P/L unavailable · other market trades":
+       entry.status==="NO_FILL"?"No shares filled":"P/L unavailable · verify Kalshi";
+    }
+    finance.append(possible,pnl);item.appendChild(finance);
     if(Array.isArray(entry.stages)&&entry.stages.length){
       const details=document.createElement("div");details.className="mt-auto-record-sub";
       const words=entry.stages.map(stage=>{
@@ -350,6 +382,7 @@ SCRIPT = r"""
    }
   }catch(e){
    if(!autoSelected)return;
+   autoHistoryRows=[];renderAutoPayout();
    list.replaceChildren();
    const el=document.createElement("div");el.className="mt-auto-empty";
    el.textContent="History unavailable: "+e.message;list.appendChild(el);
@@ -427,6 +460,7 @@ SCRIPT = r"""
   if(!snapshot){shown("manual-status","Awaiting live market");return}
   if(action==="BUY"&&autoSelected){
    shown("manual-odds","At final lock");
+   renderAutoPayout();
    shown("manual-status",autoPending()?(autoCurrent.message||"Waiting for 90% live signal or locked final forecast"):"Enter dollars to Arm AutoTrade. It can enter early at ≥90% confidence and reverse on an opposite final lock.");
    return;
   }
@@ -465,7 +499,7 @@ SCRIPT = r"""
    quote=value;
    shown("manual-odds",probabilityPercent(value.unit_price));
    shown("manual-estimated",money(value.amount_estimate)+" est.");
-   shown("manual-payout",money(value.maximum_payout));
+   shown("manual-payout","+"+money(value.maximum_payout));
    byId("manual-submit").disabled=false;
    shown("manual-status","Live quote · "+Number(value.count).toFixed(2)+" shares · est. fee "+money(value.fee_estimate));
   }catch(e){
@@ -495,7 +529,7 @@ SCRIPT = r"""
    shown("manual-confirm-cost",result.action==="BUY"?money(result.actual_cost):result.fill_count);
    shown("manual-confirm-fee",result.actual_fees===null?"Check exchange fills":money(result.actual_fees));
    shown("manual-confirm-payout-label",result.action==="BUY"?"Max payout":"Cash out");
-   shown("manual-confirm-payout",result.action==="BUY"?money(result.max_payout):money(result.actual_proceeds));
+   shown("manual-confirm-payout",result.action==="BUY"&&result.max_payout!=null?"+"+money(result.max_payout):money(result.actual_proceeds));
    shown("manual-confirm-order",result.order_id.slice(0,14)+"…");
    shown("manual-confirm-note","Exchange-reported result only. Check Kalshi for final balance and fills.");
    byId("manual-entry").classList.add("mt-hidden");
