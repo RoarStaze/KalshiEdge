@@ -73,9 +73,10 @@ SECTION = r"""
  <div class="auto-panel" style="margin-top:17px">
   <h3>Paper trade history and simulated P&amp;L</h3>
   <div class="auto-table"><table>
-   <thead><tr><th>Market</th><th>Forecast</th><th>Status</th><th>Quantity</th><th>Price</th><th>Estimated cost</th><th>Paper P&amp;L</th><th>Reason</th></tr></thead>
+   <thead><tr><th>Market</th><th>Forecast</th><th>Status</th><th>Candidate qty</th><th>Ask</th><th>Candidate debit</th><th>Model win P</th><th>Fee reserve</th><th>Ref. fee</th><th>Est. net EV</th><th>Paper P&amp;L</th><th>Reason</th></tr></thead>
    <tbody id="auto-trade-rows"></tbody>
   </table></div>
+  <p>SKIP diagnostics show the best hypothetical candidate, not a placed order. Fee reserve is the conservative amount used for acceptance; reference fee uses the general 7% rate and illustrative non-direct single-fill cent alignment. Actual Kalshi fees, market overrides and fractional execution are unverified. Older skips have no diagnostics.</p>
  </div>
  <div id="auto-action-message" class="auto-status" role="status" aria-live="polite"></div>
 </section>
@@ -115,9 +116,19 @@ SCRIPT = r"""
     el('auto-trade-rows').replaceChildren();
     for(const trade of status.recent_attempts||[]){
       const tr=document.createElement('tr');
-      for(const key of ['ticker','forecast','status','quantity','price','debit','net_profit','reason']){
-       field(tr,trade[key]);
-      }
+      const d=trade.diagnostics||{};
+      const values=[
+        trade.ticker,trade.forecast,trade.status,
+        trade.quantity??d.candidate_quantity,
+        trade.price??d.entry_price,
+        trade.debit??d.all_in_debit,
+        trade.model_probability??d.model_win_probability,
+        trade.fee_reserve??d.fee_reserve,
+        d.reference_fee_non_direct,
+        trade.expected_profit??d.expected_net_profit,
+        trade.net_profit,trade.reason
+      ];
+      for(const value of values)field(tr,value);
       el('auto-trade-rows').appendChild(tr);
     }
    }catch(err){el('auto-engine-state').textContent='Status unavailable: '+err.message}

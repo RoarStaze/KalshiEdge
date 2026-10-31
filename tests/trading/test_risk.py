@@ -128,3 +128,32 @@ def test_missing_flag_does_not_allow_finalized_market():
     market["market"]["status"] = "finalized"
     with pytest.raises(EntryRejected, match="market not open"):
         plan_locked_entry(f, market, book, SCHEDULED + NS)
+
+def test_cost_skip_reports_best_candidate_and_two_fee_models():
+    """One priced SKIP must explain why the quoted price cannot pass."""
+    f, market, book = fixture_data(pwin=0.95, ask=0.80)
+    with pytest.raises(EntryRejected, match="fee-aware") as caught:
+        plan_locked_entry(f, market, book, SCHEDULED + NS)
+    detail = caught.value.diagnostics
+    assert detail["model_win_probability"] == "0.950000"
+    assert detail["entry_price"] == "0.8000"
+    assert detail["candidate_quantity"] == "0.10"
+    assert detail["fee_reserve"] == "0.020000"
+    assert detail["all_in_debit"] == "0.100000"
+    assert detail["expected_net_profit"] == "-0.005000"
+    assert detail["reference_fee_non_direct"] == "0.010000"
+    assert detail["fractional_execution_verified"] is False
+
+
+def test_missing_gross_edge_still_has_quote_diagnostics():
+    f, market, book = fixture_data(pwin=0.86, ask=0.90)
+    with pytest.raises(EntryRejected, match="no gross model edge") as caught:
+        plan_locked_entry(f, market, book, SCHEDULED + NS)
+    assert caught.value.diagnostics["entry_price"] == "0.9000"
+    assert caught.value.diagnostics["model_win_probability"] == "0.860000"
+
+
+def test_reference_fee_uses_six_decimal_model_and_cent_aligned_balance():
+    from kalshi_edge.trading.risk import reference_nondirect_fee
+    assert reference_nondirect_fee(Decimal("0.8"), Decimal("0.1")) == Decimal("0.010000")
+    assert reference_nondirect_fee(Decimal("0.5"), Decimal("0.1")) == Decimal("0.010000")

@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
+import json
 from pathlib import Path
 import sqlite3
 import threading
@@ -44,8 +45,13 @@ class PaperLedger:
                 model_probability TEXT,
                 actual_side TEXT,
                 net_profit TEXT,
-                settled_ns INTEGER
+                settled_ns INTEGER,
+                diagnostics_json TEXT
             )""")
+            # Existing local installations already have a SQLite ledger.
+            columns = {row[1] for row in db.execute("PRAGMA table_info(attempts)")}
+            if "diagnostics_json" not in columns:
+                db.execute("ALTER TABLE attempts ADD COLUMN diagnostics_json TEXT")
 
     @contextmanager
     def _open(self):
@@ -67,19 +73,22 @@ class PaperLedger:
             return result.rowcount == 1
 
     def finish(self, ticker: str, *, status: str, reason: str = "",
-               plan: PaperPlan | None = None) -> None:
+               plan: PaperPlan | None = None, diagnostics: dict | None = None) -> None:
         if status not in ("PAPER_OPEN", "SKIP", "ERROR"):
             raise ValueError("invalid attempt state")
         values = plan.as_dict() if plan else {}
+        details = None if diagnostics is None else json.dumps(
+            diagnostics, sort_keys=True, allow_nan=False, separators=(",", ":")
+        )
         with self._mutex, self._open() as db:
             db.execute("""UPDATE attempts
                 SET status=?, reason=?, price=?, quantity=?, fee_reserve=?,
-                    debit=?, expected_profit=?, model_probability=?
+                    debit=?, expected_profit=?, model_probability=?, diagnostics_json=?
                 WHERE ticker=? AND status='PROCESSING'""", (
                     status, reason, values.get("price"), values.get("count"),
                     values.get("fee_reserve"), values.get("worst_case_debit"),
                     values.get("estimated_net_profit"),
-                    values.get("model_win_probability"), ticker,
+                    values.get("model_win_probability"), details, ticker,
                 ))
 
     def open_positions(self) -> list[dict]:
@@ -144,10 +153,17 @@ class PaperLedger:
 
     def snapshot(self, limit: int = 60) -> list[dict]:
         with self._mutex, self._open() as db:
-            return [dict(x) for x in db.execute(
+            rows = [dict(x) for x in db.execute(
                 "SELECT * FROM attempts ORDER BY created_ns DESC LIMIT ?",
                 (min(max(limit, 1), 200),)
             )]
+        for row in rows:
+            stored = row.pop("diagnostics_json", None)
+            try:
+                row["diagnostics"] = json.loads(stored) if stored is not None else None
+            except (TypeError, ValueError):
+                row["diagnostics"] = None
+        return rows
 
 
 class PublicMarketClient:
@@ -241,7 +257,11 @@ class PaperTrader:
                 plan = plan_locked_entry(forecast, market, book, time.time_ns())
                 self.ledger.finish(forecast.market_ticker, status="PAPER_OPEN", plan=plan)
             except (EntryRejected, httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-                self.ledger.finish(forecast.market_ticker, status="SKIP", reason=str(exc)[:180])
+                diagnostics = exc.diagnostics if isinstance(exc, EntryRejected) else None
+                self.ledger.finish(
+                    forecast.market_ticker, status="SKIP",
+                    reason=str(exc)[:180], diagnostics=diagnostics,
+                )
             except Exception:
                 # Unknown state is terminal; never blindly resubmit.
                 self.ledger.finish(forecast.market_ticker, status="ERROR",
