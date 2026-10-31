@@ -114,21 +114,15 @@ class ArmedAutoTrader:
             return
         try:
             result = details.get("result") or {}
-            ticker = snapshot["ticker"]
-            if not self.history_store.has_attempt(ticker):
-                self.history_store.record_attempt(
-                    ticker=ticker, attempted_at_ns=self.now_ns(),
-                    outcome=snapshot["outcome"], amount=snapshot["amount"],
-                    confidence=float(snapshot.get("confidence") or 0),
-                )
             self.history_store.record_result(
-                ticker=ticker, status=state,
+                ticker=snapshot["ticker"], status=state,
                 order_id=result.get("order_id") or details.get("order_id"),
                 fill_count=result.get("fill_count"),
             )
         except Exception:
-            # Failed history persistence never triggers an order retry.
-            LOG.exception("AutoTrade history write failed; verify exchange orders")
+            # The attempt was already committed before the exchange order.
+            # A failed status update leaves UNKNOWN in the history view.
+            LOG.exception("AutoTrade history status update failed; verify exchange orders")
 
     def _loop(self):
         while not self._stop.is_set():
@@ -202,10 +196,22 @@ class ArmedAutoTrader:
                     or self.now_ns() >= close - MIN_EXECUTION_REMAINING_NS):
                 self._finish("EXPIRED", "Market or forecast changed before order; no trade")
                 return
-            # This is a real-money order, explicitly authorized by the Arm click.
-            # Mark attempted BEFORE calling the exchange; no automatic retry.
+            # Commit an execution attempt BEFORE contacting the exchange.
+            # If recording fails, no order may be submitted. A crashed process
+            # leaves an UNKNOWN record rather than assuming a fill.
             with self._lock:
                 self._used.add(ticker)
+            try:
+                if self.history_store is not None:
+                    self.history_store.record_attempt(
+                        ticker=ticker, attempted_at_ns=self.now_ns(),
+                        outcome=side, amount=armed["amount"],
+                        confidence=float(confidence),
+                    )
+            except Exception:
+                LOG.exception("AutoTrade attempt journal write failed")
+                self._finish("ERROR", "Cannot save attempt history; order not submitted")
+                return
             try:
                 result = self.manual.place(preview["preview_id"], ticker)
             except Exception:
