@@ -6,6 +6,7 @@ Arm action permits trading. Restarts disarm; no ambiguous exchange retry.
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import math
 from pathlib import Path
 import logging
 from .autotrade_history import AutoTradeHistory
@@ -21,6 +22,9 @@ NS = 1_000_000_000
 FINAL_CHECKPOINT_SECONDS = 240
 MAX_LOCK_DELAY_NS = 30 * NS
 MIN_EXECUTION_REMAINING_NS = 40 * NS
+EARLY_ENTRY_WINDOW_NS = 8 * 60 * NS
+EARLY_CONFIDENCE_THRESHOLD = 0.90
+MAX_EARLY_PREDICTION_AGE_NS = 8 * NS
 TICKER_PATTERN = re.compile(r"^KXBTC15M-[A-Z0-9-]+$")
 LOG = logging.getLogger(__name__)
 
@@ -165,6 +169,39 @@ class ArmedAutoTrader:
                 return
             self._stop.wait(0.6)
 
+
+    def _early_signal(self, live: dict, *, now: int, ticker: str,
+                      close: int, checkpoint: int) -> tuple[str, float] | None:
+        """Eligible live direction only during the 8m-to-4m early window.
+
+        The live feed is validated again after quoting, before the POST.
+        An already locked final forecast is never replaced by a live signal.
+        """
+        remaining = close - now
+        if (not 0 < remaining <= EARLY_ENTRY_WINDOW_NS
+                or now >= checkpoint
+                or live.get("status") != "LIVE"
+                or live.get("market_ticker") != ticker
+                or live.get("market_close_ts_ns") != close
+                or live.get("checkpoint_ts_ns") != checkpoint
+                or live.get("final_forecast") is not None):
+            return None
+        prediction = live.get("latest_prediction")
+        if not isinstance(prediction, dict):
+            return None
+        timestamp = prediction.get("prediction_ts_ns")
+        confidence = prediction.get("confidence")
+        if (prediction.get("market_ticker") != ticker
+                or prediction.get("status") != "OK"
+                or prediction.get("predicted_side") not in ("ABOVE", "BELOW")
+                or type(timestamp) is not int
+                or not 0 <= now - timestamp <= MAX_EARLY_PREDICTION_AGE_NS
+                or type(confidence) not in (int, float)
+                or not math.isfinite(confidence)
+                or not EARLY_CONFIDENCE_THRESHOLD <= confidence <= 1):
+            return None
+        return prediction["predicted_side"], float(confidence)
+
     def tick(self) -> None:
         with self._lock:
             if self._state["state"] != "WAITING":
@@ -222,33 +259,44 @@ class ArmedAutoTrader:
         if now >= close - MIN_EXECUTION_REMAINING_NS:
             self._finish("EXPIRED", "Market closing; no order submitted")
             return
+        early = None
         if now < checkpoint:
-            return
-        if now > checkpoint + MAX_LOCK_DELAY_NS:
-            self._finish("EXPIRED", "Final forecast arrived too late; no order submitted")
-            return
-        final = live.get("final_forecast")
-        if not isinstance(final, dict):
-            return
-        if (final.get("market_ticker") != ticker
-                or final.get("scheduled_ts_ns") != checkpoint):
-            return
-        direction = final.get("forecast")
-        if direction not in ("ABOVE", "BELOW", "SKIP"):
-            return
-        confidence = final.get("confidence")
-        if (direction == "SKIP"
-                or not isinstance(confidence, (int, float))
-                or not 0.69 <= confidence <= 1):
-            self._finish("SKIPPED", "Final forecast SKIP / confidence under 69%; no order")
-            return
+            early = self._early_signal(
+                live, now=now, ticker=ticker, close=close, checkpoint=checkpoint
+            )
+            if early is None:
+                return  # Early opportunity missed; keep waiting for final lock.
+            direction, confidence = early
+        else:
+            if now > checkpoint + MAX_LOCK_DELAY_NS:
+                self._finish("EXPIRED", "Final forecast arrived too late; no order submitted")
+                return
+            final = live.get("final_forecast")
+            if not isinstance(final, dict):
+                return
+            if (final.get("market_ticker") != ticker
+                    or final.get("scheduled_ts_ns") != checkpoint):
+                return
+            direction = final.get("forecast")
+            if direction not in ("ABOVE", "BELOW", "SKIP"):
+                return
+            confidence = final.get("confidence")
+            if (direction == "SKIP"
+                    or not isinstance(confidence, (int, float))
+                    or not 0.69 <= confidence <= 1):
+                self._finish("SKIPPED", "Final forecast SKIP / confidence under 69%; no order")
+                return
         side = "UP" if direction == "ABOVE" else "DOWN"
+        trigger = "EARLY" if early is not None else "FINAL"
         with self._lock:
             if self._state["state"] != "WAITING" or self._state["ticker"] != ticker:
                 return
-            self._state.update(state="EXECUTING", outcome=side,
-                               confidence=float(confidence),
-                               message="Locked forecast — preparing exchange order")
+            self._state.update(
+                state="EXECUTING", outcome=side, confidence=float(confidence),
+                trigger=trigger,
+                message=("90% live confidence — preparing early BUY" if trigger == "EARLY"
+                         else "Locked final forecast — preparing exchange BUY")
+            )
         try:
             preview = self.manual.preview(ticker, "BUY", side, "DOLLARS", armed["amount"])
             if (preview.get("ticker") != ticker or
@@ -256,16 +304,27 @@ class ArmedAutoTrader:
                 self._finish("ERROR", "Quote does not match final forecast")
                 return
             after = self.read_live()
-            second_final = after.get("final_forecast") or {}
+            check_now = self.now_ns()
+            if trigger == "EARLY":
+                checked = self._early_signal(
+                    after, now=check_now, ticker=ticker, close=close,
+                    checkpoint=checkpoint
+                )
+                valid_signal = checked is not None and checked[0] == direction
+            else:
+                second_final = after.get("final_forecast") or {}
+                valid_signal = (
+                    second_final.get("market_ticker") == ticker
+                    and second_final.get("forecast") == direction
+                    and second_final.get("scheduled_ts_ns") == checkpoint
+                    and check_now <= checkpoint + MAX_LOCK_DELAY_NS
+                )
             if (after.get("market_ticker") != ticker
                     or after.get("market_close_ts_ns") != close
                     or after.get("checkpoint_ts_ns") != checkpoint
-                    or second_final.get("market_ticker") != ticker
-                    or second_final.get("forecast") != direction
-                    or second_final.get("scheduled_ts_ns") != checkpoint
-                    or self.now_ns() > checkpoint + MAX_LOCK_DELAY_NS
-                    or self.now_ns() >= close - MIN_EXECUTION_REMAINING_NS):
-                self._finish("EXPIRED", "Market or forecast changed before order")
+                    or not valid_signal
+                    or check_now >= close - MIN_EXECUTION_REMAINING_NS):
+                self._finish("EXPIRED", "Market or signal changed before order")
                 return
             # Record the market before POST; failure to persist blocks the
             # exchange operation. This also prevents replay after a restart.
