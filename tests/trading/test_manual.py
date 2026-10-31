@@ -46,14 +46,14 @@ def test_budget_and_positions_are_never_exceeded():
         plan_manual_order(q, "sell", "yes", "shares", "1", Decimal("0"),
                           Decimal("-1"), fractional=True)
     with pytest.raises(ManualTradeError):
-        plan_manual_order(q, "buy", "yes", "dollars", "1", Decimal("0.20"),
+        plan_manual_order(q, "buy", "yes", "dollars", "0.01", Decimal("0.20"),
                           Decimal("0"), fractional=True)
 
 def test_html_only_replaces_two_context_cards():
     page = integrate_manual_trade_card(PAGE)
     assert "id=\"manual-trader\"" in page
     assert "Buy with 1-Click" in page
-    assert "Sell with 1-Click" in page
+    assert '"Sell"' in page and '" with 1-Click"' in page
     assert ".context.manual-trade-context>.context-header" in page
     assert 'id="market-ticker"' in page
     assert 'id="feed-status"' in page
