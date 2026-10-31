@@ -94,8 +94,10 @@ SECTION = r"""
   <div class="mt-confirm-row"><span>Order</span><b id="mt-result-action">—</b></div>
   <div class="mt-confirm-row"><span>Shares filled</span><b id="mt-result-shares">—</b></div>
   <div class="mt-confirm-row"><span>Limit price</span><b id="mt-result-price">—</b></div>
-  <div class="mt-confirm-row"><span>Estimated debit / credit</span><b id="mt-result-cost">—</b></div>
-  <div class="mt-confirm-row"><span>Estimated fee reserve</span><b id="mt-result-fees">—</b></div>
+  <div class="mt-confirm-row"><span>Cost / cash out</span><b id="mt-result-cost">—</b></div>
+  <div class="mt-confirm-row"><span>Fees</span><b id="mt-result-fees">—</b></div>
+  <div class="mt-confirm-row" id="mt-payout-row"><span>Max payout</span><b id="mt-result-payout">—</b></div>
+  <div class="mt-confirm-row" id="mt-potential-row"><span>Potential return</span><b id="mt-result-potential">—</b></div>
   <div class="mt-confirm-row"><span>Kalshi order ID</span><b id="mt-result-id" style="font-size:10px;word-break:break-all;text-align:right">—</b></div>
   <button class="mt-done" type="button" id="mt-done">Done</button>
  </div>
@@ -218,6 +220,13 @@ SCRIPT = r"""
      el("mt-result-price").textContent=fmt(Number(data.limit_price));
      el("mt-result-cost").textContent=fmt(Number(data.actual_total_dollars??data.indicative_cost))+(data.actual_total_dollars==null?" est.":" actual");
      el("mt-result-fees").textContent=fmt(Number(data.actual_fees_dollars??data.indicative_fees))+(data.actual_fees_dollars==null?" est.":" actual");
+     const bought=chosenAction==="buy",filled=Number(data.filled_shares);
+     const spent=Number(data.actual_total_dollars??data.indicative_cost);
+     el("mt-payout-row").classList.toggle("mt-hidden",!bought);
+     el("mt-potential-row").classList.toggle("mt-hidden",!bought);
+     el("mt-result-payout").textContent=Number.isFinite(filled)?fmt(filled):"—";
+     el("mt-result-potential").textContent=bought&&Number.isFinite(filled)&&Number.isFinite(spent)
+       ?fmt(filled-spent)+(data.actual_total_dollars==null?" est.":" maximum"):"—";
      el("mt-result-id").textContent=data.order_id||"—";
      el("mt-confirm").classList.add("show");
      el("mt-main").classList.add("mt-hidden");
