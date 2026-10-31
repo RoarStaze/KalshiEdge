@@ -2,7 +2,7 @@
 
 All exchange requests are simulated; tests must not place real trades.
 """
-from datetime import datetime
+from types import SimpleNamespace
 from decimal import Decimal
 
 import pytest
@@ -67,7 +67,8 @@ def session(monkeypatch, tmp_path):
     monkeypatch.setattr(manual_trade.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(manual_trade.time, "sleep", fake_sleep)
     client = FakeClient()
-    trader = ManualTrader(tmp_path, client=client, market_client=FakeMarket())
+    trader = ManualTrader(tmp_path, vault=SimpleNamespace(exists=lambda: True),
+                          client=client, market_client=FakeMarket())
     return clock, sleeps, client, trader
 
 
