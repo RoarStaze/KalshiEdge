@@ -38,6 +38,11 @@ class TradingError(ValueError):
     pass
 
 
+class NoLiquidityError(TradingError):
+    """Selected side has no executable order-book quote (not a data error)."""
+    pass
+
+
 def _money(value):
     return format(value.quantize(Decimal("0.0001")), ".4f")
 
@@ -58,7 +63,7 @@ def _top(rows):
         except (IndexError, TypeError, ValueError):
             continue
     if not valid:
-        raise TradingError("No executable liquidity at the best bid")
+        raise NoLiquidityError("No liquidity")
     return max(valid, key=lambda item: item[0])
 
 
@@ -209,9 +214,13 @@ class ManualTrader:
             raise TradingError("Enter a positive amount under $100,000")
         if units not in ("DOLLARS", "SHARES"):
             raise TradingError("Select DOLLARS or SHARES")
-        # Absent capability is NOT evidence that fractional contracts are supported.
-        step = STEP if (market.get("fractional_trading_enabled") is True or
-                        (action == "SELL" and position % ONE != 0)) else ONE
+        # Public GET /markets/{ticker} may omit fractional_trading_enabled.
+        # V2 accepts decimal count strings; allow 0.01 contract increments
+        # unless the market explicitly rejects fractional trading. Kalshi
+        # remains the final authority and can reject an unsupported order.
+        # Never round count *up* or bypass liquidity/balance checks.
+        step = ONE if (market.get("fractional_trading_enabled") is False and
+                       not (action == "SELL" and position % ONE != 0)) else STEP
         per = price["unit_cash"]
         if per <= 0:
             raise TradingError("No executable quote")
@@ -288,13 +297,19 @@ class ManualTrader:
         if market.get("market", {}).get("ticker") != ticker:
             raise TradingError("Market ticker mismatch")
         balance, position = self._account(ticker)
-        up = quote_from_book(book, "BUY", "UP")
-        down = quote_from_book(book, "BUY", "DOWN")
+        try:
+            up = quote_from_book(book, "BUY", "UP")
+        except NoLiquidityError:
+            up = None
+        try:
+            down = quote_from_book(book, "BUY", "DOWN")
+        except NoLiquidityError:
+            down = None
         return {
             "ticker": ticker,
             "status": market["market"].get("status"),
-            "up_ask": _money(up["unit_cash"]),
-            "down_ask": _money(down["unit_cash"]),
+            "up_ask": _money(up["unit_cash"]) if up else None,
+            "down_ask": _money(down["unit_cash"]) if down else None,
             "available_balance": _money(balance),
             "position_yes": _money(position),
         }
