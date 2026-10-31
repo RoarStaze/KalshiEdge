@@ -109,3 +109,11 @@ def test_reversal_sells_are_not_blocked_by_new_buy_value_gate():
     import inspect
     source = inspect.getsource(ArmedAutoTrader._order)
     assert 'if action == "BUY":' in source
+
+
+def test_auto_ui_displays_value_edge_skip_reason_instead_of_low_confidence():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
+    html = integrate_manual_trade(PAGE)
+    assert 'SKIPPED:autoCurrent.message||' in html
+    assert 'insufficient fee-adjusted model edge' in html
