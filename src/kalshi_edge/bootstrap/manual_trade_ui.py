@@ -122,6 +122,9 @@ SCRIPT = r"""
  const byId=id=>document.getElementById(id);
  const shown=(id,value)=>{byId(id).textContent=value};
  const money=v=>Number.isFinite(Number(v))?"$"+Number(v).toFixed(2):"—";
+ const cents=v=>Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"¢":"—";
+ const priceCents=cents;
+ const probabilityPercent=v=>Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
  let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false;
  function setMode(next){action=next;byId("manual-buy").classList.toggle("active",next==="BUY");
   byId("manual-sell").classList.toggle("active",next==="SELL");
@@ -148,8 +151,8 @@ SCRIPT = r"""
    const value=await fetchJSON("market");
    snapshot=value;shown("manual-account",action==="BUY"?"Predictions account · "+money(value.available_balance)+" available":
      "Your position: "+(Math.abs(Number(value.position_yes))||0).toFixed(2)+" "+(Number(value.position_yes)>=0?"Yes":"No"));
-   shown("manual-up","UP "+Math.round(Number(value.up_ask)*100)+"¢");
-   shown("manual-down","DOWN "+Math.round(Number(value.down_ask)*100)+"¢");
+   shown("manual-up","UP "+priceCents(value.up_ask));
+   shown("manual-down","DOWN "+priceCents(value.down_ask));
    await refreshPreview();
   }catch(e){snapshot=null;quote=null;byId("manual-submit").disabled=true;shown("manual-status",e.message);
    shown("manual-account","Kalshi market or credentials unavailable");
@@ -167,7 +170,7 @@ SCRIPT = r"""
    const value=await fetchJSON("preview?"+qs.toString());
    if(value.ticker!==snapshot.ticker||value.action!==action||value.outcome!==outcome
      ||value.units!==units||byId("manual-amount").value!==amount)return;
-   quote=value;shown("manual-odds",Math.round(Number(value.unit_price)*100)+"% chance");
+   quote=value;shown("manual-odds",probabilityPercent(value.unit_price));
    shown("manual-estimated",money(value.amount_estimate)+" est.");
    shown("manual-payout",action==="BUY"?money(value.maximum_payout):Number(value.count).toFixed(2));
    byId("manual-submit").disabled=false;
@@ -188,7 +191,7 @@ SCRIPT = r"""
      result.status==="PARTIAL"?"ORDER PARTIALLY FILLED":"ORDER COMPLETED");
    shown("manual-confirm-title",(result.action==="BUY"?"Buy ":"Sell ")+result.outcome+" · BTC Up or Down - 15 minutes");
    shown("manual-confirm-count",result.fill_count);
-   shown("manual-confirm-price",result.actual_unit_price?Math.round(Number(result.actual_unit_price)*100)+"% chance":"Not filled");
+   shown("manual-confirm-price",result.actual_unit_price?probabilityPercent(result.actual_unit_price):"Not filled");
    shown("manual-confirm-cost-label",result.action==="BUY"?"Cost":"Shares sold");
    shown("manual-confirm-cost",result.action==="BUY"?money(result.actual_cost):result.fill_count);
    shown("manual-confirm-fee",result.actual_fees===null?"Check exchange fills":money(result.actual_fees));
