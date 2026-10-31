@@ -233,7 +233,7 @@ SCRIPT = r"""
   button.textContent=armed?(autoCurrent.state==="EXECUTING"?"Executing locked forecast…":"Cancel AutoTrade"):"Arm AutoTrade";
   button.disabled=autoBusy||autoCurrent.state==="EXECUTING"||(!armed&&!canArm);
   const messages={
-   WAITING:"ARMED · "+autoCurrent.amount+" USD · Waiting for the locked final forecast ("+(autoCurrent.ticker||"current round")+")",
+   WAITING:"ARMED · "+autoCurrent.amount+" USD each BTC market · "+(autoCurrent.message||"Waiting for final forecast")+" ("+(autoCurrent.ticker||"current round")+")",
    EXECUTING:"Locked final forecast: "+(autoCurrent.outcome||"—")+" · checking exchange order",
    FILLED:"Order filled · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
@@ -244,7 +244,7 @@ SCRIPT = r"""
    ERROR:"AutoTrade stopped before order · check live market and quote",
    UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry"
   };
-  shown("manual-auto-status",messages[autoCurrent.state]||"Auto waits for final ABOVE / BELOW and buys only its direction. Click Arm AutoTrade to enable one trade.");
+  shown("manual-auto-status",messages[autoCurrent.state]||"Auto buys the locked final ABOVE / BELOW direction in each new BTC market using the same dollar amount, until cancelled. Click Arm AutoTrade to start.");
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
  }
  function setMode(next){
@@ -412,7 +412,7 @@ SCRIPT = r"""
   if(!snapshot){shown("manual-status","Awaiting live market");return}
   if(action==="BUY"&&autoSelected){
    shown("manual-odds","At final lock");
-   shown("manual-status",autoPending()?"Waiting for final forecast to lock":"Enter dollars and click Arm AutoTrade. SKIP means no trade.");
+   shown("manual-status",autoPending()?(autoCurrent.message||"Waiting for final forecast"):"Enter dollars and Arm AutoTrade. It continues into each new market until cancelled.");
    return;
   }
   if(action==="SELL"){
