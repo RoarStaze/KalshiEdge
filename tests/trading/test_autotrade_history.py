@@ -7,7 +7,38 @@ from decimal import Decimal
 from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
 from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
-from tests.trading.test_armed_autotrade import Clock, Feed, FakeManual, NS, TICKER
+NS=1_000_000_000
+TICKER="KXBTC15M-TEST"
+
+
+class Clock:
+    def __init__(self):self.t=1900000000*NS
+    def ns(self):return self.t
+
+
+class Feed:
+    def __init__(self,clock):
+        self.clock=clock;self.ticker=TICKER
+        self.close=clock.ns()+900*NS;self.final=None
+    def __call__(self):
+        return {"market_ticker":self.ticker,"market_close_ts_ns":self.close,
+                "checkpoint_ts_ns":self.close-240*NS,"final_forecast":self.final}
+    def lock(self,direction="ABOVE",confidence=0.87):
+        self.clock.t=self.close-239*NS
+        self.final={"market_ticker":self.ticker,"forecast":direction,
+                    "confidence":confidence,"scheduled_ts_ns":self.close-240*NS}
+
+
+class FakeManual:
+    def __init__(self):self.previews=[];self.orders=[];self.failure=None
+    def preview(self,ticker,action,outcome,units,amount):
+        self.previews.append((ticker,action,outcome,units,amount))
+        return {"ticker":ticker,"action":action,"outcome":outcome,"preview_id":"preview-123"}
+    def place(self,preview_id,ticker):
+        self.orders.append((preview_id,ticker))
+        if self.failure:raise self.failure
+        return {"order_id":"exchange-123","status":"FILLED","fill_count":"0.15"}
+
 
 
 def setup(tmp_path):
@@ -64,7 +95,6 @@ def test_cancellation_and_skip_are_not_reported_as_trades(tmp_path):
     engine.arm("1",start_worker=False)
     engine.cancel()
     assert engine.history()["entries"]==[]
-    clock.t=clock.t-1  # separate fresh engine, same unused market
     another=ArmedAutoTrader(FakeManual(),feed,now_ns=clock.ns,
                             history_path=tmp_path/"data"/"autotrade_history.sqlite3")
     another.arm("1",start_worker=False)
