@@ -198,7 +198,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div><div class="eyebrow">ADAPTIVE LEARNING / MANUAL TRAINING</div><h2>Learning cycle</h2>
    <p class="subtitle">Three mistake rounds, then one correct-market refresher. Evaluation controls promotion.</p>
   </div>
-  <span class="training-pill waiting" id="train-status-pill">COLLECTING DATA</span>
+  <span class="training-pill waiting" id="train-status-pill">CHECKING DATA</span>
  </div>
  <div class="training-cycle" id="train-steps">
   <div class="training-step active" id="train-step-1"><small>ROUND 1</small><strong>Mistakes</strong></div>
@@ -210,11 +210,11 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div>
    <div class="training-progress-title"><span id="training-target">Round 1 · Learn from mistakes</span><strong class="training-big-percent" id="training-progress-pct">0%</strong></div>
    <div class="training-bar" role="progressbar" aria-label="Training data collection readiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-bar"><div id="training-bar-fill"></div></div>
-   <div class="training-detail" id="training-reason">Checking settled predictions, verified feature rows and independent evaluation markets.</div>
+   <div class="training-detail" id="training-reason">Checking training data and required model files…</div>
    <div class="training-counts">
-    <div class="training-count"><b id="training-cases">—</b><span>Eligible markets / 12</span></div>
-    <div class="training-count"><b id="training-outcomes">—</b><span>Outcome classes / 2</span></div>
-    <div class="training-count"><b id="training-lockbox">—</b><span>New markets / 20</span></div>
+    <div class="training-count"><b id="training-cases">0</b><span>Eligible markets / 12</span></div>
+    <div class="training-count"><b id="training-outcomes">0</b><span>Outcome classes / 2</span></div>
+    <div class="training-count"><b id="training-lockbox">0</b><span>New markets / 20</span></div>
    </div>
   </div>
   <div class="training-action">
@@ -340,7 +340,7 @@ async function refreshLive(){
 }
 async function refreshHistory(){try{const response=await fetch("/api/history",{cache:"no-store"});if(!response.ok)throw Error("HTTP "+response.status);renderHistory(await response.json())}
 catch(err){text("history-status","Could not refresh: "+err.message)}}
-el("filter").addEventListener("change",()=>{if(history)renderHistory(history)});
+el("filter")?.addEventListener("change",()=>{if(history)renderHistory(history)});
 let trainingStatus=null;
 function renderTraining(info){
  trainingStatus=info;
@@ -355,9 +355,9 @@ function renderTraining(info){
  text("training-progress-pct",pctValue+"%");
  el("training-bar-fill").style.width=pctValue+"%";
  el("training-bar").setAttribute("aria-valuenow",String(pctValue));
- text("training-cases",info.eligible_markets+" / "+info.target_markets);
- text("training-outcomes",info.outcome_classes+" / 2");
- text("training-lockbox",info.new_evaluation_markets+" / "+info.target_new_markets);
+ text("training-cases",(Number(info.eligible_markets)||0)+" / "+info.target_markets);
+ text("training-outcomes",(Number(info.outcome_classes)||0)+" / 2");
+ text("training-lockbox",(Number(info.new_evaluation_markets)||0)+" / "+info.target_new_markets);
  text("training-reason",info.reason);
  for(let i=1;i<=4;i++){
    const stepEl=el("train-step-"+i);
@@ -379,7 +379,17 @@ async function refreshTraining(){
    const response=await fetch("/api/training",{cache:"no-store"});
    if(!response.ok)throw Error("HTTP "+response.status);
    renderTraining(await response.json());
- }catch(err){text("training-reason","Cannot verify training readiness: "+err.message);el("train-now").disabled=true;}
+ }catch(err){
+   text("training-headline","Training readiness unavailable");
+   text("train-status-pill","CONNECTION ERROR");
+   text("training-reason","Cannot load training readiness: "+err.message+
+     ". Check the local /api/training endpoint and KalshiEdge logs.");
+   text("training-cases","—");text("training-outcomes","—");text("training-lockbox","—");
+   text("training-progress-pct","—");
+   el("training-bar-fill").style.width="0%";
+   el("training-bar").setAttribute("aria-valuenow","0");
+   el("train-now").disabled=true;
+ }
 }
 el("train-now").addEventListener("click",async()=>{
  if(!trainingStatus?.ready||trainingStatus.running)return;
