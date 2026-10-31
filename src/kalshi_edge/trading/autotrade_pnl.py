@@ -43,7 +43,7 @@ def _exact(value: Decimal) -> str:
     output = format(value, "f")
     if "." in output:
         whole, decimal_places = output.split(".", 1)
-        return whole + "." + decimal_places.rstrip("0").ljust(2, "0")
+        return whole + "." + decimal_places.rstrip("0").ljust(4, "0")
     return output + ".00"
 
 
