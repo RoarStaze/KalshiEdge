@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Read-only research on final-forecast probability thresholds."""
+"""Read-only research on final-forecast *confidence* thresholds.
+
+Live confidence is 2 * abs(p_yes - .5), NOT max(p_yes, p_no).
+Research-only retrospective analysis; it never changes live thresholds.
+"""
 
 import json
 import math
@@ -33,6 +37,8 @@ def compare_thresholds(
             continue
 
         try:
+            if type(row["p_yes"]) not in (float, int) or type(row["p_no"]) not in (float, int):
+                continue
             yes = float(row["p_yes"])
             no = float(row["p_no"])
         except (TypeError, ValueError, KeyError, OverflowError):
@@ -53,10 +59,13 @@ def compare_thresholds(
     results = []
 
     for threshold in THRESHOLDS:
+        # Keep the exact same score scale used by LivePredictor and
+        # FinalForecastGate. E.g. 69% confidence means >=84.5% side probability.
+        minimum_probability = round((1.0 + threshold) / 2.0, 6)
         selected = [
             ("ABOVE" if yes >= no else "BELOW", actual)
             for yes, no, actual, _version in eligible
-            if max(yes, no) >= threshold
+            if 2.0 * (max(yes, no) - 0.5) + 1e-12 >= threshold
         ]
 
         correct = sum(
@@ -66,7 +75,8 @@ def compare_thresholds(
         count = len(selected)
 
         results.append({
-            "minimum_probability": threshold,
+            "minimum_confidence": threshold,
+            "minimum_probability": minimum_probability,
             "predictions": count,
             "correct": correct,
             "incorrect": count - correct,
@@ -85,7 +95,8 @@ def compare_thresholds(
     )
 
     return {
-        "report": "V6_STAGE1_READ_ONLY_THRESHOLD_AUDIT",
+        "report": "V7_CONFIDENCE_CONSISTENT_READ_ONLY_THRESHOLD_AUDIT",
+        "confidence_definition": "2 * abs(p_yes - 0.5)",
         "settled_markets": len(settled),
         "eligible_markets": len(eligible),
         "excluded_markets": len(settled) - len(eligible),
@@ -95,7 +106,8 @@ def compare_thresholds(
         "brier_all_eligible": brier,
         "thresholds": results,
         "warning": (
-            "Retrospective descriptive results only. "
+            "Retrospective descriptive results only. Confidence is not the "
+            "same as observed win probability or calibrated forecast probability. "
             "Not an independent validation or promotion decision. "
             "Do not reuse a consumed lockbox to select a threshold."
         ),
