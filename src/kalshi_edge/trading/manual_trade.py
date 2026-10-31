@@ -295,6 +295,10 @@ class ManualTrader:
     def _prepare(self, ticker, action, outcome, units, amount, *, fresh_account=False):
         if not ticker.startswith("KXBTC15M-") or not ticker.replace("-", "").isalnum():
             raise TradingError("Unsupported market ticker")
+        # Account refresh can be rate limited and wait >=1.15 seconds.
+        # Fetch it before the order book, otherwise the quote may already be
+        # stale by the time a freshly validated IOC order is submitted.
+        balance, position = self._account(ticker, fresh=fresh_account)
         market, book = self.market_client.quote(ticker)
         if market.get("market", {}).get("ticker") != ticker:
             raise TradingError("Market ticker changed")
@@ -305,7 +309,6 @@ class ManualTrader:
                 raise ValueError("Market closing or closed")
         except (TypeError, AttributeError, ValueError) as exc:
             raise TradingError("Market is closing or has no valid close time") from exc
-        balance, position = self._account(ticker, fresh=fresh_account)
         plan = self.size_order(balance, action, outcome, units, decimal(amount),
                                position, book, market)
         plan["ticker"] = ticker
