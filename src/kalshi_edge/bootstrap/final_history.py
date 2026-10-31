@@ -383,6 +383,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 ticker = self._manual_ticker()
                 if parsed.path == "/api/manual-trade/market":
                     result = manual.market(ticker)
+                elif parsed.path == "/api/manual-trade/sell-preview":
+                    if parsed.query:
+                        raise TradingError("Sell All does not accept quantity or overrides")
+                    result = manual.preview_all(ticker)
                 elif parsed.path == "/api/manual-trade/preview":
                     params = parse_qs(parsed.query, keep_blank_values=True)
                     if set(params) != {"action", "outcome", "units", "amount"} or any(len(items) != 1 for items in params.values()):
