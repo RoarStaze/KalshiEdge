@@ -30,12 +30,13 @@ def test_modern_dashboard_hides_autotrader_controls_but_keeps_protected_backend_
     try:
         origin = f"http://127.0.0.1:{server.server_port}"
         with httpx.Client(timeout=5, trust_env=False) as client:
-            main = client.get(origin + "/")
+            main = client.get(origin + "/train")
             assert main.status_code == 200
-            assert 'data-page="trade"' in main.text
+            assert 'data-page="train"' in main.text
             assert 'href="/trade"' in main.text
             assert 'href="/train"' in main.text
             assert 'href="/history"' in main.text
+            assert 'href="/api"' in main.text
             assert 'id="autotrader"' not in main.text
             assert 'id="autotrader-credentials"' not in main.text
             assert 'AutoTrader (paper)' not in main.text
