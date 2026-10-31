@@ -25,6 +25,7 @@ from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
 from .round_price_ui import integrate_round_price_hero
 from .autotrader_ui import integrated_page
+from .manual_trade_ui import integrate_manual_trade_card
 from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
 
@@ -332,7 +333,7 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None) -> type[BaseHTTPRequestHandler]:
+def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_service=None) -> type[BaseHTTPRequestHandler]:
     from .training_cycle import TrainingController, CycleError
     from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
@@ -343,6 +344,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
         # Linux CI and non-Windows hosts have no Windows DPAPI. Keep the
         # read-only/paper dashboard functional, never persist secrets.
         vault = None
+
+    from kalshi_edge.trading.manual import ManualTrading, ManualTradeError
+    manual = manual_service if manual_service is not None else ManualTrading(root, vault)
 
     class HistoryHandler(BaseHTTPRequestHandler):
         def _json(self, status: int, data: dict) -> None:
@@ -419,7 +423,50 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
 
             self._json(404, {"error": "unknown AutoTrader action"})
 
+        def _manual_post(self) -> None:
+            # Trade submission requires a browser-originated same-origin click.
+            origin = f"http://127.0.0.1:{self.server.server_port}"
+            if (
+                self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+                or self.headers.get("Origin") != origin
+                or self.headers.get("X-KalshiEdge-Action") != "manual"
+                or self.headers.get("Content-Type") != "application/json"
+                or self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none")
+            ):
+                self._json(403, {"error":"Same-origin manual trade action required"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "-1")
+                if not 0 < length <= 1200:
+                    raise ValueError("invalid size")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("expected object")
+            except (ValueError, UnicodeDecodeError):
+                self._json(400, {"error":"Invalid manual trade payload"})
+                return
+            try:
+                result = manual.submit(data)
+            except ManualTradeError as exc:
+                self._json(409, {"error":str(exc)[:220]})
+                return
+            except httpx.HTTPStatusError as exc:
+                self._json(502, {"error":f"Kalshi rejected the request (HTTP {exc.response.status_code}); check exchange order history before retrying"})
+                return
+            except (httpx.RequestError, OSError, TypeError, KeyError, ValueError):
+                LOG.exception("Manual Kalshi order state requires inspection")
+                self._json(502, {"error":"Uncertain exchange response; inspect Kalshi order history before trying again"})
+                return
+            except Exception:
+                LOG.exception("Unexpected manual order failure")
+                self._json(500, {"error":"Manual order not confirmed. Check Kalshi account before retrying"})
+                return
+            self._json(200, result)
+
         def do_POST(self) -> None:
+            if self.path == "/api/manual/order":
+                self._manual_post()
+                return
             if self.path.startswith("/api/autotrader/"):
                 self._autotrader_post()
                 return
@@ -464,6 +511,18 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self._json(202, result)
 
         def do_GET(self) -> None:
+            if self.path == "/api/manual/status":
+                if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+                    self._json(403, {"error":"Invalid local host"})
+                    return
+                try:
+                    state = manual.status()
+                except (httpx.HTTPError, OSError, ValueError, TypeError):
+                    LOG.exception("Manual Kalshi status unavailable")
+                    self._json(503, {"error":"Manual trade quote unavailable"})
+                    return
+                self._json(200, state)
+                return
             if self.path == "/api/autotrader/status":
                 if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
                     self._json(403, {"error": "invalid local host"})
@@ -480,7 +539,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 self._json(200, status)
                 return
             if self.path == "/":
-                content = integrated_page(integrate_round_price_hero(_PAGE)).encode("utf-8")
+                content = integrated_page(integrate_manual_trade_card(integrate_round_price_hero(_PAGE))).encode("utf-8")
                 kind = "text/html; charset=utf-8"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -549,9 +608,12 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         target=paper_trader.run_forever, args=(stop,),
         name="kalshi-paper-autotrader", daemon=True,
     )
+    from kalshi_edge.trading.manual import ManualTrading
+    manual_service = ManualTrading(root, credential_vault)
     server = ThreadingHTTPServer(
         ("127.0.0.1", port),
-        _make_handler(root, controller=controller, paper_trader=paper_trader, credential_vault=credential_vault),
+        _make_handler(root, controller=controller, paper_trader=paper_trader,
+                      credential_vault=credential_vault, manual_service=manual_service),
     )
     server.daemon_threads = True
     worker.start()
@@ -570,4 +632,5 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         worker.join(timeout=2)
         paper_worker.join(timeout=3)
         paper_trader.market_client.close()
+        manual_service.close()
     return 0
