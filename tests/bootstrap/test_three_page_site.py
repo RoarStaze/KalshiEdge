@@ -14,14 +14,14 @@ from kalshi_edge.bootstrap.site_pages import render_site_page
 from kalshi_edge.bootstrap.final_history import _make_handler
 
 
-def test_navigation_has_three_real_paths_and_active_link():
+def test_navigation_has_four_real_paths_and_active_link():
     template=integrate_manual_trade(integrate_round_price_hero(PAGE))
-    for section in ("trade", "train", "history"):
+    for section in ("trade", "train", "history", "api"):
         page=render_site_page(template,section)
         assert f'data-page="{section}"' in page
         assert f'<title>KalshiEdge · {section.title()}</title>' in page
-        assert page.count('class="site-nav-link') == 3
-        for other in ("trade","train","history"):
+        assert page.count('class="site-nav-link') == 4
+        for other in ("trade","train","history","api"):
             assert f'href="/{other}"' in page
         assert f'aria-current="page">{section.title()}</a>' in page
         assert 'role="navigation"' not in page
