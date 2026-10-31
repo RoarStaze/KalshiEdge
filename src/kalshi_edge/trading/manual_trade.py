@@ -169,7 +169,8 @@ class ManualTrader:
         if units not in ("DOLLARS", "SHARES"):
             raise TradingError("Select DOLLARS or SHARES")
         # Absent capability is NOT evidence that fractional contracts are supported.
-        step = STEP if market.get("fractional_trading_enabled") is True else ONE
+        step = STEP if (market.get("fractional_trading_enabled") is True or
+                        (action == "SELL" and position % ONE != 0)) else ONE
         per = price["unit_cash"]
         if per <= 0:
             raise TradingError("No executable quote")
@@ -288,13 +289,36 @@ class ManualTrader:
             raise TradingError("Exchange-reported fill quantity invalid")
         average = result.get("average_fill_price")
         fees = result.get("average_fee_paid")
+        actual_unit = None
+        actual_cost = None
+        actual_fees = None
+        max_payout = None
+        actual_proceeds = None
+        if fills > 0 and average is not None:
+            yes_price = decimal(average)
+            if not 0 <= yes_price <= 1:
+                raise TradingError("Exchange-reported average price invalid")
+            unit = yes_price if data["outcome"] == "UP" else ONE - yes_price
+            actual_unit = _money(unit)
+            principal = unit * fills
+            fee_paid = decimal(fees) * fills if fees is not None else None
+            actual_fees = _money(fee_paid) if fee_paid is not None else None
+            if data["action"] == "BUY":
+                actual_cost = _money(principal + fee_paid) if fee_paid is not None else None
+                max_payout = _money(fills)
+            else:
+                actual_proceeds = _money(principal - fee_paid) if fee_paid is not None else None
         return {
             "status": "FILLED" if fills == Decimal(old["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
             "order_id": order_id, "ticker": data["ticker"],
             "action": data["action"], "outcome": data["outcome"],
             "fill_count": _money(fills),
             "average_yes_price": average if fills else None,
+            "actual_unit_price": actual_unit,
             "average_fee_paid": fees if fills else None,
+            "actual_fees": actual_fees,
+            "actual_cost": actual_cost, "actual_proceeds": actual_proceeds,
+            "max_payout": max_payout,
             "requested_count": old["count"],
             "estimated_per_share": old["unit_price"],
         }
