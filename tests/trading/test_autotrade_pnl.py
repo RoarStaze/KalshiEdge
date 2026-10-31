@@ -21,7 +21,8 @@ def entry(stages, ticker=TICKER):
 def fill(oid, side, qty, yes_price, no_price, fee="0.0000", action="buy"):
     return {"order_id": oid, "ticker": TICKER, "count_fp": qty,
             "yes_price_dollars": yes_price, "no_price_dollars": no_price,
-            "fee_cost": fee, "action": action}
+            "fee_cost": fee, "action": action,
+            "side": "yes" if side == "UP" else "no"}
 
 
 class Client:
@@ -177,3 +178,42 @@ def test_ui_shows_signed_green_max_payout_and_signed_realized_pnl():
     assert "mt-auto-pnl-loss" in page
     assert 'shown("manual-payout","+"+money(' in page
     assert "Max payout" in page
+
+
+def test_mismatched_exchange_action_is_not_claimed_as_exact_profit():
+    data = fill("order1", "UP", "0.11", "0.7300", "0.2700",
+                action="sell")
+    result = enrich_history([entry([stage("FINAL_BUY", "UP", "0.11", "order1")])],
+                            Client([data], [settlement("yes")]))[0]
+    assert result["realized_pnl_dollars"] is None
+    assert result["pnl_status"] == "UNAVAILABLE"
+
+
+def test_mismatched_exchange_contract_side_cannot_claim_exact_profit():
+    data = fill("order1", "UP", "0.11", "0.7300", "0.2700")
+    data["side"] = "no"
+    result = enrich_history([entry([stage("FINAL_BUY", "UP", "0.11", "order1")])],
+                            Client([data], [settlement("yes")]))[0]
+    assert result["realized_pnl_dollars"] is None
+    assert result["pnl_status"] == "UNAVAILABLE"
+
+
+def test_missing_side_or_action_cannot_implicitly_be_assumed():
+    for field in ("side", "action"):
+        data = fill("order1", "UP", "0.11", "0.7300", "0.2700")
+        del data[field]
+        output = enrich_history(
+            [entry([stage("FINAL_BUY", "UP", "0.11", "order1")])],
+            Client([data], [settlement("yes")]),
+        )[0]
+        assert output["realized_pnl_dollars"] is None
+        assert output["pnl_status"] == "UNAVAILABLE"
+
+
+def test_unexpected_same_order_id_other_market_cannot_attribute_profit():
+    data = fill("order1", "UP", "0.11", "0.7300", "0.2700")
+    data["ticker"] = "KXBTC15M-SOME-OTHER-MARKET"
+    result = enrich_history([entry([stage("FINAL_BUY", "UP", "0.11", "order1")])],
+                            Client([data], [settlement("yes")]))[0]
+    assert result["realized_pnl_dollars"] is None
+    assert result["pnl_status"] == "UNAVAILABLE"

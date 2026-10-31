@@ -18,6 +18,7 @@ from typing import Callable
 
 from .autotrade_history import AutoTradeHistory
 from .autotrade_pnl import enrich_history
+from .autotrade_scorecard import summarize_autotrade_performance
 from .auto_edge import assess_auto_buy_edge
 from .manual_trade import MAX_REQUEST_DOLLARS
 
@@ -64,7 +65,7 @@ class ArmedAutoTrader:
 
     def history(self) -> dict:
         if self.history_store is None:
-            return {"entries": []}
+            return {"entries": [], "summary": summarize_autotrade_performance([])}
         rows = self.history_store.recent()
         for row in rows:
             row["stages"] = self.history_store.recent_stages(row["ticker"])
@@ -81,12 +82,14 @@ class ArmedAutoTrader:
             now = time.monotonic()
             if (cached and cached["fingerprint"] == fingerprint
                     and now - cached["at"] < 30):
-                return {"entries": [dict(entry) for entry in cached["entries"]]}
+                entries = [dict(entry) for entry in cached["entries"]]
+                return {"entries": entries, "summary": summarize_autotrade_performance(entries)}
             client = getattr(self.manual, "client", None)
             enriched = enrich_history(rows, client)
             self._history_cache = {"fingerprint": fingerprint,
                                    "at": time.monotonic(), "entries": enriched}
-            return {"entries": [dict(entry) for entry in enriched]}
+            entries = [dict(entry) for entry in enriched]
+            return {"entries": entries, "summary": summarize_autotrade_performance(entries)}
 
     def _attempted(self, ticker: str) -> bool:
         return ticker in self._used or bool(

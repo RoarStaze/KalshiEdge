@@ -47,6 +47,10 @@ STYLE = r"""
 .manual-trade .mt-auto-status{font-size:12px;line-height:1.6;margin-top:9px;color:#f1cc70;min-height:19px}
 .manual-trade .mt-auto-history{margin-top:22px;border-top:1px solid #49433a;padding-top:17px}
 .manual-trade .mt-auto-history-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:12px;color:#ebd18f;font-weight:800}
+.manual-trade .mt-auto-performance{border:1px solid #344540;background:#172320;border-radius:10px;padding:10px 12px;margin-bottom:12px;color:#a9b9b5;font-size:12px;line-height:1.6}
+.manual-trade .mt-auto-performance strong{font-variant-numeric:tabular-nums;font-weight:800;color:#d9e0db}
+.manual-trade .mt-auto-performance strong.positive{color:#29d599}
+.manual-trade .mt-auto-performance strong.negative{color:#ff5567}
 .manual-trade .mt-auto-history-list{display:grid;gap:9px;max-height:260px;overflow-y:auto;scrollbar-width:thin}
 .manual-trade .mt-auto-history-count,.manual-trade .mt-auto-record-sub{font-size:11px;color:#9daeb0;font-weight:400}
 .manual-trade .mt-auto-record{border:1px solid #353e41;border-radius:11px;background:#152024;padding:11px;display:grid;gap:6px}
@@ -156,6 +160,7 @@ SECTION = r"""
    <div class="mt-fine">Real orders · quotes and fees can change · unfilled IOC quantity is canceled</div>
    <section class="mt-auto-history mt-hidden" id="manual-auto-history" aria-label="AutoTrade execution history">
     <div class="mt-auto-history-head"><span>AutoTrade History</span><span class="mt-auto-history-count" id="manual-auto-history-count"></span></div>
+    <div class="mt-auto-performance" id="manual-auto-performance" role="status" aria-live="polite">Verified net P/L · No settled trades verified yet</div>
     <div class="mt-auto-history-list" id="manual-auto-history-list" aria-live="polite"><div class="mt-auto-empty">No AutoTrades recorded yet.</div></div>
    </section>
   </div>
@@ -321,6 +326,24 @@ SCRIPT = r"""
    const result=await autoJSON("history");
    if(!autoSelected||action!=="BUY")return;
    if(!Array.isArray(result.entries))throw Error("Invalid history response");
+   const performance=byId("manual-auto-performance");
+   performance.replaceChildren();
+   if(result.summary&&typeof result.summary==="object"){
+    const summary=result.summary;
+    const title=document.createElement("span");
+    title.textContent="Verified net P/L (recent markets): ";
+    const figure=document.createElement("strong");
+    const pnl=summary.net_pnl_dollars;
+    const valid=typeof pnl==="string"&&/^-?\d+(\.\d+)?$/.test(pnl);
+    figure.textContent=valid?signedPnl(pnl):"—";
+    figure.className=valid?(pnl.startsWith("-")?"negative":"positive"):"";
+    const note=document.createElement("div");
+    note.textContent=String(summary.verified_settled_markets||0)+" verified of "+
+     String(summary.history_market_count||0)+" recent markets · "+
+     (summary.is_complete_for_filled_markets?"All filled trades in this window verified":
+      "Partial results: pending, unknown or unverified trades excluded");
+    performance.append(title,figure,note);
+   }else{performance.textContent="Verified net P/L unavailable";}
    autoHistoryRows=result.entries;
    renderAutoPayout();
    list.replaceChildren();
@@ -386,6 +409,7 @@ SCRIPT = r"""
   }catch(e){
    if(!autoSelected)return;
    autoHistoryRows=[];renderAutoPayout();
+   shown("manual-auto-performance","Verified net P/L unavailable · exchange history not verified");
    list.replaceChildren();
    const el=document.createElement("div");el.className="mt-auto-empty";
    el.textContent="History unavailable: "+e.message;list.appendChild(el);
