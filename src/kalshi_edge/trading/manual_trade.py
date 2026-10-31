@@ -188,6 +188,16 @@ class ManualTrader:
             balance = decimal(balance_raw.get("balance_dollars",
                                   Decimal(str(balance_raw["balance"])) / 100
                                   if "balance" in balance_raw else None))
+            marked_cents = balance_raw.get("portfolio_value")
+            # Kalshi returns the marked value of held contracts in integer cents.
+            # Cash is returned separately as a fixed-point dollar string.
+            # Never present cash alone as the full portfolio if valuation is missing.
+            if marked_cents is not None:
+                if type(marked_cents) is not int or marked_cents < 0:
+                    raise TradingError("Invalid Kalshi portfolio value")
+                portfolio_total = balance + Decimal(marked_cents) / 100
+            else:
+                portfolio_total = None
             positions = self.client.get("/portfolio/positions",
                                         params={"ticker": ticker, "limit": 10})
             rows = positions.get("market_positions")
@@ -207,6 +217,7 @@ class ManualTrader:
             self._account_cache = {
                 "ticker": ticker, "balance": balance, "position": position,
                 "exposure": exposure if has_exposure and exposure >= 0 else None,
+                "portfolio_total": portfolio_total,
                 "at": time.monotonic(),
             }
             return balance, position
@@ -329,6 +340,9 @@ class ManualTrader:
             "up_ask": _money(up["unit_cash"]) if up else None,
             "down_ask": _money(down["unit_cash"]) if down else None,
             "available_balance": _money(balance),
+            "portfolio_total": _money(cache["portfolio_total"])
+            if cache is not None and cache["ticker"] == ticker
+            and cache.get("portfolio_total") is not None else None,
             "position_yes": _money(position),
             "position_exposure_dollars": _money(exposure) if exposure is not None else None,
             "average_entry_price": _money(average_entry) if average_entry is not None else None,
