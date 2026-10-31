@@ -66,6 +66,38 @@ def test_uses_fixed_point_dollar_cash_instead_of_rounded_cents(tmp_path):
     assert model.market(TICKER)["portfolio_total"] == "3.1550"
 
 
+def test_header_uses_kalshi_integer_cents_without_rounding_up(tmp_path):
+    # Keep sub-cent cash available for order sizing, but display the same
+    # cent-aligned account totals as Kalshi's integer-cent API fields.
+    model, _ = trader(tmp_path, {
+        "balance": 309, "balance_dollars": "3.0950", "portfolio_value": 0,
+    })
+    view = model.market(TICKER)
+    assert view["available_balance"] == "3.0950"
+    assert view["portfolio_total"] == "3.0950"
+    assert view["cash_display"] == "3.09"
+    assert view["portfolio_display"] == "3.09"
+
+
+def test_header_adds_marked_positions_to_integer_cent_balance(tmp_path):
+    model, _ = trader(tmp_path, {
+        "balance": 309, "balance_dollars": "3.0950", "portfolio_value": 7,
+    })
+    view = model.market(TICKER)
+    assert view["portfolio_total"] == "3.1650"
+    assert view["cash_display"] == "3.09"
+    assert view["portfolio_display"] == "3.16"
+
+
+def test_header_fallback_truncates_fixed_point_cash_without_cent_field(tmp_path):
+    model, _ = trader(tmp_path, {
+        "balance_dollars": "3.0950", "portfolio_value": 0,
+    })
+    view = model.market(TICKER)
+    assert view["cash_display"] == "3.09"
+    assert view["portfolio_display"] == "3.09"
+
+
 def test_portfolio_missing_does_not_fabricate_value(tmp_path):
     model, _ = trader(tmp_path, {"balance_dollars": "3.0800"})
     view = model.market(TICKER)
@@ -95,7 +127,8 @@ def test_header_has_cash_and_portfolio_values_and_refresh_from_snapshot():
     assert 'id="manual-portfolio"' in page
     assert 'Cash</span>' in page
     assert 'Portfolio</span>' in page
-    assert 'money(value.available_balance)' in page
-    assert 'money(value.portfolio_total)' in page
+    assert 'exactMoney(value.cash_display)' in page
+    assert 'exactMoney(value.portfolio_display)' in page
+    assert 'exactMoney(snapshot.cash_display)' in page
     assert '.mt-account-summary' in page
     assert 'role="group" aria-label="Predictions account balances"' in page
