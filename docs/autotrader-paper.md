@@ -59,6 +59,28 @@ local server to the internet.
 - Exactly one attempt per market, even on restarts. SQLite persists each
   attempt before external market-data calls; unknown attempts are not retried.
 
+### Why a candidate is skipped
+
+For **new paper-only cost/edge SKIPs**, the dashboard persists and shows:
+V5 directional probability, executable opposite-book ask, the best candidate
+quantity, existing conservative fee reserve, proposed all-in debit, model
+expected net profit, and an **illustrative non-direct fee**. This is an
+audit trail, not an exchange fee quote or authorization for live orders.
+A candidate may exceed the $0.10 budget; it is shown to explain the
+rejection, **never placed**.
+
+The reference fee is an illustrative **single-fill** example using a general
+7% taker-rate model, fee rounded upward to 6 decimal places, and net cash
+debit aligned to a cent. Real fees can differ due to series-specific fee
+schedules, account precision, fill fragmentation and accumulated rebates.
+**The reference estimate never changes entry acceptance**: the existing
+conservative fee reserve, $0.10 maximum, $0.005 minimum estimated profit,
+immutable forecast and risk safeguards remain in force. Older SKIPs have
+no historical quote diagnostics and are not backfilled.
+
+Official references: [fee rounding](https://docs.kalshi.com/getting_started/fee_rounding),
+[Kalshi fee schedule](https://kalshi.com/fee-schedule).
+
 ### Loss controls
 
 - Maximum **paper** debit per market: $0.10 including fee estimate.
