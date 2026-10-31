@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
 from .round_price_ui import integrate_round_price_hero
-from .autotrader_ui import integrated_page
+from .site_pages import render_site_page
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
@@ -352,6 +352,12 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
     except VaultError:
         manual = None
 
+    # Build the three local routes once. Do not inject AutoTrader UI;
+    # legacy signed API routes remain available to authorized localhost tools.
+    site_template = integrate_manual_trade(integrate_round_price_hero(_PAGE))
+    routed_pages = {name: render_site_page(site_template, name).encode("utf-8")
+                    for name in ("trade", "train", "history")}
+
     class HistoryHandler(BaseHTTPRequestHandler):
         def _json(self, status: int, data: dict) -> None:
             content = json.dumps(data, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -565,8 +571,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                     status["credentials_supported"] = False
                 self._json(200, status)
                 return
-            if self.path == "/":
-                content = integrate_manual_trade(integrated_page(integrate_round_price_hero(_PAGE))).encode("utf-8")
+            path = urlsplit(self.path).path
+            if path in ("/", "/trade", "/train", "/history"):
+                section = path[1:] if path != "/" else "trade"
+                content = routed_pages[section]
                 kind = "text/html; charset=utf-8"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
