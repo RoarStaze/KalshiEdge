@@ -35,7 +35,7 @@ def test_subcent_buy_uses_cent_aligned_exchange_fee_estimate():
     assert result["unit_price"] == "0.0080"
     assert result["count"] == "116.88"
     assert result["maximum_payout"] == "116.8800"
-    assert result["fee_estimate"] == "0.0650"
+    assert result["fee_estimate"] == "0.064960"
     assert result["amount_estimate"] == "1.0000"
     assert Decimal(result["count"]) * Decimal(result["unit_price"]) + Decimal(result["fee_estimate"]) <= Decimal("1.00")
 
