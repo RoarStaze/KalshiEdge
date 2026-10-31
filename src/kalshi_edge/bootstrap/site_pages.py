@@ -121,6 +121,60 @@ body[data-page="train"] .training-card{display:block}
  .kpi-num{font-size:26px}
  .context>.manual-trade{min-height:540px}
 }
+/* Trade page: zero unnecessary vertical scrolling on desktop. On small
+   viewports the page can scroll rather than clip actions or key figures. */
+body[data-page="trade"] .section-intro{display:none!important}
+body[data-page="trade"] footer{display:none!important}
+body[data-page="api"] .layout,
+body[data-page="api"] .training-card,
+body[data-page="api"] .history-view,
+body[data-page="api"] footer{display:none!important}
+body[data-page="api"] .section-intro{display:none!important}
+@media(min-width:1101px) and (min-height:761px){
+ body[data-page="trade"]{height:100dvh;overflow:hidden}
+ body[data-page="trade"] .shell{display:flex;flex-direction:column;height:100dvh;min-height:0;
+   max-height:100dvh;padding-bottom:13px}
+ body[data-page="trade"] .site-header{flex:none;padding:13px 0}
+ body[data-page="trade"] .layout{flex:1;min-height:0;gap:16px}
+ body[data-page="trade"] .forecast{min-height:0;height:100%;padding:18px 22px 14px;overflow-y:auto;scrollbar-width:thin}
+ body[data-page="trade"] .context{min-height:0;overflow:hidden}
+ body[data-page="trade"] .context>.manual-trade{min-height:0;height:100%;overflow-y:auto;scrollbar-width:thin}
+ body[data-page="trade"] .forecast .round-price-hero{margin-bottom:9px}
+ body[data-page="trade"] .forecast .hero-price-grid{padding:12px 16px 10px}
+ body[data-page="trade"] .forecast .hero-price-half+.hero-price-half{padding-left:14px;margin-left:12px}
+ body[data-page="trade"] .forecast .hero-price-number{font-size:clamp(23px,4.6cqw,46px);margin:7px 0 3px}
+ body[data-page="trade"] .forecast .hero-change{font-size:clamp(12px,2.8cqw,18px)}
+ body[data-page="trade"] .forecast .hero-meta{font-size:10px}
+ body[data-page="trade"] .forecast .hero-clock-panel{padding:10px 15px;margin:3px}
+ body[data-page="trade"] .forecast .hero-clock-number{font-size:clamp(25px,5cqw,43px)}
+ body[data-page="trade"] .forecast .hero-lock-time{font-size:clamp(14px,2.7cqw,22px)}
+ body[data-page="trade"] .forecast .lock-banner{margin:12px 0 13px;padding:11px 13px}
+ body[data-page="trade"] .forecast .direction{font-size:clamp(42px,4vw,61px);margin:8px 0}
+ body[data-page="trade"] .forecast .direction.waiting{font-size:31px;margin:14px 0}
+ body[data-page="trade"] .forecast .confidence-row{margin-top:13px}
+ body[data-page="trade"] .forecast .confidence-value{font-size:30px}
+ body[data-page="trade"] .forecast .progress{margin:10px 0 9px}
+ body[data-page="trade"] .forecast .note{min-height:0;font-size:11px;line-height:1.5}
+ body[data-page="trade"] .forecast .record-note{margin-top:13px;padding:10px 12px}
+ body[data-page="trade"] .forecast details{margin-top:10px}
+ body[data-page="trade"] .manual-trade .mt-top{height:54px}
+ body[data-page="trade"] .manual-trade .mt-tab{padding:17px 0}
+ body[data-page="trade"] .manual-trade .mt-main{padding:17px 19px}
+ body[data-page="trade"] .manual-trade .mt-title{margin-bottom:12px}
+ body[data-page="trade"] .manual-trade .mt-pills{margin-bottom:12px}
+ body[data-page="trade"] .manual-trade .mt-inputbox{height:49px;margin:12px 0 8px}
+ body[data-page="trade"] .manual-trade .mt-sub{margin-bottom:13px}
+ body[data-page="trade"] .manual-trade .mt-rows{gap:10px;margin-bottom:15px}
+}
+@media(max-height:760px){
+ body[data-page="trade"]{height:auto;overflow-y:auto}
+ body[data-page="trade"] .shell{height:auto;max-height:none}
+ body[data-page="trade"] .layout{height:auto;min-height:0}
+}
+@media(max-width:1100px){
+ body[data-page="trade"]{overflow-y:auto}
+ body[data-page="trade"] .layout{height:auto}
+}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 """
 
@@ -128,6 +182,7 @@ NAV = """<nav class="site-nav" aria-label="Primary navigation">
  <a class="site-nav-link" href="/trade">Trade</a>
  <a class="site-nav-link" href="/train">Train</a>
  <a class="site-nav-link" href="/history">History</a>
+ <a class="site-nav-link" href="/api">API</a>
 </nav>"""
 
 PAGE_META = {
@@ -137,6 +192,8 @@ PAGE_META = {
               "Review model readiness, learning cycles and controlled manual training."),
     "history": ("HISTORY / VERIFIED PERFORMANCE", "Every call. On the record.",
                 "Explore saved final forecasts and settlement-verified performance."),
+    "api": ("ACCOUNT / CONNECTION", "Secure API setup.",
+            "Encrypted local Kalshi API credentials."),
 }
 
 
@@ -182,6 +239,10 @@ def render_site_page(page: str, section: str) -> str:
                         '<section class="history-view" aria-label="Final Forecast history">', 1)
     page = page.replace('<title>KalshiEdge — Live Forecast &amp; History</title>',
                         f'<title>KalshiEdge · {section.title()}</title>', 1)
+    # The user wants an uncluttered trading workspace with the two cards only.
+    # Leave the underlying renderers mounted; the visible intro is removed.
+    if section == "trade":
+        page = page.replace(new_intro, "", 1)
     # Only one route is active. The links use real URLs, not in-page fake tabs.
     active = f'<a class="site-nav-link" href="/{section}">{section.title()}</a>'
     page = page.replace(active,
@@ -197,6 +258,7 @@ def render_site_page(page: str, section: str) -> str:
         "trade": "Trading is manual and uses real money. Prices, fees and displayed payouts can change until the exchange confirms your fill.",
         "train": "Models train only when requested. Promotions require the existing independent evaluation checks.",
         "history": "Accuracy includes settled correct and incorrect directional forecasts only. Pending and SKIP results are excluded.",
+        "api": "Keys are encrypted locally with Windows DPAPI. Do not share your private key.",
     }
     page = page[:start] + '<footer>' + disclaimers[section] + footer_end + page[end + len(footer_end):]
     # Background GETs for inactive views needlessly waste API budget.
