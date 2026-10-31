@@ -12,6 +12,7 @@ from kalshi_edge.bootstrap.final_history import _make_handler
 from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
 from kalshi_edge.bootstrap.round_price_ui import integrate_round_price_hero
 from kalshi_edge.bootstrap.site_pages import render_site_page
+from kalshi_edge.bootstrap.api_credentials_ui import integrate_api_credentials
 
 
 class CredentialVault:
@@ -32,7 +33,7 @@ class CredentialVault:
 
 
 def template():
-    return integrate_manual_trade(integrate_round_price_hero(PAGE))
+    return integrate_api_credentials(integrate_manual_trade(integrate_round_price_hero(PAGE)))
 
 
 def test_four_link_navigation_and_no_intro_on_trade():
