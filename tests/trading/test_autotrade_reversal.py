@@ -45,7 +45,9 @@ class Trader:
         return {"ticker":ticker,"action":action,"outcome":outcome,
                 "preview_id":f"preview-{len(self.quoted)}",
                 "count":str(amount) if units=="SHARES" else self.fill,
-                "price":"0.5000", "side":"bid" if outcome=="UP" else "ask"}
+                "price":"0.5000", "side":"bid" if outcome=="UP" else "ask",
+                "unit_price":"0.4000", "fee_estimate":"0.003000",
+                "amount_estimate":str(Decimal(self.fill)*Decimal("0.40")+Decimal("0.003"))}
     def place(self,preview_id,ticker):
         _,action,side,units,amount=self.quoted[-1]
         self.orders.append((action,side,amount))
