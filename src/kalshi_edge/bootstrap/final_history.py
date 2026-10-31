@@ -407,7 +407,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 if self.path == "/api/armed-trade/arm":
                     if not isinstance(payload, dict) or set(payload) != {"amount"} or not isinstance(payload["amount"], str):
                         raise AutoTradeError("Only a dollar amount may be armed")
-                    result = auto.arm(payload["amount"])
+                    result = auto.arm(payload["amount"], continuous=True)
                 elif self.path == "/api/armed-trade/cancel":
                     if payload != {}:
                         raise AutoTradeError("Cancel accepts no parameters")

@@ -1,8 +1,8 @@
-"""Explicitly armed, one-shot live Kalshi BUY after a verified final forecast.
+"""Explicitly armed AutoTrade, optionally following successive BTC markets.
 
 No strategy runs until a same-origin user action arms a dollar amount.
-This worker is deliberately non-persistent: restarts disarm it; no retries of
-ambiguous exchange results, and no attempt is made after a missed checkpoint.
+The arm session is deliberately non-persistent: restarts disarm it. Each market
+has at most one order attempt; ambiguous results never retry.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class AutoTradeError(ValueError):
 
 
 class ArmedAutoTrader:
-    """One-at-a-time, ticker-scoped live order intent, not a recurring bot."""
+    """One market order at a time, with opt-in continuous final-forecast mode."""
 
     def __init__(self, manual, read_live: Callable[[], dict], *,
                  now_ns: Callable[[], int] = time.time_ns,
@@ -45,6 +45,8 @@ class ArmedAutoTrader:
         # No second attempt for a market after ANY exchange order attempt,
         # even if the remote response is lost or the fill is partial.
         self._used: set[str] = set()
+        self._processed: set[str] = set()
+        self._generation = 0
         self.history_store = AutoTradeHistory(history_path) if history_path else None
 
     def status(self) -> dict:
@@ -54,7 +56,10 @@ class ArmedAutoTrader:
     def history(self) -> dict:
         return {"entries": self.history_store.recent() if self.history_store else []}
 
-    def arm(self, amount: str, *, start_worker: bool = True) -> dict:
+    def arm(self, amount: str, *, continuous: bool = False,
+            start_worker: bool = True) -> dict:
+        if type(continuous) is not bool:
+            raise AutoTradeError("Continuous mode must be a boolean")
         try:
             d = Decimal(amount)
         except (InvalidOperation, TypeError, ValueError) as exc:
@@ -71,42 +76,64 @@ class ArmedAutoTrader:
         if not isinstance(ticker, str) or not TICKER_PATTERN.fullmatch(ticker):
             raise AutoTradeError("No readable current BTC 15-minute market")
         with self._lock:
-            if ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker)):
+            if not continuous and (ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker))):
                 raise AutoTradeError("AutoTrade already used on this market")
         if type(close) is not int or type(checkpoint) is not int or close - checkpoint != FINAL_CHECKPOINT_SECONDS * NS:
             raise AutoTradeError("Current market checkpoint is unavailable")
-        if live.get("final_forecast") is not None or now >= checkpoint:
+        if not continuous and (live.get("final_forecast") is not None or now >= checkpoint):
             raise AutoTradeError("Final forecast already locked or checkpoint passed; arm next round")
-        if close <= now:
+        if close <= now and not continuous:
             raise AutoTradeError("Market closed")
         with self._lock:
             if self._state["state"] in ("WAITING", "EXECUTING"):
                 raise AutoTradeError("AutoTrade already armed")
-            if ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker)):
+            if not continuous and (ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker))):
                 raise AutoTradeError("AutoTrade already used on this market")
+            # If the lock has passed, continuous mode must wait for a newly
+            # observed market, never replay a final forecast from the past.
+            skip_current = (continuous and
+                            (now >= checkpoint or live.get("final_forecast") is not None
+                             or ticker in self._used
+                             or bool(self.history_store and self.history_store.has_attempt(ticker))))
+            if skip_current:
+                self._processed.add(ticker)
             self._state = {
                 "state": "WAITING", "ticker": ticker,
+                "continuous": continuous,
                 "amount": format(d, ".2f"), "checkpoint_ts_ns": checkpoint,
                 "market_close_ts_ns": close, "armed_at_ns": now,
-                "outcome": None, "order_id": None,
-                "message": "Armed — waiting for locked final forecast",
+                "outcome": None, "order_id": None, "last_result": None,
+                "message": ("Armed — waiting for the next market" if skip_current
+                            else "Armed — waiting for locked final forecast"),
             }
+            self._generation += 1
+            generation=self._generation
             result = dict(self._state)
         if start_worker:
-            threading.Thread(target=self._loop, name="kalshiedge-armed-auto",
-                             daemon=True).start()
+            threading.Thread(target=self._loop, args=(generation,),
+                             name="kalshiedge-armed-auto",daemon=True).start()
         return result
 
     def cancel(self) -> dict:
         with self._lock:
             if self._state["state"] != "WAITING":
                 raise AutoTradeError("Only an armed, waiting trade can be cancelled")
-            self._state.update(state="CANCELLED", message="AutoTrade cancelled")
+            self._generation += 1
+            self._state.update(state="CANCELLED", continuous=False,
+                               message="AutoTrade cancelled; no further markets")
             return dict(self._state)
 
     def _finish(self, state: str, message: str, **details) -> None:
         with self._lock:
-            self._state.update(state=state, message=message, **details)
+            if self._state.get("continuous") and state in (
+                "FILLED", "PARTIAL", "NO_FILL", "SKIPPED", "EXPIRED"
+            ):
+                self._processed.add(self._state["ticker"])
+                self._state.update(state="WAITING", last_result=state,
+                                   message=message+" · Waiting for next market", **details)
+            else:
+                self._state.update(state=state, last_result=state,
+                                   message=message, **details)
             snapshot = dict(self._state)
         if state not in ("FILLED", "PARTIAL", "NO_FILL", "UNKNOWN"):
             return
@@ -124,15 +151,23 @@ class ArmedAutoTrader:
             # A failed status update leaves UNKNOWN in the history view.
             LOG.exception("AutoTrade history status update failed; verify exchange orders")
 
-    def _loop(self):
+    def _loop(self, generation: int):
         while not self._stop.is_set():
+            with self._lock:
+                if self._generation != generation or self._state["state"] != "WAITING":
+                    return
             try:
                 self.tick()
             except Exception:
-                self._finish("ERROR", "Automation error before order; inspect logs")
+                LOG.exception("AutoTrade worker error")
+                with self._lock:
+                    valid=self._generation == generation
+                if valid:
+                    self._finish("ERROR", "Automation error; inspect local logs")
                 return
-            if self.status()["state"] != "WAITING":
-                return
+            with self._lock:
+                if self._generation != generation or self._state["state"] != "WAITING":
+                    return
             self._stop.wait(0.6)
 
     def tick(self) -> None:
@@ -143,13 +178,52 @@ class ArmedAutoTrader:
         now = self.now_ns()
         ticker,close,checkpoint = (armed["ticker"],armed["market_close_ts_ns"],
                                    armed["checkpoint_ts_ns"])
-        if now >= close - MIN_EXECUTION_REMAINING_NS:
-            self._finish("EXPIRED", "Too close to market close; no order submitted")
+        # Missing or transiently unavailable market data must not cancel the
+        # user's continuous arm between consecutive BTC markets.
+        try:
+            live = self.read_live()
+        except Exception as exc:
+            LOG.debug("AutoTrade awaiting valid market feed: %s", exc)
             return
-        live = self.read_live()
+        if not isinstance(live, dict):
+            return
         observed = live.get("market_ticker")
         if observed is not None and observed != ticker:
-            self._finish("EXPIRED", "BTC market changed; no order submitted")
+            if not armed.get("continuous"):
+                self._finish("EXPIRED", "BTC market changed; no order submitted")
+                return
+            # Transition only to an independently verified *newer* market.
+            next_close = live.get("market_close_ts_ns")
+            next_checkpoint = live.get("checkpoint_ts_ns")
+            if (not isinstance(observed,str) or not TICKER_PATTERN.fullmatch(observed)
+                    or type(next_close) is not int or type(next_checkpoint) is not int
+                    or next_close-next_checkpoint != FINAL_CHECKPOINT_SECONDS*NS
+                    or next_close <= close):
+                return
+            with self._lock:
+                if self._state["state"] != "WAITING" or self._state["ticker"] != ticker:
+                    return
+                already = (observed in self._processed or observed in self._used
+                           or bool(self.history_store and self.history_store.has_attempt(observed)))
+                late = now >= next_checkpoint or live.get("final_forecast") is not None
+                if already or late:
+                    self._processed.add(observed)
+                self._state.update(
+                    ticker=observed, market_close_ts_ns=next_close,
+                    checkpoint_ts_ns=next_checkpoint,
+                    outcome=None, order_id=None,
+                    message=("Waiting for next market" if already or late
+                             else "New market detected — waiting for final forecast"),
+                )
+                armed=dict(self._state)
+            ticker,close,checkpoint=observed,next_close,next_checkpoint
+        if live.get("market_ticker") != ticker or live.get("market_close_ts_ns") != close:
+            return
+        with self._lock:
+            if ticker in self._processed:
+                return
+        if now >= close - MIN_EXECUTION_REMAINING_NS:
+            self._finish("EXPIRED", "Too close to market close; no order submitted")
             return
         if now < checkpoint:
             return
@@ -227,5 +301,7 @@ class ArmedAutoTrader:
     def close(self):
         self._stop.set()
         with self._lock:
+            self._generation += 1
             if self._state["state"] == "WAITING":
-                self._state.update(state="CANCELLED", message="Server stopped; disarmed")
+                self._state.update(state="CANCELLED", continuous=False,
+                                   message="Server stopped; disarmed")
