@@ -37,6 +37,20 @@ class AutoTradeHistory:
                     fill_count TEXT
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS auto_trade_stages (
+                    ticker TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    attempted_at_ns INTEGER NOT NULL,
+                    outcome TEXT NOT NULL,
+                    amount TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    order_id TEXT,
+                    fill_count TEXT,
+                    PRIMARY KEY (ticker, stage)
+                )
+            """)
             db.commit()
         if os.name != "nt":
             os.chmod(self.path, 0o600)
