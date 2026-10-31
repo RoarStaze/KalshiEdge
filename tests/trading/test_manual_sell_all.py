@@ -121,7 +121,8 @@ def test_sell_ui_uses_readonly_holding_and_no_sell_amount_input():
     assert 'id="manual-sell-holding"' in html
     assert 'id="manual-buy-inputbox"' in html
     assert 'id="manual-pills"' in html
-    assert 'id="manual-entry-price"' in html
+    assert 'id="manual-odds"' in html
+    assert 'Average price' in html
     assert '"sell-preview"' in html
     assert 'id="manual-sell-shares"' in html
     assert 'Sell with 1-Click' in html
