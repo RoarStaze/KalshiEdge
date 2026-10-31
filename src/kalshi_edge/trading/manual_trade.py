@@ -19,7 +19,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
-from .risk import decimal, taker_fee_reserve
+from .risk import decimal, taker_fee_reserve, reference_nondirect_fee
 from .paper import PublicMarketClient
 
 
@@ -226,11 +226,27 @@ class ManualTrader:
         count = (count / step).to_integral_value(rounding=ROUND_FLOOR) * step
         if count < step:
             raise TradingError("Amount is smaller than one executable share increment")
-        fee = taker_fee_reserve(per, count)
         if action == "BUY":
-            while count >= step and (count * per + fee > min(balance, value if units == "DOLLARS" else balance)):
-                count -= step
-                fee = taker_fee_reserve(per, count) if count >= step else Decimal("0")
+            # Size by the fee-inclusive debit at the exchange's non-direct
+            # cent-aligned balance precision. The previous taker_fee_reserve
+            # adds an extra one-cent buffer, systematically understating
+            # purchasable contracts, especially for sub-cent prices.
+            # This is a standard-schedule estimate, not a guaranteed Kalshi
+            # fee quote; execution may still be rejected or partially filled.
+            budget = min(balance, value) if units == "DOLLARS" else balance
+            low, high = 0, int(count / step)
+            while low < high:
+                mid = (low + high + 1) // 2
+                candidate = step * mid
+                candidate_fee = reference_nondirect_fee(per, candidate)
+                if candidate * per + candidate_fee <= budget:
+                    low = mid
+                else:
+                    high = mid - 1
+            count = step * low
+            fee = reference_nondirect_fee(per, count) if count >= step else Decimal("0")
+        else:
+            fee = taker_fee_reserve(per, count)
         if count < step:
             raise TradingError("Insufficient cash for the requested size including fee reserve")
         # Fees for SELL are estimated; realized amounts come from the exchange.
@@ -239,7 +255,7 @@ class ManualTrader:
         return {
             "side": price["book_side"], "action": action, "outcome": outcome,
             "price": _money(price["yes_price"]), "unit_price": _money(per),
-            "count": _shares(count), "fee_estimate": _money(fee),
+            "count": _shares(count), "fee_estimate": format(fee, ".6f"),
             "amount_estimate": _money(effective),
             "maximum_payout": _money(count if action == "BUY" else Decimal("0")),
             "available_balance": _money(balance),
