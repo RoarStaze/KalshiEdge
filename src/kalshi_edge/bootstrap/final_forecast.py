@@ -8,6 +8,7 @@ deadline or any integrity/health failure fails closed to SKIP.
 """
 
 import json
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -45,6 +46,9 @@ class FinalForecastRecord(BaseModel):
     directional_probability: float | None = Field(default=None, ge=0, le=1)
     p_yes: float | None = Field(default=None, ge=0, le=1)
     p_no: float | None = Field(default=None, ge=0, le=1)
+    # Captured at the immutable model checkpoint, not reconstructed after settlement.
+    kalshi_yes_bid: float | None = Field(default=None, ge=0, le=1)
+    kalshi_yes_ask: float | None = Field(default=None, ge=0, le=1)
     model_hash: str | None = None
     model_version: str | None = None
 
@@ -114,6 +118,14 @@ class FinalForecastGate:
             p_yes=p_yes,
             p_no=p_no,
         )
+        bid, ask = prediction.kalshi_yes_bid, prediction.kalshi_yes_ask
+        # A valid synchronized two-sided quote is required for independent
+        # market-baseline scoring. Absence must stay absent, not become 0.5.
+        if (type(bid) in (float, int) and type(ask) in (float, int)
+                and math.isfinite(bid) and math.isfinite(ask)
+                and 0 <= bid <= ask <= 1):
+            fields["kalshi_yes_bid"] = bid
+            fields["kalshi_yes_ask"] = ask
         if confidence < MINIMUM_FINAL_CONFIDENCE:
             return FinalForecastRecord(
                 **base, **fields, forecast="SKIP", reason="CONFIDENCE_BELOW_69_PERCENT",

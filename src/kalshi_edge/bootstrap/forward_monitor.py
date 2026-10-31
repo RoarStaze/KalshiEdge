@@ -64,6 +64,49 @@ def _metrics(rows):
     }
 
 
+def _market_quote(row: Mapping[str, Any]) -> tuple[float, float] | None:
+    """Extract authentic same-checkpoint YES bid/ask, never stale fallback prior."""
+    bid, ask = row.get("kalshi_yes_bid"), row.get("kalshi_yes_ask")
+    if type(bid) not in (int, float) or type(ask) not in (int, float):
+        return None
+    if not (math.isfinite(bid) and math.isfinite(ask) and 0 <= bid <= ask <= 1):
+        return None
+    return ((bid + ask) / 2, ask - bid)
+
+
+def _market_comparison(matched, total: int) -> dict[str, Any]:
+    """Proper scores on identical settled markets; midpoint is not an ask."""
+    metadata = {
+        "baseline_type": "DECISION_TIME_KALSHI_YES_BID_ASK_MIDPOINT",
+        "matched_markets": len(matched),
+        "total_scored_markets": total,
+        "markets_without_valid_reference_quote": total - len(matched),
+        "independent_validation": False,
+        "warning": "Bid/ask midpoint is not executable price, true probability, or verified trading edge.",
+    }
+    if not matched:
+        return {
+            **metadata,
+            "ai_brier": None, "market_midpoint_brier": None, "brier_improvement": None,
+            "ai_log_loss": None, "market_midpoint_log_loss": None,
+            "log_loss_improvement": None, "mean_market_spread": None,
+        }
+
+    labels = [int(r[3] == "ABOVE") for r, _p, _spread in matched]
+    ai = probability_metrics(labels, [r[2] for r, _p, _spread in matched])
+    market = probability_metrics(labels, [p for _r, p, _spread in matched])
+    return {
+        **metadata,
+        "ai_brier": ai.brier,
+        "market_midpoint_brier": market.brier,
+        "brier_improvement": market.brier - ai.brier,
+        "ai_log_loss": ai.log_loss,
+        "market_midpoint_log_loss": market.log_loss,
+        "log_loss_improvement": market.log_loss - ai.log_loss,
+        "mean_market_spread": sum(spread for _r, _p, spread in matched) / len(matched),
+    }
+
+
 def _wilson_lower(successes: int, total: int, z: float = 1.959963984540054) -> float | None:
     if total <= 0:
         return None
@@ -91,6 +134,7 @@ def evaluate_forward_reliability(
 
     pending = invalid = 0
     eligible = []
+    checkpoint_quotes = {}
     for row in forecasts:
         if not isinstance(row, Mapping):
             invalid += 1
@@ -103,6 +147,9 @@ def evaluate_forward_reliability(
             invalid += 1
         else:
             eligible.append(checked)
+            quote = _market_quote(row)
+            if quote is not None:
+                checkpoint_quotes[checked[1]] = quote
 
     counts = Counter(item[1] for item in eligible)
     duplicates = sum(count for count in counts.values() if count > 1)
@@ -111,9 +158,18 @@ def evaluate_forward_reliability(
         key=lambda row: (row[0], row[1]),
     )
     overall = _metrics(scored)
+    matched = [(r, *checkpoint_quotes[r[1]]) for r in scored
+               if r[1] in checkpoint_quotes]
+    comparison = _market_comparison(matched, len(scored))
     by_model = {}
+    by_model_reference = {}
     for name in sorted({r[4] for r in scored}):
-        by_model[name] = _metrics([r for r in scored if r[4] == name])
+        model_rows = [r for r in scored if r[4] == name]
+        by_model[name] = _metrics(model_rows)
+        by_model_reference[name] = _market_comparison(
+            [entry for entry in matched if entry[0][4] == name],
+            len(model_rows),
+        )
 
     groups = []
     for floor in CONFIDENCE_COHORTS:
@@ -158,6 +214,8 @@ def evaluate_forward_reliability(
         "readiness": "DESCRIPTIVE_ONLY" if len(scored) >= min_sample
         else "INSUFFICIENT_SAMPLE",
         "metrics": overall, "by_model": by_model,
+        "market_midpoint_comparison": comparison,
+        "market_midpoint_by_model": by_model_reference,
         "confidence_groups": groups, "windows": windows_out,
         "independent_validation": False,
         "warning": (

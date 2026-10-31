@@ -85,6 +85,29 @@ The specific KXBTC15M contract terms control settlement. Kalshi describes
 based on a designated CF Benchmarks index, not necessarily a single Binance
 spot observation.
 
+## 4. Immutable decision-time Kalshi market benchmark (added in Phase 3)
+
+Every *valid* 240-second locked forecast now retains the synchronous YES bid and
+ask displayed at model inference time. This is the only defensible market
+reference for *subsequent* matched comparison: archived bid/ask values must not
+be replaced with post-settlement odds. Legacy forecasts retain null bid/ask;
+they are never backfilled or inferred from a winning market.
+
+`python -m kalshi_edge.bootstrap.forward_monitor` now reports
+`market_midpoint_comparison` and `market_midpoint_by_model`. It compares the
+Brier and log-loss scores of the AI and `(yes_bid+yes_ask)/2` on *identical*
+settled markets with validated two-sided quotes, and reports coverage and
+mean observed spread. A positive Brier improvement is descriptive evidence
+that AI probability forecasts fit the observed outcome better on that
+matched subset—not a guarantee of out-of-sample superiority or live profits.
+
+The bid/ask midpoint cannot be executed and may include liquidity and
+risk-preference effects. Estimate net trade value separately using
+side-specific executable ask, quote depth, actual fees, and real fills.
+The right next experiment is prospectively collecting fresh, never-inspected
+markets and comparing with stable methods under a predeclared evaluation
+rule before promoting a new model.
+
 ## Sources
 
 - Kalshi Crypto Markets (settlement methodology): https://help.kalshi.com/en/articles/13823838-crypto-markets
