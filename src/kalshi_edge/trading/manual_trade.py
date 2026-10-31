@@ -194,11 +194,19 @@ class ManualTrader:
             if not isinstance(rows, list):
                 raise TradingError("Kalshi position response unavailable")
             position = Decimal("0")
+            exposure = Decimal("0")
+            has_exposure = True
             for row in rows:
                 if row.get("ticker") == ticker:
                     position += decimal(row["position_fp"])
+                    raw = row.get("market_exposure_dollars")
+                    if raw is None:
+                        has_exposure = False
+                    else:
+                        exposure += decimal(raw)
             self._account_cache = {
                 "ticker": ticker, "balance": balance, "position": position,
+                "exposure": exposure if has_exposure and exposure >= 0 else None,
                 "at": time.monotonic(),
             }
             return balance, position
@@ -255,7 +263,9 @@ class ManualTrader:
             count = step * low
             fee = reference_nondirect_fee(per, count) if count >= step else Decimal("0")
         else:
-            fee = taker_fee_reserve(per, count)
+            # Approximate the executable cash-out, without the extra $0.01
+            # sizing reserve used for paper-trading risk estimates.
+            fee = reference_nondirect_fee(per, count)
         if count < step:
             raise TradingError("Insufficient cash for the requested size including fee reserve")
         # Fees for SELL are estimated; realized amounts come from the exchange.
@@ -297,6 +307,14 @@ class ManualTrader:
         if market.get("market", {}).get("ticker") != ticker:
             raise TradingError("Market ticker mismatch")
         balance, position = self._account(ticker)
+        with self._account_lock:
+            cache = self._account_cache
+            exposure = (cache.get("exposure") if cache is not None
+                        and cache["ticker"] == ticker else None)
+        average_entry = (exposure / abs(position) if
+                         exposure is not None and position != 0 else None)
+        if average_entry is not None and not 0 <= average_entry <= 1:
+            average_entry = None
         try:
             up = quote_from_book(book, "BUY", "UP")
         except NoLiquidityError:
@@ -312,7 +330,31 @@ class ManualTrader:
             "down_ask": _money(down["unit_cash"]) if down else None,
             "available_balance": _money(balance),
             "position_yes": _money(position),
+            "position_exposure_dollars": _money(exposure) if exposure is not None else None,
+            "average_entry_price": _money(average_entry) if average_entry is not None else None,
         }
+
+    def preview_all(self, ticker: str):
+        """Preview the entire held UP or DOWN position without user-entered size.
+
+        If top-of-book quantity cannot cover the full position, do not
+        advertise a partial liquidation as Sell All.
+        """
+        _, position = self._account(ticker)
+        if position == 0:
+            raise TradingError("No position to sell in the current market")
+        outcome = "UP" if position > 0 else "DOWN"
+        preview = self.preview(ticker, "SELL", outcome, "SHARES", _shares(abs(position)))
+        if Decimal(preview["count"]) != abs(position):
+            with self._lock:
+                self._pending.pop(preview["preview_id"], None)
+            raise NoLiquidityError("Not enough liquidity to sell entire position")
+        with self._lock:
+            pending = self._pending.get(preview["preview_id"])
+            if pending is None:
+                raise TradingError("Sell quote expired; refresh")
+            pending["sell_all"] = True
+        return {**preview, "sell_all": True}
 
     def preview(self, ticker, action, outcome, units, amount):
         plan = self._prepare(ticker, action, outcome, units, amount)
@@ -340,6 +382,8 @@ class ManualTrader:
         old = data["plan"]
         fresh = self._prepare(data["ticker"], data["action"], data["outcome"],
                               data["units"], data["amount"], fresh_account=True)
+        if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:
+            raise TradingError("Position changed; refresh sell quote")
         if fresh["side"] != old["side"] or Decimal(fresh["count"]) < Decimal(old["count"]):
             raise TradingError("Position, balance or liquidity changed; quote again")
         if data["action"] == "BUY" and Decimal(fresh["unit_price"]) > Decimal(old["unit_price"]):
