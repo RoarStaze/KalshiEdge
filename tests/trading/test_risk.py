@@ -103,3 +103,28 @@ def test_no_trade_when_net_edge_is_negative_after_fee():
 
 def test_taker_fee_reserve_includes_rounding_buffer():
     assert taker_fee_reserve(Decimal("0.5"), Decimal("0.1")) >= Decimal("0.01")
+
+def test_market_without_undocumented_fractional_field_still_allows_paper_model():
+    """GET /markets/{ticker} does not guarantee fractional_trading_enabled."""
+    f, market, book = fixture_data()
+    del market["market"]["fractional_trading_enabled"]
+    plan = plan_locked_entry(f, market, book, SCHEDULED + NS)
+    assert plan.outcome == "ABOVE"
+    assert Decimal(plan.worst_case_debit) <= Decimal("0.10")
+    assert Decimal(plan.count) % Decimal("0.01") == 0
+
+
+@pytest.mark.parametrize("unsupported", [False, None, "false", 0])
+def test_explicit_non_true_fractional_flag_still_fails_closed(unsupported):
+    f, market, book = fixture_data()
+    market["market"]["fractional_trading_enabled"] = unsupported
+    with pytest.raises(EntryRejected, match="fractional"):
+        plan_locked_entry(f, market, book, SCHEDULED + NS)
+
+
+def test_missing_flag_does_not_allow_finalized_market():
+    f, market, book = fixture_data()
+    del market["market"]["fractional_trading_enabled"]
+    market["market"]["status"] = "finalized"
+    with pytest.raises(EntryRejected, match="market not open"):
+        plan_locked_entry(f, market, book, SCHEDULED + NS)

@@ -67,6 +67,7 @@ def test_paper_trading_starts_disabled(tmp_path):
     trader = PaperTrader(tmp_path, client=DummyClient())
     assert trader.enabled() is False
     assert trader.status()["live_order_submission"] is False
+    assert trader.status()["fractional_live_eligibility_verified"] is False
     trader.poll_once(SCHEDULED + NS)
 
 

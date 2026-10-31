@@ -36,7 +36,7 @@ SECTION = r"""
   <p class="subtitle">Uses the same locked V5 forecast and official settlement history, on this website.</p></div>
   <span class="chip">PAPER ONLY · NO LIVE ORDERS</span>
  </div>
- <p class="auto-notice">A $0.10 simulated entry can lose the full amount. Price-stop exits are not active; simulated fills, fees and performance are not verified live results.</p>
+ <p class="auto-notice">A $0.10 simulated entry can lose the full amount. Fractional 0.01-contract fills are HYPOTHETICAL when Kalshi omits market-specific fractional eligibility. These are not actual exchange fills. No live orders or automatic price-stop exits.</p>
  <div class="auto-grid">
   <div class="auto-panel">
    <h3>Automatic paper trading</h3>
