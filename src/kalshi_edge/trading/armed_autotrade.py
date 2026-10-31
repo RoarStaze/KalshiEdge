@@ -75,7 +75,7 @@ class ArmedAutoTrader:
         if not isinstance(ticker, str) or not TICKER_PATTERN.fullmatch(ticker):
             raise AutoTradeError("No readable current BTC 15-minute market")
         with self._lock:
-            if ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker)):
+            if not continuous and (ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker))):
                 raise AutoTradeError("AutoTrade already used on this market")
         if type(close) is not int or type(checkpoint) is not int or close - checkpoint != FINAL_CHECKPOINT_SECONDS * NS:
             raise AutoTradeError("Current market checkpoint is unavailable")
@@ -86,12 +86,14 @@ class ArmedAutoTrader:
         with self._lock:
             if self._state["state"] in ("WAITING", "EXECUTING"):
                 raise AutoTradeError("AutoTrade already armed")
-            if ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker)):
+            if not continuous and (ticker in self._used or (self.history_store and self.history_store.has_attempt(ticker))):
                 raise AutoTradeError("AutoTrade already used on this market")
             # If the lock has passed, continuous mode must wait for a newly
             # observed market, never replay a final forecast from the past.
             skip_current = (continuous and
-                            (now >= checkpoint or live.get("final_forecast") is not None))
+                            (now >= checkpoint or live.get("final_forecast") is not None
+                             or ticker in self._used
+                             or bool(self.history_store and self.history_store.has_attempt(ticker))))
             if skip_current:
                 self._processed.add(ticker)
             self._state = {
