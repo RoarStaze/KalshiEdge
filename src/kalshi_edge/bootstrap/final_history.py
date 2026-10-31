@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
+from .round_price_ui import integrate_round_price_hero
 from .autotrader_ui import integrated_page
 from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
@@ -479,7 +480,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 self._json(200, status)
                 return
             if self.path == "/":
-                content = integrated_page(_PAGE).encode("utf-8")
+                content = integrated_page(integrate_round_price_hero(_PAGE)).encode("utf-8")
                 kind = "text/html; charset=utf-8"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")

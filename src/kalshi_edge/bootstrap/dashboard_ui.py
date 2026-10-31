@@ -321,8 +321,23 @@ function renderHistory(data){
    body.appendChild(tr);
  }
 }
-async function refreshLive(){try{const response=await fetch("/api/live",{cache:"no-store"});if(!response.ok)throw Error("HTTP "+response.status);renderLive(await response.json())}
-catch(err){el("connection-dot").classList.remove("on");text("connection-label","Dashboard disconnected");text("feed-status","DASHBOARD ERROR");console.warn(err)}}
+let liveRefreshPending=false;
+async function refreshLive(){
+ if(liveRefreshPending)return;
+ liveRefreshPending=true;
+ try{
+   const response=await fetch("/api/live",{cache:"no-store"});
+   if(!response.ok)throw Error("HTTP "+response.status);
+   renderLive(await response.json());
+ }catch(err){
+   el("connection-dot").classList.remove("on");
+   text("connection-label","Dashboard disconnected");
+   text("feed-status","DASHBOARD ERROR");
+   console.warn(err);
+ }finally{
+   liveRefreshPending=false;
+ }
+}
 async function refreshHistory(){try{const response=await fetch("/api/history",{cache:"no-store"});if(!response.ok)throw Error("HTTP "+response.status);renderHistory(await response.json())}
 catch(err){text("history-status","Could not refresh: "+err.message)}}
 el("filter").addEventListener("change",()=>{if(history)renderHistory(history)});
@@ -382,7 +397,7 @@ el("train-now").addEventListener("click",async()=>{
  await refreshTraining();
 });
 refreshLive();refreshHistory();refreshTraining();
-setInterval(refreshLive,1500);setInterval(refreshHistory,5000);setInterval(refreshTraining,5000);setInterval(clock,250);
+setInterval(refreshLive,750);setInterval(refreshHistory,5000);setInterval(refreshTraining,5000);setInterval(clock,250);
 </script>
 </body></html>
 """
