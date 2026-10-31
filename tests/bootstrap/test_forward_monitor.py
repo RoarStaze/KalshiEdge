@@ -30,7 +30,7 @@ def test_counts_only_unique_settled_valid_markets_and_exposes_scoring():
     ]
     report = evaluate_forward_reliability(rows, min_sample=3)
     assert report["markets_scored"] == 2
-    assert report["duplicates_excluded"] == 1
+    assert report["duplicates_excluded"] == 2  # both duplicate rows excluded
     assert report["pending_excluded"] == 1
     assert report["ineligible_excluded"] == 1
     assert math.isclose(report["metrics"]["brier"], .01, abs_tol=1e-9)
