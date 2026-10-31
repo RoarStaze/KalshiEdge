@@ -20,11 +20,11 @@ def test_navigation_has_four_real_paths_and_active_link():
     for section in ("trade", "train", "history", "api"):
         page=render_site_page(template,section)
         assert f'data-page="{section}"' in page
-        assert f'<title>KalshiEdge · {section.title()}</title>' in page
+        assert f'<title>KalshiEdge · {"API" if section == "api" else section.title()}</title>' in page
         assert page.count('class="site-nav-link') == 4
         for other in ("trade","train","history","api"):
             assert f'href="/{other}"' in page
-        assert f'aria-current="page">{section.title()}</a>' in page
+        assert f'aria-current="page">{"API" if section == "api" else section.title()}</a>' in page
         assert 'role="navigation"' not in page
         assert 'aria-label="Primary navigation"' in page
 
