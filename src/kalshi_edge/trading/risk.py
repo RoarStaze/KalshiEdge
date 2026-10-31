@@ -115,8 +115,13 @@ def plan_locked_entry(
         raise EntryRejected("market mismatch")
     if market.get("status") not in ("active", "open"):
         raise EntryRejected("market not open")
-    if market.get("fractional_trading_enabled") is not True:
-        raise EntryRejected("fractional trading not confirmed")
+    # GET /markets/{ticker} may omit fractional_trading_enabled entirely.
+    # Paper-only research may simulate 0.01-contract fills with an UNVERIFIED
+    # market capability. An explicit negative/invalid flag still blocks entry.
+    # DO NOT reuse this branch as proof of live fractional execution support.
+    if ("fractional_trading_enabled" in market
+            and market["fractional_trading_enabled"] is not True):
+        raise EntryRejected("fractional trading explicitly unsupported or invalid")
     if abs(decimal(market.get("floor_strike")) - decimal(forecast.strike)) > D("0.011"):
         raise EntryRejected("strike mismatch")
     try:
