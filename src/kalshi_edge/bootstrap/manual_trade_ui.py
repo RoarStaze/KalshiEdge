@@ -55,7 +55,7 @@ STYLE = r"""
 .manual-trade .mt-auto-record-side.up,.manual-trade .mt-auto-record-status.filled{color:#32dba8}
 .manual-trade .mt-auto-record-side.down{color:#ff738f}
 .manual-trade .mt-auto-record-status.warn{color:#f1c46b}
-.manual-trade .mt-auto-pnl-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;font-variant-numeric:tabular-nums}
+.manual-trade .mt-auto-pnl-row{display:flex;align-items:baseline;justify-content:flex-end;gap:12px;flex-wrap:wrap;font-size:12px;font-variant-numeric:tabular-nums}
 .manual-trade .mt-auto-pnl-gain{color:#29d599;font-weight:800}
 .manual-trade .mt-auto-pnl-loss{color:#ff5567;font-weight:800}
 .manual-trade .mt-auto-pnl-pending{color:#9daeb0;font-weight:500}
@@ -352,19 +352,22 @@ SCRIPT = r"""
     fill.textContent=entry.fill_count!=null?"Filled "+entry.fill_count+" shares":entry.status==="UNKNOWN"?"Verify Kalshi order":"";
     detail.append(confidence,fill);item.appendChild(detail);
     const finance=document.createElement("div");finance.className="mt-auto-pnl-row";
-    const possible=document.createElement("span");possible.className="mt-auto-pnl-gain";
-    possible.textContent=entry.max_payout_dollars!=null?"Max payout +"+money(entry.max_payout_dollars):"Max payout —";
     const pnl=document.createElement("strong");
     if(entry.realized_pnl_dollars!=null){
-     pnl.className=String(entry.realized_pnl_dollars).startsWith("-")?"mt-auto-pnl-loss":"mt-auto-pnl-gain";
-     pnl.textContent="Net P/L "+signedPnl(entry.realized_pnl_dollars);
+     const losing=String(entry.realized_pnl_dollars).startsWith("-");
+     pnl.className=losing?"mt-auto-pnl-loss":"mt-auto-pnl-gain";
+     if(losing){
+      pnl.textContent="Loss "+signedPnl(entry.realized_pnl_dollars);
+     }else{
+      pnl.textContent="Profit "+signedPnl(entry.realized_pnl_dollars);
+     }
     }else{
      pnl.className="mt-auto-pnl-pending";
      pnl.textContent=entry.pnl_status==="PENDING"?"P/L pending settlement":
        entry.pnl_status==="MIXED"?"P/L unavailable · other market trades":
        entry.status==="NO_FILL"?"No shares filled":"P/L unavailable · verify Kalshi";
     }
-    finance.append(possible,pnl);item.appendChild(finance);
+    finance.append(pnl);item.appendChild(finance);
     if(Array.isArray(entry.stages)&&entry.stages.length){
       const details=document.createElement("div");details.className="mt-auto-record-sub";
       const words=entry.stages.map(stage=>{
