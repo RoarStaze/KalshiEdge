@@ -186,7 +186,9 @@ def test_changed_market_before_order_cancels_without_sending(env):
     def preview(ticker,action,outcome,units,amount):
         feed.ticker="KXBTC15M-NEXT"
         return {"ticker":ticker,"action":action,"outcome":outcome,
-                "preview_id":"preview-once","count":"0.15"}
+                "preview_id":"preview-once","count":"0.15",
+                "unit_price":"0.4000", "fee_estimate":"0.003000",
+                "amount_estimate":"0.0630"}
     manual.preview=preview
     engine.tick()
     assert not manual.orders
