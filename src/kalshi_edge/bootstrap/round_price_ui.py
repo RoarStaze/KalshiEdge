@@ -7,50 +7,52 @@ from __future__ import annotations
 
 
 HERO_STYLE = r"""
-/* Approved forecast mockup: prices and orange clock belong INSIDE forecast. */
-.layout{grid-template-columns:minmax(0,1fr)}
-.layout>.forecast{min-width:0;min-height:0}
-.layout>.context{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(270px,1fr);align-items:stretch}
-.forecast{padding:clamp(22px,4vw,48px)}
-.forecast>.panel-label{font-size:clamp(12px,1.4vw,18px);font-weight:800;letter-spacing:3px;color:#a8c7e7}
-.forecast>.lock-banner{margin:27px 0 28px;padding:19px 27px 20px;border-radius:12px;border-width:2px;border-left-width:5px;background:linear-gradient(130deg,#342d29,#292726)}
-.forecast .lock-heading{font-size:clamp(14px,1.65vw,23px);letter-spacing:.5px}
-.forecast .lock-desc{font-size:clamp(13px,1.45vw,19px);margin-top:10px}
-.forecast .round-price-hero{width:100%;min-width:0;margin:0 0 34px}
-.hero-price-surface{background:linear-gradient(135deg,#0f2030,#0c1724);border:2px solid #304b62;border-radius:17px;overflow:hidden}
-.hero-price-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0;padding:28px 38px 23px}
-.hero-price-half{min-width:0}
-.hero-price-half+.hero-price-half{border-left:1px solid #345165;margin-left:27px;padding-left:35px}
-.hero-price-label{font-size:clamp(11px,1.5vw,19px);font-weight:800;letter-spacing:2px;color:#a1bbd8;display:flex;align-items:center;gap:13px}
-.hero-info{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;border:2px solid #678099;color:#97b3cc;font-size:14px;letter-spacing:0;font-weight:800}
-.hero-price-number{display:block;min-width:0;font-size:clamp(32px,5.7vw,78px);line-height:1.1;margin:20px 0 13px;font-weight:800;letter-spacing:-2.4px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.hero-price-number.up{color:#18df99;text-shadow:0 0 28px #18df9920}
-.hero-price-number.down{color:#ff667f;text-shadow:0 0 28px #ff667f20}
-.hero-price-number.flat{color:#e9f1fa}
-.hero-change{font-size:clamp(18px,2.6vw,34px);font-weight:700;letter-spacing:-.6px;font-variant-numeric:tabular-nums;line-height:1.3;min-height:40px;white-space:nowrap}
-.hero-change.up{color:#18df99}.hero-change.down{color:#ff667f}.hero-change.flat{color:#a7bed5}
-.hero-meta{font-size:clamp(11px,1.4vw,19px);color:#a0bbd7;line-height:1.5}
-.hero-meta.source{font-size:11px;margin-top:3px;color:#7fa2bb}
-.hero-freshness{font-size:11px;color:#a2bbcf;margin:8px 0 0}
-.hero-freshness.fresh{color:#78dbb1}.hero-freshness.stale{color:#f0a676}
-.hero-clock-panel{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:4px 2px 2px;padding:22px 35px;background:linear-gradient(130deg,#352c28,#282423);border:2px solid #995b33;border-radius:13px}
-.hero-clock-left{display:flex;align-items:center;gap:22px}
-.hero-hourglass{width:46px;height:59px;color:#ff8a3c;flex:none}
-.hero-clock-label{color:#b1c1d6;letter-spacing:2px;font-size:clamp(11px,1.35vw,17px);font-weight:800}
-.hero-clock-number{font-variant-numeric:tabular-nums;font-size:clamp(40px,5.2vw,73px);line-height:1.09;font-weight:850;letter-spacing:1px;color:#ff923e;margin-top:3px}
-.hero-clock-right{border-left:1px solid #625047;padding-left:30px;min-width:215px}
-.hero-lock-time{color:#f5f3f1;font-size:clamp(22px,2.9vw,39px);font-weight:600;letter-spacing:-.4px;font-variant-numeric:tabular-nums;margin-top:10px}
-.forecast .direction{font-size:clamp(66px,7.4vw,110px)}
-.forecast .direction.waiting{font-size:clamp(48px,6.2vw,84px)}
-.forecast .direction-caption{font-size:clamp(13px,1.45vw,19px)}
-.forecast .confidence-row{margin-top:34px}
-.forecast .note{font-size:clamp(12px,1.35vw,17px);max-width:950px}
-.forecast .record-note{padding:20px 23px;margin-top:26px;border:1px solid #30495d;border-left:4px solid #7397b4;border-radius:10px;background:#112335}
-.forecast .record-title{font-size:clamp(13px,1.6vw,20px)}
-.forecast .record-details{font-size:clamp(12px,1.35vw,17px)}
-@media(max-width:960px){.layout>.context{grid-template-columns:1fr}.hero-price-grid{padding:23px}.hero-price-half+.hero-price-half{margin-left:19px;padding-left:24px}.hero-price-number{font-size:clamp(31px,5.5vw,60px)}}
-@media(max-width:700px){.forecast{padding:19px}.forecast>.lock-banner{padding:15px}.hero-price-grid{grid-template-columns:1fr;padding:20px;gap:22px}.hero-price-half+.hero-price-half{border-left:0;border-top:1px solid #345165;margin:0;padding:21px 0 0}.hero-price-number{font-size:clamp(37px,8vw,58px)}.hero-change{font-size:clamp(19px,4vw,27px)}.hero-clock-panel{padding:17px 19px;flex-wrap:wrap}.hero-hourglass{width:37px;height:47px}.hero-clock-right{min-width:0;flex:1}.hero-clock-number{font-size:43px}}
-@media(max-width:410px){.hero-price-number{font-size:36px;letter-spacing:-1px}.hero-clock-right{border-left:0;border-top:1px solid #625047;padding:13px 0 0;width:100%;flex:auto}}
+/* Reference-image styling is confined to the ORIGINAL forecast card.
+   Never override .layout columns, .context or the outer card's padding/width. */
+.forecast{container-type:inline-size}
+.forecast .round-price-hero{width:100%;min-width:0;margin:0 0 19px}
+.forecast .hero-price-surface{border:1px solid #345269;border-radius:12px;background:linear-gradient(135deg,#0d1e2e,#0d1927);overflow:hidden}
+.forecast .hero-price-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:15px 13px 13px;gap:0}
+.forecast .hero-price-half{min-width:0}
+.forecast .hero-price-half+.hero-price-half{border-left:1px solid #345269;padding-left:12px;margin-left:10px}
+.forecast .hero-price-label{display:flex;align-items:center;gap:5px;font-size:clamp(9px,2.4cqw,16px);line-height:1.35;font-weight:800;letter-spacing:.6px;color:#a3bdd9;white-space:nowrap}
+.forecast .hero-info{display:inline-grid;place-items:center;width:15px;height:15px;flex:none;border:1.5px solid #6984a1;border-radius:50%;color:#93b1ce;font-size:10px;font-weight:800;letter-spacing:0}
+.forecast .hero-price-number{display:block;margin:11px 0 9px;font-size:clamp(18px,6.15cqw,72px);font-weight:800;line-height:1.12;letter-spacing:-.9px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.forecast .hero-price-number.up{color:#18dfa0;text-shadow:0 0 20px #18dfa01a}
+.forecast .hero-price-number.down{color:#ff647e;text-shadow:0 0 20px #ff647e1a}
+.forecast .hero-price-number.flat{color:#f5f9fc}
+.forecast .hero-change{min-height:20px;line-height:1.4;font-weight:700;font-size:clamp(11px,3cqw,30px);white-space:nowrap;letter-spacing:-.2px;font-variant-numeric:tabular-nums}
+.forecast .hero-change.up{color:#18dfa0}.forecast .hero-change.down{color:#ff647e}.forecast .hero-change.flat{color:#acc0d5}
+.forecast .hero-meta{font-size:clamp(10px,2.15cqw,17px);color:#9db8d5;line-height:1.45}
+.forecast .hero-meta.source{font-size:10px;color:#819fb6;margin-top:2px}
+.forecast .hero-freshness{font-size:9px;line-height:1.3;color:#9bb6cc;margin-top:3px}
+.forecast .hero-freshness.fresh{color:#81e4bd}.forecast .hero-freshness.stale{color:#f6ad79}
+.forecast .hero-clock-panel{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(0,.88fr);align-items:center;gap:6px;background:linear-gradient(120deg,#342b27,#282424);border:1px solid #a46539;border-radius:9px;padding:12px 12px;margin:3px 2px 2px;min-width:0}
+.forecast .hero-clock-left{display:flex;gap:9px;min-width:0;align-items:center}
+.forecast .hero-hourglass{width:clamp(18px,5cqw,47px);height:clamp(26px,6.6cqw,64px);color:#ff8b40;flex:none}
+.forecast .hero-clock-label{color:#afc1d4;letter-spacing:.6px;font-size:clamp(8px,2cqw,16px);font-weight:800;white-space:nowrap}
+.forecast .hero-clock-number{color:#ff923f;font-size:clamp(26px,7cqw,67px);line-height:1.08;font-weight:850;letter-spacing:.1px;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.forecast .hero-clock-right{border-left:1px solid #614c43;padding-left:10px;min-width:0}
+.forecast .hero-lock-time{color:#f5f4f2;font-size:clamp(13px,3.65cqw,34px);font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.4px;margin-top:7px}
+.forecast .record-note{border:1px solid #345167;border-left:3px solid #7da1bd;border-radius:8px;background:#112334;padding:13px 14px;margin-top:18px}
+.forecast .record-title{font-size:12px}
+@container (min-width:700px){
+ .forecast .hero-price-grid{padding:30px 35px 23px}
+ .forecast .hero-price-half+.hero-price-half{padding-left:35px;margin-left:30px}
+ .forecast .hero-price-number{letter-spacing:-1.7px;margin:19px 0 10px}
+ .forecast .hero-clock-panel{padding:21px 32px;margin:4px}
+ .forecast .hero-clock-left{gap:20px}
+ .forecast .hero-clock-right{padding-left:27px}
+ .forecast .hero-price-label{letter-spacing:1.6px}
+ .forecast .round-price-hero{margin-bottom:30px}
+}
+@container (max-width:335px){
+ .forecast .hero-price-grid{grid-template-columns:1fr;gap:15px}
+ .forecast .hero-price-half+.hero-price-half{border-left:0;border-top:1px solid #345269;padding:13px 0 0;margin:0}
+ .forecast .hero-price-number{font-size:clamp(29px,9cqw,45px)}
+ .forecast .hero-clock-panel{grid-template-columns:1fr;gap:10px}
+ .forecast .hero-clock-right{border-left:0;border-top:1px solid #614c43;padding:9px 0 0}
+}
 """
 
 HERO_MARKUP = r"""
