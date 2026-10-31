@@ -110,7 +110,7 @@ def _pages(client, path: str, *, params: dict, field: str) -> list[dict]:
     raise ValueError("Exchange pagination incomplete; do not show profit")
 
 
-def _calculate(contracts, stages, fills, result: str) -> str:
+def _calculate(contracts, stages, fills, result: str, ticker: str) -> str:
     if result not in ("yes", "no"):
         raise ValueError("Market not conclusively settled")
     orders = {order: (action, side, count) for order, action, side, count in stages}
@@ -133,6 +133,17 @@ def _calculate(contracts, stages, fills, result: str) -> str:
     for order, (action, side, expected_count) in orders.items():
         total_count = Decimal(0)
         for item in grouped[order]:
+            # Exchange order IDs are not a substitute for confirming the fill
+            # belongs to the expected action, contract side, and market.
+            # The Kalshi fill API documents action=buy/sell and side=yes/no.
+            reported_ticker = item.get("market_ticker") or item.get("ticker")
+            if (reported_ticker != ticker
+                    or (item.get("ticker") is not None
+                        and item.get("market_ticker") is not None
+                        and item["ticker"] != item["market_ticker"])
+                    or item.get("action") != action.lower()
+                    or item.get("side") != ("yes" if side == "UP" else "no")):
+                raise ValueError("Exchange fill conflicts with recorded AutoTrade")
             qty = _positive(item.get("count_fp"))
             price = _positive(
                 item.get("yes_price_dollars") if side == "UP"
@@ -212,7 +223,7 @@ def enrich_history(entries: list[dict], client=None) -> list[dict]:
             try:
                 row["realized_pnl_dollars"] = _calculate(
                     contracts, stages, by_market.get(ticker, []),
-                    found[ticker]["market_result"])
+                    found[ticker]["market_result"], ticker)
                 row["pnl_status"] = "SETTLED"
             except RuntimeError as exc:
                 row["pnl_status"] = "MIXED" if str(exc) == "MIXED" else "UNAVAILABLE"
