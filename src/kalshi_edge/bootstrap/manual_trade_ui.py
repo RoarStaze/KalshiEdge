@@ -30,12 +30,21 @@ STYLE = r"""
   font-weight:850;letter-spacing:-.5px;line-height:1.3;margin-bottom:22px}
 .manual-trade .mt-btc{display:grid;place-items:center;flex:none;width:36px;height:36px;border-radius:8px;
   background:#f89a3d;color:#fff;font-size:23px;font-weight:800}
-.manual-trade .mt-pills{display:flex;width:min(100%,286px);border-radius:24px;overflow:hidden;
+.manual-trade .mt-pills{display:flex;width:min(100%,365px);border-radius:24px;overflow:hidden;
   background:#26272b;border:1px solid #35363b;margin-bottom:20px}
 .manual-trade .mt-pill{flex:1;min-width:0;border:0;background:transparent;color:#f0f0f0;padding:10px 7px;
   border-radius:24px;font-size:14px;font-weight:850;letter-spacing:1px;cursor:pointer}
 .manual-trade .mt-pill.mt-up.active{background:#25bf85;color:#071e16}
 .manual-trade .mt-pill.mt-down.active{background:#ff4458;color:#09090b}
+.manual-trade .mt-pill.mt-auto.active{background:linear-gradient(135deg,#e9bf55,#f6d889);color:#231902;box-shadow:inset 0 0 0 1px #ffe6a5}
+.manual-trade .mt-pill.mt-auto:focus-visible{outline:2px solid #f6d889;outline-offset:-3px}
+.manual-trade .mt-auto-arm{display:block;width:100%;min-height:50px;margin-top:12px;border-radius:26px;
+ background:linear-gradient(120deg,#e9bf55,#f9d984);color:#291d06;border:1px solid #fce6a9;
+ font-size:14px;font-weight:850;cursor:pointer;box-shadow:0 8px 22px #e9bf5522;transition:filter .2s}
+.manual-trade .mt-auto-arm:hover:not(:disabled){filter:brightness(1.08)}
+.manual-trade .mt-auto-arm:disabled{opacity:.45;cursor:not-allowed}
+.manual-trade .mt-auto-arm.armed{background:#3a3020;color:#f6d889;border-color:#a18748}
+.manual-trade .mt-auto-status{font-size:12px;line-height:1.6;margin-top:9px;color:#f1cc70;min-height:19px}
 .manual-trade .mt-inputbox{height:55px;border:1px solid #32353a;border-radius:10px;display:flex;
   align-items:center;gap:8px;padding:0 18px;margin:18px 0 11px}
 .manual-trade .mt-inputbox:focus-within{border-color:#e3c45c}
@@ -106,6 +115,7 @@ SECTION = r"""
    <div class="mt-pills" id="manual-pills" role="group" aria-label="Choose market outcome">
     <button type="button" id="manual-up" class="mt-pill mt-up">UP —</button>
     <button type="button" id="manual-down" class="mt-pill mt-down active">DOWN —</button>
+    <button type="button" id="manual-auto" class="mt-pill mt-auto" aria-pressed="false">AUTO</button>
    </div>
    <div class="mt-inputbox" id="manual-buy-inputbox">
     <input id="manual-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Enter amount" aria-label="Trade amount">
@@ -123,6 +133,8 @@ SECTION = r"""
     <div class="mt-row" id="manual-payout-row"><span id="manual-payout-label">Max payout</span><span class="mt-number mt-big" id="manual-payout">—</span></div>
    </div>
    <button type="button" id="manual-submit" class="mt-action" disabled>Buy with 1-Click</button>
+   <button type="button" id="manual-auto-arm" class="mt-auto-arm mt-hidden" disabled>Arm AutoTrade</button>
+   <div class="mt-auto-status mt-hidden" id="manual-auto-status" role="status" aria-live="polite"></div>
    <div class="mt-warning" id="manual-status" role="status" aria-live="polite">Awaiting a live Kalshi market…</div>
    <div class="mt-fine">Real orders · quotes and fees can change · unfilled IOC quantity is canceled</div>
   </div>
@@ -157,7 +169,8 @@ SCRIPT = r"""
  const priceCents=cents;
  const probabilityPercent=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
  let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false,previewGeneration=0;
- let buyUnits="DOLLARS",marketGeneration=0;
+ let buyUnits="DOLLARS",marketGeneration=0,autoSelected=false,autoBusy=false;
+ let autoCurrent={state:"IDLE"};
  const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
  function renderAccountSummary(value){
   shown("manual-cash",value?money(value.available_balance):"—");
@@ -183,10 +196,46 @@ SCRIPT = r"""
    shown("manual-account",snapshot?"Predictions account · "+money(snapshot.available_balance)+" available":"Connecting to Kalshi account…");
   }
  }
+ const autoPending=()=>["WAITING","EXECUTING"].includes(autoCurrent.state);
+ function renderAuto(){
+  const selected=action==="BUY"&&autoSelected;
+  const armed=autoPending();
+  byId("manual-auto").classList.toggle("active",selected);
+  byId("manual-auto").setAttribute("aria-pressed",selected?"true":"false");
+  byId("manual-up").classList.toggle("active",!autoSelected&&outcome==="UP");
+  byId("manual-down").classList.toggle("active",!autoSelected&&outcome==="DOWN");
+  byId("manual-auto-arm").classList.toggle("mt-hidden",!selected);
+  byId("manual-auto-status").classList.toggle("mt-hidden",!selected);
+  byId("manual-auto-arm").classList.toggle("armed",armed);
+  byId("manual-units").value=selected?"DOLLARS":action==="SELL"?"SHARES":buyUnits;
+  byId("manual-units").disabled=selected||action==="SELL"||armed;
+  byId("manual-amount").disabled=armed;
+  const amount=Number(byId("manual-amount").value);
+  const canArm=Number.isFinite(amount)&&amount>=0.01&&amount<=100000;
+  const button=byId("manual-auto-arm");
+  button.textContent=armed?(autoCurrent.state==="EXECUTING"?"Executing locked forecast…":"Cancel AutoTrade"):"Arm AutoTrade";
+  button.disabled=autoBusy||autoCurrent.state==="EXECUTING"||(!armed&&!canArm);
+  const messages={
+   WAITING:"ARMED · "+autoCurrent.amount+" USD · Waiting for the locked final forecast ("+(autoCurrent.ticker||"current round")+")",
+   EXECUTING:"Locked final forecast: "+(autoCurrent.outcome||"—")+" · checking exchange order",
+   FILLED:"Order filled · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
+   PARTIAL:"Partially filled · check Kalshi orders for remaining position",
+   NO_FILL:"No shares filled · no automatic retry",
+   SKIPPED:"Final forecast SKIP or confidence under 69% · no trade",
+   EXPIRED:"Market changed or final forecast too late · no trade",
+   CANCELLED:"AutoTrade cancelled. Nothing submitted.",
+   ERROR:"AutoTrade stopped before order · check live market and quote",
+   UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry"
+  };
+  shown("manual-auto-status",messages[autoCurrent.state]||"Auto waits for final ABOVE / BELOW and buys only its direction. Click Arm AutoTrade to enable one trade.");
+  if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
+ }
  function setMode(next){
   if(placing)return;
-  if(action==="BUY")buyUnits=byId("manual-units").value;
+  if(autoPending()){shown("manual-status","Cancel AutoTrade before switching modes.");return}
+  if(action==="BUY"&&!autoSelected)buyUnits=byId("manual-units").value;
   action=next;
+  autoSelected=false;
   byId("manual-buy").classList.toggle("active",next==="BUY");
   byId("manual-sell").classList.toggle("active",next==="SELL");
   byId("manual-submit").classList.toggle("sell",next==="SELL");
@@ -200,17 +249,54 @@ SCRIPT = r"""
   shown("manual-quote-label",next==="BUY"?"Odds":"Average price");
   shown("manual-cost-label",next==="BUY"?"Estimated cost incl. fee":"Cash out (estimated)");
   shown("manual-submit",next==="BUY"?"Buy with 1-Click":"Sell with 1-Click");
-  renderHolding();
-  refreshPreview();
+  renderAuto();renderHolding();refreshPreview();
  }
  function setSide(next){
-  if(placing||action==="SELL")return;
+  if(placing||action==="SELL"||autoPending())return;
+  autoSelected=false;
   outcome=next;
-  byId("manual-up").classList.toggle("active",next==="UP");
-  byId("manual-down").classList.toggle("active",next==="DOWN");
+  renderAuto();
+  refreshPreview();
+ }
+ function selectAuto(){
+  if(placing||action==="SELL")return;
+  if(!autoSelected)buyUnits=byId("manual-units").value;
+  autoSelected=true;
+  renderAuto();
   refreshPreview();
  }
  const url=path=>"/api/manual-trade/"+path;
+ const autoUrl=path=>"/api/armed-trade/"+path;
+ async function autoJSON(path,options){
+  const response=await fetch(autoUrl(path),{cache:"no-store",...options});
+  const body=await response.json();
+  if(!response.ok)throw Error(body.error||"HTTP "+response.status);
+  return body;
+ }
+ async function refreshAuto(){
+  try{
+   autoCurrent=await autoJSON("status");
+   if(autoPending()&&action==="BUY"&&!autoSelected){autoSelected=true;renderAuto();refreshPreview();}
+   renderAuto();
+  }catch(e){if(autoSelected)shown("manual-auto-status","AutoTrade status unavailable: "+e.message)}
+ }
+ async function armOrCancel(){
+  if(autoBusy||action!=="BUY"||!autoSelected)return;
+  if(autoCurrent.state==="EXECUTING")return;
+  autoBusy=true;renderAuto();
+  try{
+   const pending=autoCurrent.state==="WAITING";
+   const path=pending?"cancel":"arm";
+   const value=pending?{}:{amount:byId("manual-amount").value};
+   autoCurrent=await autoJSON(path,{
+    method:"POST",
+    headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"armed-trade"},
+    body:JSON.stringify(value)
+   });
+   renderAuto();refreshPreview();
+  }catch(e){shown("manual-auto-status","AutoTrade action rejected: "+e.message)}
+  finally{autoBusy=false;renderAuto()}
+ }
  async function fetchJSON(path,options){
   const response=await fetch(url(path),{cache:"no-store",...options});
   const body=await response.json();
@@ -256,6 +342,11 @@ SCRIPT = r"""
   const amount=byId("manual-amount").value,units=byId("manual-units").value;
   shown("manual-inputunit",units==="DOLLARS"?"$":"SHARES");
   if(!snapshot){shown("manual-status","Awaiting live market");return}
+  if(action==="BUY"&&autoSelected){
+   shown("manual-odds","At final lock");
+   shown("manual-status",autoPending()?"Waiting for final forecast to lock":"Enter dollars and click Arm AutoTrade. SKIP means no trade.");
+   return;
+  }
   if(action==="SELL"){
    const held=heldPosition();
    if(held===0){shown("manual-status","No position to sell in this round");return}
@@ -334,6 +425,8 @@ SCRIPT = r"""
  byId("manual-sell").addEventListener("click",()=>setMode("SELL"));
  byId("manual-up").addEventListener("click",()=>setSide("UP"));
  byId("manual-down").addEventListener("click",()=>setSide("DOWN"));
+ byId("manual-auto").addEventListener("click",selectAuto);
+ byId("manual-auto-arm").addEventListener("click",armOrCancel);
  byId("manual-units").addEventListener("change",()=>{
   if(action==="BUY")buyUnits=byId("manual-units").value;
   refreshPreview();
@@ -349,7 +442,9 @@ SCRIPT = r"""
   byId("manual-amount").value="";
   refreshMarket();
  });
- refreshMarket();setInterval(refreshMarket,4500);
+ refreshMarket();refreshAuto();
+ setInterval(refreshMarket,4500);
+ setInterval(refreshAuto,1800);
 })();
 </script>
 """
