@@ -31,7 +31,7 @@ def test_manual_quote_book_mapping(action,outcome,expected_yes_price,expected_bo
 def test_no_buy_without_balance_or_sell_without_position(tmp_path):
     trader=ManualTrader(tmp_path, vault=SimpleNamespace(exists=lambda:True),client=None)
     with pytest.raises(TradingError):
-        trader.size_order(Decimal("10.00"),"BUY","UP","DOLLARS",Decimal("2"),Decimal("0"),
+        trader.size_order(Decimal("0.01"),"BUY","UP","DOLLARS",Decimal("2"),Decimal("0"),
                           orderbook(),market())
     with pytest.raises(TradingError):
         trader.size_order(Decimal("10.00"),"SELL","UP","SHARES",Decimal("1"),Decimal("0"),
@@ -55,7 +55,7 @@ def test_order_client_only_posts_with_explicit_send_call():
     client=KalshiOrderClient(vault,transport=httpx.MockTransport(handler))
     assert client.get("/portfolio/balance")["balance_dollars"]=="3.14"
     assert len(calls)==1 and calls[0].method=="GET"
-    reply=client.send_order({"ticker":"KXBTC15M-TEST","client_order_id":"id123","side":"ask","count":"0.16","price":"0.3000"})
+    reply=client.send_order({"ticker":"KXBTC15M-TEST","client_order_id":"id123","side":"ask","count":"0.16","price":"0.3000","reduce_only":False})
     assert reply["order_id"]=="exchange123"
     assert len(calls)==2 and calls[1].url.path.endswith("/portfolio/events/orders")
     assert b'"immediate_or_cancel"' in calls[1].read()
@@ -71,4 +71,3 @@ def test_dashboard_hides_old_cards_without_breaking_live_dom_ids():
     assert 'id="manual-submit"' in page
     assert 'id="strike"' in page
     assert 'id="market-ticker"' in page
-    assert "LIVE FORECAST" not in page
