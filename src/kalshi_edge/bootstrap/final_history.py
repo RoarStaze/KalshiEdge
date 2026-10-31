@@ -354,7 +354,8 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
     except VaultError:
         manual = None
     auto = auto_trader if auto_trader is not None else (
-        ArmedAutoTrader(manual, lambda: read_live_dashboard(root))
+        ArmedAutoTrader(manual, lambda: read_live_dashboard(root),
+                        history_path=root / "data" / "autotrade_history.sqlite3")
         if manual is not None else None
     )
 
@@ -384,7 +385,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             if auto is None or vault is None or not vault.exists():
                 self._json(503, {"error":"Connect Kalshi API credentials first"})
                 return
-            self._json(200, auto.status())
+            self._json(200, auto.history() if self.path == "/api/armed-trade/history" else auto.status())
 
         def _auto_post(self) -> None:
             expected = f"http://127.0.0.1:{self.server.server_port}"
@@ -622,7 +623,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return False
 
         def do_GET(self) -> None:
-            if self.path == "/api/armed-trade/status":
+            if self.path in ("/api/armed-trade/status", "/api/armed-trade/history"):
                 self._auto_get()
                 return
             if urlsplit(self.path).path.startswith("/api/manual-trade/"):
@@ -722,7 +723,10 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     except VaultError:
         manual_trader = None
     from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
-    auto_trader = ArmedAutoTrader(manual_trader, lambda: read_live_dashboard(root)) if manual_trader else None
+    auto_trader = ArmedAutoTrader(
+        manual_trader, lambda: read_live_dashboard(root),
+        history_path=root / "data" / "autotrade_history.sqlite3"
+    ) if manual_trader else None
     paper_worker = threading.Thread(
         target=paper_trader.run_forever, args=(stop,),
         name="kalshi-paper-autotrader", daemon=True,
