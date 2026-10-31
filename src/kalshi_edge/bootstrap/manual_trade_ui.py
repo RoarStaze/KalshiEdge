@@ -142,7 +142,7 @@ SCRIPT = r"""
    el("mt-yes").textContent="UP "+(yes?Math.round(Number(yes.price)*100)+"¢":"—");
    el("mt-no").textContent="DOWN "+(no?Math.round(Number(no.price)*100)+"¢":"—");
    el("mt-ticker").textContent=state?.ticker||"Waiting for market…";
-   const balance=Number(state?.balance_dollars),position=Number(state?.position_fp);
+   const balance=state?.balance_dollars==null?NaN:Number(state.balance_dollars);\n   const position=state?.position_fp==null?NaN:Number(state.position_fp);
    const held=side==="yes"?Math.max(0,position):Math.max(0,-position);
    el("mt-account").textContent=action==="buy"
      ?(Number.isFinite(balance)?"Predictions account · "+fmt(balance)+" available":"Connect Kalshi credentials to see balance")
