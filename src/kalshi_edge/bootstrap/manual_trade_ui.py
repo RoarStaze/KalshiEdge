@@ -37,6 +37,12 @@ STYLE = r"""
 .manual-trade .mt-inputbox input{flex:1;min-width:0;font-size:17px;font-family:inherit;background:none;
   color:#f4f4f4;border:0;outline:0}
 .manual-trade .mt-inputbox .mt-inputunit{color:#9d9fa4;font-size:17px;font-weight:750}
+.manual-trade .mt-held-side{color:#20d5a1}
+.manual-trade .mt-sell-holding{justify-content:space-between;font-size:14px;color:#a4a3aa}
+.manual-trade .mt-sell-holding strong{font-size:19px;color:#f2f2f3;letter-spacing:.3px}
+.manual-trade .mt-profit{font-size:11px;text-align:right;margin-top:3px}
+.manual-trade .mt-profit.loss{color:#ff5567}
+.manual-trade .mt-profit.gain{color:#29d599}
 .manual-trade .mt-sub{color:#a4a3aa;font-size:13px;line-height:1.6;min-height:19px;margin-bottom:24px}
 .manual-trade .mt-liquidity{display:none;margin:-10px 0 18px;color:#ff9c43;font-size:13px;font-weight:750}
 .manual-trade .mt-liquidity.show{display:block}
@@ -78,21 +84,25 @@ SECTION = r"""
   </div>
   <div class="mt-main">
    <div class="mt-title"><span class="mt-btc" aria-hidden="true">₿</span>
-    <span>BTC Up or Down - 15 minutes</span></div>
-   <div class="mt-pills" role="group" aria-label="Choose market outcome">
+    <span><span id="manual-held-side" class="mt-held-side mt-hidden"></span>BTC Up or Down - 15 minutes</span></div>
+   <div class="mt-pills" id="manual-pills" role="group" aria-label="Choose market outcome">
     <button type="button" id="manual-up" class="mt-pill mt-up">UP —</button>
     <button type="button" id="manual-down" class="mt-pill mt-down active">DOWN —</button>
    </div>
-   <div class="mt-inputbox">
+   <div class="mt-inputbox" id="manual-buy-inputbox">
     <input id="manual-amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Enter amount" aria-label="Trade amount">
     <span class="mt-inputunit" id="manual-inputunit">$</span>
+   </div>
+   <div class="mt-inputbox mt-sell-holding mt-hidden" id="manual-sell-holding" aria-label="Shares held for full-position sale">
+    <span>Shares</span><strong id="manual-sell-shares">—</strong>
    </div>
    <div class="mt-sub" id="manual-account">Connecting to Kalshi account…</div>
    <div class="mt-liquidity" id="manual-liquidity" role="status">ⓘ No liquidity</div>
    <div class="mt-rows">
     <div class="mt-row"><span id="manual-quote-label">Odds</span><span class="mt-number" id="manual-odds">—</span></div>
-    <div class="mt-row"><span id="manual-cost-label">Estimated cost incl. fee</span><span class="mt-number" id="manual-estimated">—</span></div>
-    <div class="mt-row"><span id="manual-payout-label">Max payout</span><span class="mt-number mt-big" id="manual-payout">—</span></div>
+    <div class="mt-row"><span id="manual-cost-label">Estimated cost incl. fee</span>
+     <span class="mt-number"><span id="manual-estimated">—</span><span class="mt-profit mt-hidden" id="manual-estimated-pl"></span></span></div>
+    <div class="mt-row" id="manual-payout-row"><span id="manual-payout-label">Max payout</span><span class="mt-number mt-big" id="manual-payout">—</span></div>
    </div>
    <button type="button" id="manual-submit" class="mt-action" disabled>Buy with 1-Click</button>
    <div class="mt-warning" id="manual-status" role="status" aria-live="polite">Awaiting a live Kalshi market…</div>
@@ -129,22 +139,54 @@ SCRIPT = r"""
  const priceCents=cents;
  const probabilityPercent=v=>v!=null&&Number.isFinite(Number(v))?(Number(v)*100).toLocaleString("en-US",{maximumFractionDigits:2})+"% chance":"—";
  let action="BUY",outcome="DOWN",snapshot=null,quote=null,placing=false,previewGeneration=0;
+ let buyUnits="DOLLARS",marketGeneration=0;
  const setLiquidity=visible=>byId("manual-liquidity").classList.toggle("show",visible);
  function clearQuote(){
   quote=null;byId("manual-submit").disabled=true;
   shown("manual-odds","—");shown("manual-estimated","—");shown("manual-payout","—");
+  byId("manual-estimated-pl").classList.add("mt-hidden");
  }
- function setMode(next){action=next;byId("manual-buy").classList.toggle("active",next==="BUY");
+ function heldPosition(){
+  const n=Number(snapshot?.position_yes);
+  return snapshot&&Number.isFinite(n)?n:0;
+ }
+ function renderHolding(){
+  const held=heldPosition();
+  if(action==="SELL"){
+   outcome=held>0?"UP":held<0?"DOWN":"";
+   shown("manual-sell-shares",snapshot?Math.abs(held).toFixed(2):"—");
+   shown("manual-held-side",held>0?"Up · ":held<0?"Down · ":"");
+   shown("manual-account",snapshot?(held!==0?"Your position: "+Math.abs(held).toFixed(2)+" "+(held>0?"Yes":"No"):"No position held in this round"):"Loading your position…");
+  }else{
+   shown("manual-account",snapshot?"Predictions account · "+money(snapshot.available_balance)+" available":"Connecting to Kalshi account…");
+  }
+ }
+ function setMode(next){
+  if(placing)return;
+  if(action==="BUY")buyUnits=byId("manual-units").value;
+  action=next;
+  byId("manual-buy").classList.toggle("active",next==="BUY");
   byId("manual-sell").classList.toggle("active",next==="SELL");
   byId("manual-submit").classList.toggle("sell",next==="SELL");
-  shown("manual-quote-label",next==="BUY"?"Odds":"Current exit price");
-  shown("manual-cost-label",next==="BUY"?"Estimated cost incl. fee":"Estimated cash out");
-  shown("manual-payout-label",next==="BUY"?"Max payout":"Shares to sell");
+  byId("manual-pills").classList.toggle("mt-hidden",next==="SELL");
+  byId("manual-buy-inputbox").classList.toggle("mt-hidden",next==="SELL");
+  byId("manual-sell-holding").classList.toggle("mt-hidden",next==="BUY");
+  byId("manual-held-side").classList.toggle("mt-hidden",next==="BUY");
+  byId("manual-payout-row").classList.toggle("mt-hidden",next==="SELL");
+  byId("manual-units").value=next==="SELL"?"SHARES":buyUnits;
+  byId("manual-units").disabled=next==="SELL";
+  shown("manual-quote-label",next==="BUY"?"Odds":"Average price");
+  shown("manual-cost-label",next==="BUY"?"Estimated cost incl. fee":"Cash out (estimated)");
   shown("manual-submit",next==="BUY"?"Buy with 1-Click":"Sell with 1-Click");
+  renderHolding();
   refreshPreview();
  }
- function setSide(next){outcome=next;byId("manual-up").classList.toggle("active",next==="UP");
-  byId("manual-down").classList.toggle("active",next==="DOWN");refreshPreview();
+ function setSide(next){
+  if(placing||action==="SELL")return;
+  outcome=next;
+  byId("manual-up").classList.toggle("active",next==="UP");
+  byId("manual-down").classList.toggle("active",next==="DOWN");
+  refreshPreview();
  }
  const url=path=>"/api/manual-trade/"+path;
  async function fetchJSON(path,options){
@@ -155,16 +197,33 @@ SCRIPT = r"""
  }
  async function refreshMarket(){
   if(placing)return;
+  const generation=++marketGeneration;
   try{
    const value=await fetchJSON("market");
-   snapshot=value;shown("manual-account",action==="BUY"?"Predictions account · "+money(value.available_balance)+" available":
-     "Your position: "+(Math.abs(Number(value.position_yes))||0).toFixed(2)+" "+(Number(value.position_yes)>=0?"Yes":"No"));
+   if(generation!==marketGeneration||placing)return;
+   snapshot=value;
+   renderHolding();
    shown("manual-up",value.up_ask==null?"UP —":"UP "+priceCents(value.up_ask));
    shown("manual-down",value.down_ask==null?"DOWN —":"DOWN "+priceCents(value.down_ask));
    await refreshPreview();
-  }catch(e){snapshot=null;previewGeneration++;clearQuote();setLiquidity(false);shown("manual-status",e.message);
+  }catch(e){
+   if(generation!==marketGeneration||placing)return;
+   snapshot=null;previewGeneration++;clearQuote();setLiquidity(false);
+   shown("manual-status",e.message);
    shown("manual-account","Kalshi market or credentials unavailable");
   }
+ }
+ function renderProfit(value){
+  const cost=Number(snapshot?.position_exposure_dollars);
+  const cash=Number(value.amount_estimate);
+  const el=byId("manual-estimated-pl");
+  if(snapshot?.position_exposure_dollars==null||!Number.isFinite(cost)||!Number.isFinite(cash)||cost<0){
+   el.classList.add("mt-hidden");return;
+  }
+  const net=cash-cost;
+  el.classList.remove("mt-hidden","loss","gain");
+  el.classList.add(net<0?"loss":"gain");
+  el.textContent=(net<0?"−":"+")+money(Math.abs(net))+" est. P/L";
  }
  async function refreshPreview(){
   if(placing)return;
@@ -173,24 +232,42 @@ SCRIPT = r"""
   const amount=byId("manual-amount").value,units=byId("manual-units").value;
   shown("manual-inputunit",units==="DOLLARS"?"$":"SHARES");
   if(!snapshot){shown("manual-status","Awaiting live market");return}
-  // Buying a side with an empty book is not a zero-percent quote.
-  // SELL uses the opposite book and is independently checked by preview.
-  const ask=outcome==="UP"?snapshot.up_ask:snapshot.down_ask;
-  if(action==="BUY"&&ask==null){
-   setLiquidity(true);
-   shown("manual-status","Selected side has no liquidity");
+  if(action==="SELL"){
+   const held=heldPosition();
+   if(held===0){shown("manual-status","No position to sell in this round");return}
+   shown("manual-odds",priceCents(snapshot.average_entry_price));
+   try{
+    const value=await fetchJSON("sell-preview");
+    if(generation!==previewGeneration||!snapshot||value.ticker!==snapshot.ticker||action!=="SELL")return;
+    // The server, not browser input, decides which shares are owned and sold.
+    if(value.action!=="SELL"||value.sell_all!==true||value.outcome!==(held>0?"UP":"DOWN")
+       ||Number(value.count)!==Math.abs(held))return;
+    quote=value;
+    shown("manual-estimated",money(value.amount_estimate));
+    renderProfit(value);
+    byId("manual-submit").disabled=false;
+    shown("manual-status","Sell all "+Number(value.count).toFixed(2)+" shares · estimate includes fees; IOC may partially fill");
+   }catch(e){
+    if(generation!==previewGeneration)return;
+    const missing=e.message.includes("liquidity")||e.message.includes("No liquidity");
+    setLiquidity(missing);
+    shown("manual-status",missing?"Not enough liquidity to sell entire position":e.message);
+   }
    return;
   }
+  const ask=outcome==="UP"?snapshot.up_ask:snapshot.down_ask;
+  if(ask==null){setLiquidity(true);shown("manual-status","Selected side has no liquidity");return}
   if(!(Number(amount)>0)){shown("manual-status","Enter a trade amount to receive a live quote.");return}
   try{
    const qs=new URLSearchParams({action,outcome,units,amount});
    const value=await fetchJSON("preview?"+qs.toString());
    if(generation!==previewGeneration||!snapshot||value.ticker!==snapshot.ticker
-     ||value.action!==action||value.outcome!==outcome
+     ||action!=="BUY"||value.action!==action||value.outcome!==outcome
      ||value.units!==units||byId("manual-amount").value!==amount)return;
-   quote=value;shown("manual-odds",probabilityPercent(value.unit_price));
+   quote=value;
+   shown("manual-odds",probabilityPercent(value.unit_price));
    shown("manual-estimated",money(value.amount_estimate)+" est.");
-   shown("manual-payout",action==="BUY"?money(value.maximum_payout):Number(value.count).toFixed(2));
+   shown("manual-payout",money(value.maximum_payout));
    byId("manual-submit").disabled=false;
    shown("manual-status","Live quote · "+Number(value.count).toFixed(2)+" shares · est. fee "+money(value.fee_estimate));
   }catch(e){
@@ -202,14 +279,14 @@ SCRIPT = r"""
   }
  }
  async function place(){
-  if(placing||!quote)return;
+  if(placing||!quote||byId("manual-submit").disabled)return;
   placing=true;const button=byId("manual-submit");button.disabled=true;
   shown("manual-status","Sending real Kalshi order…");
   const current=quote;quote=null;
   try{
    const result=await fetchJSON("order",{
-     method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"manual-trade"},
-     body:JSON.stringify({preview_id:current.preview_id})
+    method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"manual-trade"},
+    body:JSON.stringify({preview_id:current.preview_id})
    });
    shown("manual-confirm-heading",result.status==="NO_FILL"?"ORDER NOT FILLED":
      result.status==="PARTIAL"?"ORDER PARTIALLY FILLED":"ORDER COMPLETED");
@@ -225,21 +302,27 @@ SCRIPT = r"""
    shown("manual-confirm-note","Exchange-reported result only. Check Kalshi for final balance and fills.");
    byId("manual-entry").classList.add("mt-hidden");
    byId("manual-confirm").classList.add("show");
-  }catch(e){shown("manual-status","Order not confirmed: "+e.message+" · Check Kalshi before retrying.");}
-  finally{placing=false}
+  }catch(e){
+   shown("manual-status","Order not confirmed: "+e.message+" · Check Kalshi before retrying.");
+  }finally{placing=false}
  }
  byId("manual-buy").addEventListener("click",()=>setMode("BUY"));
  byId("manual-sell").addEventListener("click",()=>setMode("SELL"));
  byId("manual-up").addEventListener("click",()=>setSide("UP"));
  byId("manual-down").addEventListener("click",()=>setSide("DOWN"));
- byId("manual-units").addEventListener("change",refreshPreview);
- let amountTimer;byId("manual-amount").addEventListener("input",()=>{
+ byId("manual-units").addEventListener("change",()=>{
+  if(action==="BUY")buyUnits=byId("manual-units").value;
+  refreshPreview();
+ });
+ let amountTimer;
+ byId("manual-amount").addEventListener("input",()=>{
   clearTimeout(amountTimer);amountTimer=setTimeout(refreshPreview,400);
  });
  byId("manual-submit").addEventListener("click",place);
  byId("manual-done").addEventListener("click",()=>{
   byId("manual-entry").classList.remove("mt-hidden");
-  byId("manual-confirm").classList.remove("show");byId("manual-amount").value="";
+  byId("manual-confirm").classList.remove("show");
+  byId("manual-amount").value="";
   refreshMarket();
  });
  refreshMarket();setInterval(refreshMarket,4500);
