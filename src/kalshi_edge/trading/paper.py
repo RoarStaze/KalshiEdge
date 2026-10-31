@@ -192,6 +192,7 @@ class PaperTrader:
         return {
             "mode": "PAPER_ONLY",
             "live_order_submission": False,
+            "fractional_live_eligibility_verified": False,
             "enabled": self.enabled(),
             "max_all_in_per_market": "0.10",
             "daily_loss_limit": str(DAILY_STOP),
