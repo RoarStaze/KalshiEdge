@@ -218,12 +218,16 @@ SCRIPT = r"""
      el("mt-result-action").textContent=chosenAction.toUpperCase()+" "+chosenSide.toUpperCase();
      el("mt-result-shares").textContent=data.filled_shares+" of "+data.requested_shares;
      el("mt-result-price").textContent=fmt(Number(data.limit_price));
-     el("mt-result-cost").textContent=fmt(Number(data.actual_total_dollars??data.indicative_cost))+(data.actual_total_dollars==null?" est.":" actual");
-     el("mt-result-fees").textContent=fmt(Number(data.actual_fees_dollars??data.indicative_fees))+(data.actual_fees_dollars==null?" est.":" actual");
      const bought=chosenAction==="buy",filled=Number(data.filled_shares);
-     const spent=Number(data.actual_total_dollars??data.indicative_cost);
-     el("mt-payout-row").classList.toggle("mt-hidden",!bought);
-     el("mt-potential-row").classList.toggle("mt-hidden",!bought);
+     const requested=Number(data.requested_shares),px=Number(data.limit_price);
+     const ratio=requested>0?filled/requested:0;
+     const estFee=Number(data.indicative_fees)*ratio;
+     const estCash=Math.max(0,filled*px+(bought?estFee:-estFee));
+     const spent=Number(data.actual_total_dollars??estCash);
+     el("mt-result-cost").textContent=fmt(spent)+(data.actual_total_dollars==null?" est.":" actual");
+     el("mt-result-fees").textContent=fmt(Number(data.actual_fees_dollars??estFee))+(data.actual_fees_dollars==null?" est.":" actual");
+     el("mt-payout-row").classList.toggle("mt-hidden",!bought||filled<=0);
+     el("mt-potential-row").classList.toggle("mt-hidden",!bought||filled<=0);
      el("mt-result-payout").textContent=Number.isFinite(filled)?fmt(filled):"—";
      el("mt-result-potential").textContent=bought&&Number.isFinite(filled)&&Number.isFinite(spent)
        ?fmt(filled-spent)+(data.actual_total_dollars==null?" est.":" maximum"):"—";
