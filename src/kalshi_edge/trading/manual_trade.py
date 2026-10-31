@@ -29,6 +29,9 @@ STEP = Decimal("0.01")
 ONE = Decimal("1")
 MAX_REQUEST_DOLLARS = Decimal("100000")
 QUOTE_LIFETIME_SECONDS = 9
+# Kalshi Basic/Advanced accounts may request /portfolio/balance only once/second.
+ACCOUNT_BALANCE_MIN_INTERVAL_SECONDS = 1.15
+ACCOUNT_SNAPSHOT_SECONDS = 1.15
 
 
 class TradingError(ValueError):
@@ -145,21 +148,55 @@ class ManualTrader:
         self.market_client = market_client if market_client is not None else PublicMarketClient()
         self._pending = {}
         self._lock = threading.Lock()
+        # Serialize all balance reads across browser tabs and HTTP worker threads.
+        self._account_lock = threading.Lock()
+        self._account_cache = None
+        self._last_balance_get_at = None
 
-    def _account(self, ticker: str):
-        balance_raw = self.client.get("/portfolio/balance")
-        balance = decimal(balance_raw.get("balance_dollars",
-                              Decimal(str(balance_raw["balance"])) / 100
-                              if "balance" in balance_raw else None))
-        positions = self.client.get("/portfolio/positions", params={"ticker": ticker, "limit": 10})
-        rows = positions.get("market_positions")
-        if not isinstance(rows, list):
-            raise TradingError("Kalshi position response unavailable")
-        position = Decimal("0")
-        for row in rows:
-            if row.get("ticker") == ticker:
-                position += decimal(row["position_fp"])
-        return balance, position
+    def _account(self, ticker: str, *, fresh: bool = False):
+        with self._account_lock:
+            now = time.monotonic()
+            cached = self._account_cache
+            if (not fresh and cached is not None and cached["ticker"] == ticker
+                    and now - cached["at"] < ACCOUNT_SNAPSHOT_SECONDS):
+                return cached["balance"], cached["position"]
+
+            # Never return a pre-trade balance when explicitly asked for fresh.
+            self._account_cache = None
+            if self._last_balance_get_at is not None:
+                pause = ACCOUNT_BALANCE_MIN_INTERVAL_SECONDS - (
+                    now - self._last_balance_get_at)
+                if pause > 0:
+                    time.sleep(pause)
+
+            self._last_balance_get_at = time.monotonic()
+            try:
+                balance_raw = self.client.get("/portfolio/balance")
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 429:
+                    raise
+                # Only a read is retried. Do not retry any live order POST.
+                time.sleep(ACCOUNT_BALANCE_MIN_INTERVAL_SECONDS)
+                self._last_balance_get_at = time.monotonic()
+                balance_raw = self.client.get("/portfolio/balance")
+
+            balance = decimal(balance_raw.get("balance_dollars",
+                                  Decimal(str(balance_raw["balance"])) / 100
+                                  if "balance" in balance_raw else None))
+            positions = self.client.get("/portfolio/positions",
+                                        params={"ticker": ticker, "limit": 10})
+            rows = positions.get("market_positions")
+            if not isinstance(rows, list):
+                raise TradingError("Kalshi position response unavailable")
+            position = Decimal("0")
+            for row in rows:
+                if row.get("ticker") == ticker:
+                    position += decimal(row["position_fp"])
+            self._account_cache = {
+                "ticker": ticker, "balance": balance, "position": position,
+                "at": time.monotonic(),
+            }
+            return balance, position
 
     def size_order(self, balance: Decimal, action: str, outcome: str, units: str,
                    amount: Decimal, position: Decimal, book: dict, market_payload: dict):
@@ -209,7 +246,7 @@ class ManualTrader:
             "position_yes": _shares(position),
         }
 
-    def _prepare(self, ticker, action, outcome, units, amount):
+    def _prepare(self, ticker, action, outcome, units, amount, *, fresh_account=False):
         if not ticker.startswith("KXBTC15M-") or not ticker.replace("-", "").isalnum():
             raise TradingError("Unsupported market ticker")
         market, book = self.market_client.quote(ticker)
@@ -222,7 +259,7 @@ class ManualTrader:
                 raise ValueError("Market closing or closed")
         except (TypeError, AttributeError, ValueError) as exc:
             raise TradingError("Market is closing or has no valid close time") from exc
-        balance, position = self._account(ticker)
+        balance, position = self._account(ticker, fresh=fresh_account)
         plan = self.size_order(balance, action, outcome, units, decimal(amount),
                                position, book, market)
         plan["ticker"] = ticker
@@ -271,7 +308,7 @@ class ManualTrader:
             raise TradingError("Market changed; refresh quote")
         old = data["plan"]
         fresh = self._prepare(data["ticker"], data["action"], data["outcome"],
-                              data["units"], data["amount"])
+                              data["units"], data["amount"], fresh_account=True)
         if fresh["side"] != old["side"] or Decimal(fresh["count"]) < Decimal(old["count"]):
             raise TradingError("Position, balance or liquidity changed; quote again")
         if data["action"] == "BUY" and Decimal(fresh["unit_price"]) > Decimal(old["unit_price"]):
@@ -285,7 +322,12 @@ class ManualTrader:
             "reduce_only": data["action"] == "SELL",
         }
         # The exchange enforces IOC; no unfilled shares remain resting.
-        result = self.client.send_order(order)
+        try:
+            result = self.client.send_order(order)
+        finally:
+            # A fill or uncertain order outcome invalidates all cached balances.
+            with self._account_lock:
+                self._account_cache = None
         order_id = result.get("order_id")
         if not isinstance(order_id, str) or not order_id:
             raise TradingError("Exchange response ambiguous; check Kalshi orders before retry")
