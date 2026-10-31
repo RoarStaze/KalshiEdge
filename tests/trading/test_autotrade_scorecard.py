@@ -103,7 +103,8 @@ def test_buy_auto_ui_renders_only_verified_totals_and_completeness():
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
     html = integrate_manual_trade(PAGE)
     assert 'id="manual-auto-performance"' in html
-    assert 'result.summary.net_pnl_dollars' in html
-    assert 'result.summary.is_complete_for_filled_markets' in html
+    assert 'const summary=result.summary;' in html
+    assert 'summary.net_pnl_dollars' in html
+    assert 'summary.is_complete_for_filled_markets' in html
     assert 'Verified net P/L' in html
     assert 'recent markets' in html
