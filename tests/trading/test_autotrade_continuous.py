@@ -77,15 +77,18 @@ def test_skips_no_fill_and_expiry_keep_session_armed(env):
     assert engine.status()["last_result"]=="SKIPPED"
     assert not manual.orders
     feed.rollover("KXBTC15M-NEXT")
+    engine.tick()  # observe the fresh market before its final lock
     manual.status="NO_FILL";feed.lock("ABOVE");engine.tick()
     assert engine.status()["state"]=="WAITING"
     assert engine.status()["last_result"]=="NO_FILL"
     feed.rollover("KXBTC15M-MISSED")
+    engine.tick()  # observed and armed, then no timely lock arrives
     clock.t=feed.close-180*NS
     engine.tick()
     assert engine.status()["state"]=="WAITING"
     assert engine.status()["last_result"]=="EXPIRED"
     feed.rollover("KXBTC15M-FOURTH")
+    engine.tick()
     manual.status="FILLED";feed.lock("BELOW");engine.tick()
     assert len(manual.orders)==2
 
