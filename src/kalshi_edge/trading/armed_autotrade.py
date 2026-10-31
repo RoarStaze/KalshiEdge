@@ -61,6 +61,9 @@ class ArmedAutoTrader:
         now = self.now_ns()
         if not isinstance(ticker, str) or not TICKER_PATTERN.fullmatch(ticker):
             raise AutoTradeError("No readable current BTC 15-minute market")
+        with self._lock:
+            if ticker in self._used:
+                raise AutoTradeError("AutoTrade already used on this market")
         if type(close) is not int or type(checkpoint) is not int or close - checkpoint != FINAL_CHECKPOINT_SECONDS * NS:
             raise AutoTradeError("Current market checkpoint is unavailable")
         if live.get("final_forecast") is not None or now >= checkpoint:
