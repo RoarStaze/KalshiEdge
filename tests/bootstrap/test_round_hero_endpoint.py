@@ -1,0 +1,46 @@
+"""Unified HTTP dashboard regression for price hero and forecast continuity."""
+import threading
+
+import httpx
+
+from http.server import ThreadingHTTPServer
+from kalshi_edge.bootstrap.final_history import _make_handler
+from kalshi_edge.trading.paper import PaperTrader
+
+
+class _Vault:
+    def exists(self):
+        return False
+
+
+def test_unified_8899_dashboard_includes_live_price_hero_and_autotrader(tmp_path):
+    handler = _make_handler(
+        tmp_path,
+        paper_trader=PaperTrader(tmp_path),
+        credential_vault=_Vault(),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with httpx.Client(timeout=5, trust_env=False) as client:
+            url = f"http://127.0.0.1:{server.server_port}"
+            response = client.get(url + "/")
+            assert response.status_code == 200
+            assert response.text.count('id="round-price-hero"') == 1
+            assert response.text.index('id="round-price-hero"') < response.text.index('class="layout"')
+            assert response.text.count('id="autotrader"') == 1
+            assert 'id="hero-current"' in response.text
+            assert 'id="hero-strike"' in response.text
+            assert 'id="hero-countdown"' in response.text
+            assert "renderRoundPriceHero(data);" in response.text
+            assert "setInterval(refreshLive,750)" in response.text
+            assert "setInterval(clock,250)" in response.text
+            assert "renderLive(await response.json())" in response.text
+            live = client.get(url + "/api/live")
+            assert live.status_code == 200
+            assert "latest_prediction" in live.json()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
