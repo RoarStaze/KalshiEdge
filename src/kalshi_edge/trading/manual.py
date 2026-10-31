@@ -309,6 +309,18 @@ class ManualTrading:
                 raise ManualTradeError("Price moved against you; refresh quote")
             balance = self.api.balance()
             position = self.api.position(ticker)
+            # Read again immediately before submission; the earlier quote may
+            # have moved during authenticated balance and position requests.
+            if ticker != self._current():
+                raise ManualTradeError("Market changed before order placement")
+            market, prices = self._quote(ticker)
+            refreshed = prices.get(side, {}).get(action)
+            if refreshed is None:
+                raise ManualTradeError("Executable quote disappeared")
+            checked_price = _price(refreshed["price"])
+            if (action == "buy" and checked_price > shown_price
+                    or action == "sell" and checked_price < shown_price):
+                raise ManualTradeError("Price moved against you; refresh quote")
             plan = plan_manual_order(prices, action, side, payload["mode"], payload["amount"],
                                      balance, position,
                                      fractional=market.get("fractional_trading_enabled") is True)
