@@ -23,7 +23,11 @@ NS = 1_000_000_000
 
 
 class EntryRejected(ValueError):
-    """A safe no-trade decision; never retry the same market automatically."""
+    """Safe, terminal no-trade with optional public-market cost diagnostics."""
+
+    def __init__(self, reason: str, *, diagnostics: dict | None = None) -> None:
+        super().__init__(reason)
+        self.diagnostics = diagnostics or {}
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,35 @@ def taker_fee_reserve(price: Decimal, count: Decimal) -> Decimal:
     # Product-specific overrides may exceed this: NEVER treat as a live guarantee.
     model = D("0.07") * price * (ONE - price) * count
     return (model / STEP).to_integral_value(rounding=ROUND_CEILING) * STEP + STEP
+
+
+def reference_nondirect_fee(price: Decimal, count: Decimal) -> Decimal:
+    """Illustrative non-direct single-fill general-rate fee, NOT an exchange quote.
+
+    Kalshi's documented trade-fee arithmetic rounds to 6 decimal places;
+    non-direct balance alignment rounds the negative cash debit to cents.
+    Exact account, market overrides, multi-fill rebates and fees are unknown.
+    """
+    model = (D("0.07") * price * (ONE - price) * count).quantize(
+        D("0.000001"), rounding=ROUND_CEILING
+    )
+    cost = price * count
+    aligned_debit = (cost + model).quantize(D("0.01"), rounding=ROUND_CEILING)
+    return (aligned_debit - cost).quantize(D("0.000001"))
+
+
+def _quote_details(price: Decimal, count: Decimal, pwin: Decimal) -> dict:
+    fee = taker_fee_reserve(price, count)
+    return {
+        "entry_price": f"{price:.4f}",
+        "candidate_quantity": f"{count:.2f}",
+        "model_win_probability": f"{pwin:.6f}",
+        "fee_reserve": f"{fee:.6f}",
+        "all_in_debit": f"{price * count + fee:.6f}",
+        "expected_net_profit": f"{(pwin-price)*count-fee:.6f}",
+        "reference_fee_non_direct": f"{reference_nondirect_fee(price, count):.6f}",
+        "fractional_execution_verified": False,
+    }
 
 
 def best_ask(book: dict, outcome: str) -> tuple[Decimal, Decimal]:
@@ -138,17 +171,27 @@ def plan_locked_entry(
     if not ZERO < price < ONE:
         raise EntryRejected("invalid ask")
     if price >= pwin:
-        raise EntryRejected("no gross model edge")
+        count = min(STEP, available)
+        raise EntryRejected(
+            "no gross model edge",
+            diagnostics=_quote_details(price, count, pwin),
+        )
     # Whole 0.01-contract increments; never round upward.
     units = min(
         int((MAX_STAKE / price / STEP).to_integral_value(rounding=ROUND_FLOOR)),
         int((available / STEP).to_integral_value(rounding=ROUND_FLOOR)),
     )
+    best_rejected = None
+    best_rejected_ev = None
     for n in range(units, 0, -1):
         qty = D(n) * STEP
         fee = taker_fee_reserve(price, qty)
         debit = price * qty + fee
         ev = (pwin - price) * qty - fee
+        if debit <= MAX_STAKE:
+            if best_rejected_ev is None or ev > best_rejected_ev:
+                best_rejected_ev = ev
+                best_rejected = _quote_details(price, qty, pwin)
         if debit <= MAX_STAKE and ev >= MIN_EXPECTED_PROFIT:
             return PaperPlan(
                 ticker=ticker, outcome=outcome,
@@ -157,4 +200,13 @@ def plan_locked_entry(
                 estimated_net_profit=f"{ev:.6f}",
                 model_win_probability=f"{pwin:.6f}",
             )
-    raise EntryRejected("no quantity meets fee-aware $0.10 cap and positive-edge minimum")
+    if best_rejected is None:
+        # Even minimum on-book 0.01 size cannot satisfy the budget.
+        minimum = min(STEP, available)
+        details = _quote_details(price, minimum, pwin)
+    else:
+        details = best_rejected
+    raise EntryRejected(
+        "no quantity meets fee-aware $0.10 cap and positive-edge minimum",
+        diagnostics=details,
+    )
