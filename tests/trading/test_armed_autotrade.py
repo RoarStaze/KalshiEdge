@@ -30,12 +30,12 @@ class Feed:
         self.status="LIVE"
     def __call__(self):
         return {"market_ticker":self.ticker, "market_close_ts_ns":self.close,
-                "checkpoint_ts_ns":self.close-240*NS,
+                "checkpoint_ts_ns":self.close-480*NS,
                 "status":self.status, "final_forecast":self.final}
     def lock(self, side="ABOVE", confidence=.83):
-        self.clock.t=self.close-239*NS
+        self.clock.t=self.close-479*NS
         self.final={"market_ticker":self.ticker, "forecast":side,
-                    "scheduled_ts_ns":self.close-240*NS,
+                    "scheduled_ts_ns":self.close-480*NS,
                     "confidence":confidence, "reason":None}
 
 

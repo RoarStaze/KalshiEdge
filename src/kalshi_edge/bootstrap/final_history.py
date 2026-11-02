@@ -55,7 +55,7 @@ class OfficialSettlement(BaseModel):
 
 
 def _close_ns(forecast: FinalForecastRecord) -> int:
-    return forecast.scheduled_ts_ns + FINAL_CHECKPOINT_SECONDS * NS
+    return forecast.scheduled_ts_ns + forecast.checkpoint_seconds * NS
 
 
 def _close_iso(forecast: FinalForecastRecord) -> str:
@@ -304,6 +304,7 @@ def read_final_history(root: Path) -> dict[str, Any]:
             "market_ticker": forecast.market_ticker,
             "market_close": _close_iso(forecast),
             "forecast": forecast.forecast,
+            "checkpoint_seconds": forecast.checkpoint_seconds,
             "confidence": forecast.confidence,
             "directional_probability": forecast.directional_probability,
             "p_yes": forecast.p_yes,

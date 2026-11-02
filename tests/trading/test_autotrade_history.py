@@ -22,11 +22,11 @@ class Feed:
         self.close=clock.ns()+900*NS;self.final=None
     def __call__(self):
         return {"market_ticker":self.ticker,"market_close_ts_ns":self.close,
-                "checkpoint_ts_ns":self.close-240*NS,"final_forecast":self.final}
+                "checkpoint_ts_ns":self.close-480*NS,"final_forecast":self.final}
     def lock(self,direction="ABOVE",confidence=0.87):
-        self.clock.t=self.close-239*NS
+        self.clock.t=self.close-479*NS
         self.final={"market_ticker":self.ticker,"forecast":direction,
-                    "confidence":confidence,"scheduled_ts_ns":self.close-240*NS}
+                    "confidence":confidence,"scheduled_ts_ns":self.close-480*NS}
 
 
 class FakeManual:
@@ -73,7 +73,7 @@ def test_one_record_per_actual_order_attempt_persists_across_restart(tmp_path):
     engine2=ArmedAutoTrader(FakeManual(),feed,now_ns=clock.ns,history_path=store)
     assert engine2.history()==engine.history()
     feed.final=None
-    clock.t=feed.close-300*NS
+    clock.t=feed.close-600*NS
     try:
         engine2.arm("1.25",start_worker=False)
     except ValueError as exc:

@@ -255,7 +255,7 @@ SCRIPT = r"""
   button.textContent=armed?(autoCurrent.state==="EXECUTING"?"Executing locked forecast…":"Cancel AutoTrade"):"Arm AutoTrade";
   button.disabled=autoBusy||autoCurrent.state==="EXECUTING"||(!armed&&!canArm);
   const messages={
-   WAITING:"ARMED · "+autoCurrent.amount+" USD each round · "+(autoCurrent.message||"Monitoring 90% live / final forecast")+" ("+(autoCurrent.ticker||"current round")+")",
+   WAITING:"ARMED · "+autoCurrent.amount+" USD each round · "+(autoCurrent.message||"Waiting for eight-minute final forecast")+" ("+(autoCurrent.ticker||"current round")+")",
    EXECUTING:"Executing AutoTrade: "+(autoCurrent.outcome||"—")+" · "+(autoCurrent.message||"checking Kalshi"),
    FILLED:"Order filled · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
@@ -267,7 +267,7 @@ SCRIPT = r"""
    UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry",
    REVIEW:"Reversal not confirmed · manual review required before further AUTO orders"
   };
-  shown("manual-auto-status",messages[autoCurrent.state]||"Live ≥90% at ≤8m, otherwise final lock. Opposite final after early fill sells then buys the final side. Arm AutoTrade to begin.");
+  shown("manual-auto-status",messages[autoCurrent.state]||"AutoTrade buys UP/DOWN only after the eight-minute final forecast locks, subject to quote and fee/edge checks.");
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
   if(selected)renderAutoPayout();
  }
@@ -488,7 +488,7 @@ SCRIPT = r"""
   if(action==="BUY"&&autoSelected){
    shown("manual-odds","At final lock");
    renderAutoPayout();
-   shown("manual-status",autoPending()?(autoCurrent.message||"Waiting for 90% live signal or locked final forecast"):"Enter dollars to Arm AutoTrade. It can enter early at ≥90% confidence and reverse on an opposite final lock.");
+   shown("manual-status",autoPending()?(autoCurrent.message||"Waiting for locked eight-minute final forecast"):"Enter dollars to Arm AutoTrade. It buys only the locked eight-minute final direction; no early entries or automatic reversals.");
    return;
   }
   if(action==="SELL"){

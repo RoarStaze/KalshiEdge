@@ -3,7 +3,7 @@ from __future__ import annotations
 """One immutable read-only ABOVE/BELOW/SKIP decision per KXBTC15M round.
 
 A final decision uses only a prediction computed at the actual observation
-time, never backdated to the scheduled 240-second checkpoint. A missed
+time, never backdated to the scheduled eight-minute checkpoint. A missed
 deadline or any integrity/health failure fails closed to SKIP.
 """
 
@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 
 
 NS = 1_000_000_000
-FINAL_CHECKPOINT_SECONDS = 240
+FINAL_CHECKPOINT_SECONDS = 480
+LEGACY_FINAL_CHECKPOINT_SECONDS = 240
 MINIMUM_FINAL_CONFIDENCE = 0.69
 MAX_CHECKPOINT_LATENESS_NS = 2 * NS
 _SAFE_TICKER = re.compile(r"^[A-Z0-9-]+$")
@@ -38,6 +39,9 @@ class FinalForecastRecord(BaseModel):
     market_ticker: str
     strike: float = Field(gt=0)
     scheduled_ts_ns: int = Field(gt=0)
+    # Earlier immutable final records omitted this field and locked at 240s.
+    # Preserve their settlement close mapping even after policy moves to 480s.
+    checkpoint_seconds: Literal[240, 480] = LEGACY_FINAL_CHECKPOINT_SECONDS
     prediction_ts_ns: int = Field(gt=0)
     seconds_remaining: float = Field(ge=0)
     forecast: Literal["ABOVE", "BELOW", "SKIP"]
@@ -54,7 +58,7 @@ class FinalForecastRecord(BaseModel):
 
 
 class FinalForecastGate:
-    """Locks once per market ticker at the 240-second checkpoint."""
+    """Locks once per market ticker at the eight-minute checkpoint."""
 
     def __init__(self) -> None:
         self._locked_tickers: set[str] = set()
@@ -80,6 +84,7 @@ class FinalForecastGate:
             market_ticker=market.ticker,
             strike=market.strike,
             scheduled_ts_ns=scheduled,
+            checkpoint_seconds=FINAL_CHECKPOINT_SECONDS,
             prediction_ts_ns=now_ns,
             seconds_remaining=remaining,
             model_hash=None if prediction is None else prediction.model_hash,
@@ -87,7 +92,7 @@ class FinalForecastGate:
         )
 
         if now_ns > scheduled + MAX_CHECKPOINT_LATENESS_NS:
-            return FinalForecastRecord(**base, forecast="SKIP", reason="MISSED_240S_CHECKPOINT")
+            return FinalForecastRecord(**base, forecast="SKIP", reason="MISSED_480S_CHECKPOINT")
         if now_ns >= market.close_ts_ns:
             return FinalForecastRecord(**base, forecast="SKIP", reason="MARKET_ALREADY_CLOSED")
 
@@ -146,7 +151,7 @@ class FinalForecastWriter:
     def save(self, record: FinalForecastRecord, *, market_close_ts_ns: int) -> Path | None:
         if not _SAFE_TICKER.fullmatch(record.market_ticker):
             raise ValueError("market ticker cannot be used as a safe record filename")
-        if record.scheduled_ts_ns != market_close_ts_ns - FINAL_CHECKPOINT_SECONDS * NS:
+        if record.scheduled_ts_ns != market_close_ts_ns - record.checkpoint_seconds * NS:
             raise ValueError("final forecast checkpoint does not match market close")
         day = datetime.fromtimestamp(market_close_ts_ns / NS, tz=timezone.utc).date().isoformat()
         path = self.root / "final_forecasts" / day / f"{record.market_ticker}.json"

@@ -64,6 +64,7 @@ def summarize_checkpoint_health(
         latest.append({
             "ticker": record.market_ticker,
             "forecast": record.forecast,
+            "checkpoint_seconds": record.checkpoint_seconds,
             "reason": record.reason,
             "checkpoint_time_utc": datetime.fromtimestamp(
                 record.scheduled_ts_ns / NS, tz=timezone.utc,
@@ -82,12 +83,13 @@ def summarize_checkpoint_health(
         "duplicate_records_excluded": duplicates,
         "directional_forecasts": directional,
         "skipped_markets": total - directional,
-        "missed_checkpoint": reasons.get("MISSED_240S_CHECKPOINT", 0),
+        "missed_checkpoint": reasons.get("MISSED_240S_CHECKPOINT", 0) + reasons.get("MISSED_480S_CHECKPOINT", 0),
         "low_confidence_skips": reasons.get("CONFIDENCE_BELOW_69_PERCENT", 0),
         "feed_or_integrity_skips": sum(
             count for reason, count in reasons.items()
             if reason not in (
-                "MISSED_240S_CHECKPOINT", "CONFIDENCE_BELOW_69_PERCENT",
+                "MISSED_240S_CHECKPOINT", "MISSED_480S_CHECKPOINT",
+                "CONFIDENCE_BELOW_69_PERCENT",
             )
         ),
         "on_time_checkpoints": timely,

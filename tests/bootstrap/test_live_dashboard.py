@@ -12,7 +12,7 @@ from kalshi_edge.bootstrap.types import FeedQuality
 
 NS = 1_000_000_000
 CLOSE = 1_800_000_900_000_000_000
-DUE = CLOSE - 240 * NS
+DUE = CLOSE - 480 * NS
 TICKER = "KXBTC15M-26OCT280430-30"
 
 
@@ -67,9 +67,9 @@ def test_locked_checkpoint_uses_immutable_final_record(tmp_path: Path):
     forecast = FinalForecastRecord(
         market_ticker=TICKER,
         strike=81043.29,
-        scheduled_ts_ns=DUE,
+        scheduled_ts_ns=DUE, checkpoint_seconds=480,
         prediction_ts_ns=DUE + NS // 3,
-        seconds_remaining=239.667,
+        seconds_remaining=479.667,
         forecast="BELOW",
         confidence=0.96,
         directional_probability=0.98,
@@ -91,8 +91,8 @@ def test_float_rounding_does_not_hide_matching_saved_forecast(tmp_path: Path):
     _write_prediction(tmp_path, now - NS // 2, seconds=(CLOSE - (now - NS // 2)) / NS + 0.0000004)
     forecast = FinalForecastRecord(
         market_ticker=TICKER, strike=81043.29,
-        scheduled_ts_ns=DUE, prediction_ts_ns=DUE + NS // 3,
-        seconds_remaining=239.667, forecast="SKIP",
+        scheduled_ts_ns=DUE, checkpoint_seconds=480, prediction_ts_ns=DUE + NS // 3,
+        seconds_remaining=479.667, forecast="SKIP",
         reason="CONFIDENCE_BELOW_69_PERCENT",
         model_hash="f" * 64,
     )

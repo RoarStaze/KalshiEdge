@@ -68,8 +68,8 @@ def test_no_edge_is_checked_before_exchange_submit_in_armed_auto(tmp_path):
     from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
     NS = 1_000_000_000
     now = 1_900_000_000 * NS
-    close = now + 400 * NS
-    checkpoint = close - 240 * NS
+    close = now + 900 * NS
+    checkpoint = close - 480 * NS
     ticker = "KXBTC15M-TEST"
     state = {
         "market_ticker": ticker, "market_close_ts_ns": close,

@@ -31,14 +31,14 @@ class Market:
         return {
             "market_ticker":self.ticker,
             "market_close_ts_ns":self.close,
-            "checkpoint_ts_ns":self.close-240*NS,
+            "checkpoint_ts_ns":self.close-480*NS,
             "final_forecast":self.final,
         }
     def lock(self, outcome="ABOVE",confidence=0.90):
-        self.clock.t=self.close-239*NS
+        self.clock.t=self.close-479*NS
         self.final={
             "market_ticker":self.ticker,
-            "scheduled_ts_ns":self.close-240*NS,
+            "scheduled_ts_ns":self.close-480*NS,
             "forecast":outcome,
             "confidence":confidence,
         }
@@ -47,7 +47,7 @@ class Market:
         self.ticker=f"KXBTC15M-ROUND{self.number}"
         self.close+=900*NS
         self.final=None
-        self.clock.t=self.close-300*NS
+        self.clock.t=self.close-600*NS
 
 
 class Orders:
