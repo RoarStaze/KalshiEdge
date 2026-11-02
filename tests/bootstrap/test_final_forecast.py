@@ -18,7 +18,7 @@ from kalshi_edge.bootstrap.types import FeedQuality
 NS = 1_000_000_000
 OPEN = 1_800_000_000_000_000_000
 CLOSE = OPEN + 900 * NS
-DUE = CLOSE - 240 * NS
+DUE = CLOSE - 480 * NS
 TICKER = "KXBTC15M-TEST"
 
 
@@ -56,10 +56,10 @@ def _prediction(
     )
 
 
-def test_final_forecast_is_not_published_early_and_locks_once_at_240s() -> None:
+def test_final_forecast_is_not_published_early_and_locks_once_at_480s() -> None:
     gate = FinalForecastGate()
     market = _market()
-    assert FINAL_CHECKPOINT_SECONDS == 240
+    assert FINAL_CHECKPOINT_SECONDS == 480
     assert gate.evaluate(market, now_ns=DUE - 1, prediction=_prediction(DUE - 1)) is None
     final = gate.evaluate(market, now_ns=DUE, prediction=_prediction(DUE))
     assert final is not None
@@ -67,7 +67,7 @@ def test_final_forecast_is_not_published_early_and_locks_once_at_240s() -> None:
     assert final.forecast == "ABOVE"
     assert final.reason is None
     assert final.scheduled_ts_ns == DUE
-    assert final.seconds_remaining == pytest.approx(240.0)
+    assert final.seconds_remaining == pytest.approx(480.0)
     assert final.directional_probability == pytest.approx(0.9)
     # A same-ticker feed reconnect must not create a second final decision.
     assert gate.evaluate(_market(), now_ns=DUE + NS, prediction=_prediction(DUE + NS)) is None
@@ -134,14 +134,14 @@ def test_final_forecast_never_backdates_or_fabricates_late_decision() -> None:
     )
     assert permitted.forecast == "ABOVE"
     assert permitted.prediction_ts_ns == DUE + NS
-    assert permitted.seconds_remaining == pytest.approx(239)
+    assert permitted.seconds_remaining == pytest.approx(479)
 
     missed = FinalForecastGate().evaluate(
         market, now_ns=DUE + 3 * NS,
         prediction=_prediction(DUE + 3 * NS),
     )
     assert missed.forecast == "SKIP"
-    assert missed.reason == "MISSED_240S_CHECKPOINT"
+    assert missed.reason == "MISSED_480S_CHECKPOINT"
     assert missed.prediction_ts_ns == DUE + 3 * NS
 
 
