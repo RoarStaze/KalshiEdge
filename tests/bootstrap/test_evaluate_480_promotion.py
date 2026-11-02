@@ -107,8 +107,8 @@ def test_480_gate_can_pass_when_compared_with_same_horizon_baselines():
     augmented=base.model_copy(update={"metrics":{
         **base.metrics,
         "incumbent_current":_metric(brier=.16,log_loss=.46,ece=.02),
-        "volatility_480_candidate":_metric(brier=.14,log_loss=.40,ece=.02),
-        "volatility_480_incumbent":_metric(brier=.17,log_loss=.50,ece=.02),
+        "volatility_480_candidate":_metric(brier=.14,log_loss=.40,ece=.02).model_copy(update={"accuracy":.80}),
+        "volatility_480_incumbent":_metric(brier=.17,log_loss=.50,ece=.02).model_copy(update={"accuracy":.75}),
         "volatility_480_kalshi":_metric(brier=.19,log_loss=.56,ece=.02),
     }})
     augmented=augmented.model_copy(update={"decision_metrics":{
