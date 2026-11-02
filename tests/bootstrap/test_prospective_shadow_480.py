@@ -118,6 +118,18 @@ def test_missing_and_unhealthy_shadow_count_as_skips_not_deleted(tmp_path: Path)
     assert r["incumbent"]["correct"] == 1
     assert r["incumbent"]["coverage"] == pytest.approx(2/3)
     assert r["ready_to_promote"] is False
+    # Snapshot-matched coverage is separate from conservative all-market
+    # coverage. A valid status=SKIP remains in this cohort.
+    matched = r["matched_snapshot_cohort"]
+    assert matched["settled_markets"] == 2
+    assert matched["incumbent"]["qualified"] == 1
+    assert matched["incumbent"]["correct"] == 0
+    assert matched["incumbent"]["coverage"] == pytest.approx(.5)
+    assert matched["specialist"]["qualified"] == 1
+    assert matched["specialist"]["correct"] == 1
+    assert matched["specialist"]["coverage"] == pytest.approx(.5)
+    assert matched["explicit_shadow_skips"] == 1
+    assert r["missing_shadow_market_tickers"] == ["KXBTC15M-28NOV020003-00"]
 
 
 def test_tampered_shadow_and_bad_official_settlement_fail_closed(tmp_path: Path):
