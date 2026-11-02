@@ -292,3 +292,27 @@ def test_rescue_policy_rejects_any_promotion_and_no_live_or_trading_imports(tmp_
     source=inspect.getsource(evaluate_rescue_policy)
     assert "place_order" not in source
     assert "autotrade" not in source.lower()
+
+
+def test_rescue_policy_forward_validation_excludes_pre_registered_wins(
+    tmp_path: Path, monkeypatch,
+):
+    from kalshi_edge.bootstrap import rescue_policy_480 as policy
+
+    _make_freeze(tmp_path)
+    _make_market(tmp_path, 1, incumbent=.79, candidate=.88, actual="ABOVE")
+    _make_market(tmp_path, 2, incumbent=.79, candidate=.94, actual="BELOW")
+    # Simulate selecting policy AFTER seeing market #1. An unbiased
+    # forward report must not use that already-seen successful rescue.
+    monkeypatch.setattr(policy, "POLICY_REGISTERED_AT_NS", BASE + 900*NS)
+    r=policy.evaluate_rescue_policy(tmp_path)
+    fwd=r["forward_validation"]
+    assert fwd["settled_market_count"]==1
+    assert fwd["rescues"]["markets"]==1
+    assert fwd["rescues"]["correct"]==0
+    assert fwd["rescues"]["wrong"]==1
+    assert fwd["rescue_hybrid"]["qualified"]==1
+    assert fwd["rescue_hybrid"]["correct"]==0
+    assert r["rescues"]["markets"]==2
+    assert r["rescues"]["correct"]==1
+    assert r["ready_to_promote"] is False
