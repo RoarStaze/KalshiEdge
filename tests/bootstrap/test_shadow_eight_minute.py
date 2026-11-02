@@ -148,3 +148,19 @@ def test_multiple_dates_and_market_selection_remain_bounded(tmp_path):
 def test_invalid_replay_limit_rejected(tmp_path,max_markets):
     with pytest.raises(ValueError):
         replay_eight_minute_history(tmp_path,[history()],max_markets=max_markets)
+
+
+def test_replay_exposes_unmodified_causal_rows_only_by_opt_in(tmp_path):
+    archive(tmp_path, snapshot(p=.7998))
+    normal = replay_eight_minute_history(tmp_path, [history()])
+    assert "replay_rows" not in normal
+    research = replay_eight_minute_history(
+        tmp_path, [history()], include_replay_rows=True,
+    )
+    assert len(research["replay_rows"]) == 1
+    row = research["replay_rows"][0]
+    assert row["model_hash"] == "hash"
+    assert row["checkpoint_seconds"] == 480
+    assert row["p_yes"] == .7998
+    assert row["forecast"] == "SKIP"
+    assert row["source"] == "ARCHIVED_CONTINUOUS_PREDICTIONS_NOT_FINAL_LOCKS"

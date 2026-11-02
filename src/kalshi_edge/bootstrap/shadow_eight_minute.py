@@ -48,6 +48,7 @@ def _report(
     settled_rows: Sequence[Mapping[str, Any]],
     *, max_markets: int,
     min_sample: int,
+    include_replay_rows: bool = False,
 ) -> dict[str, Any]:
     # Only old 240s records with verifiably official settled labels. New 480s
     # records already have direct immutable evidence in checkpoint_confidence.
@@ -173,6 +174,7 @@ def _report(
             "p_no": live.p_no,
             "confidence": live.confidence,
             "model_version": live.model_version or "UNKNOWN",
+            "model_hash": live.model_hash,
             "kalshi_yes_bid": live.kalshi_yes_bid,
             "kalshi_yes_ask": live.kalshi_yes_ask,
             "source": "ARCHIVED_CONTINUOUS_PREDICTIONS_NOT_FINAL_LOCKS",
@@ -182,6 +184,8 @@ def _report(
     reliable = evaluate_forward_reliability(projected, min_sample=min_sample)
     with_tick = len(earliest)
     return {
+        **({"replay_rows": sorted(projected, key=lambda row: (row["market_close"], row["market_ticker"]))}
+           if include_replay_rows else {}),
         "report": "KXBTC15M_LEGACY_480S_REPLAY_V1",
         "source": "ARCHIVED_CONTINUOUS_PREDICTIONS_NOT_FINAL_LOCKS",
         "status": "RETROSPECTIVE_ONLY" if reliable["markets_scored"]
@@ -217,12 +221,16 @@ def replay_eight_minute_history(
     history: Sequence[Mapping[str, Any]],
     *, max_markets: int = 100,
     min_sample: int = 100,
+    include_replay_rows: bool = False,
 ) -> dict[str, Any]:
     if type(max_markets) is not int or not 1 <= max_markets <= 2000:
         raise ValueError("max_markets must be a positive integer <=2000")
     if type(min_sample) is not int or min_sample < 1:
         raise ValueError("min_sample must be a positive integer")
-    return _report(Path(root), history, max_markets=max_markets, min_sample=min_sample)
+    if type(include_replay_rows) is not bool:
+        raise ValueError("include_replay_rows must be boolean")
+    return _report(Path(root), history, max_markets=max_markets, min_sample=min_sample,
+                   include_replay_rows=include_replay_rows)
 
 
 def main(argv: list[str] | None = None) -> int:
