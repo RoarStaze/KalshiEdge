@@ -146,7 +146,7 @@ def test_replaying_480s_snapshot_preserves_original_brti_and_strike_fields(tmp_p
     day=datetime.fromtimestamp(due/NS,timezone.utc).date().isoformat()
     file=tmp_path/"predictions"/day/"predictions.jsonl"
     file.parent.mkdir(parents=True)
-    file.write_text(live.model_dump_json()+"\\n",encoding="utf-8")
+    file.write_text(live.model_dump_json()+"\n",encoding="utf-8")
     old = {
         "market_ticker":ticker,
         "market_close":datetime.fromtimestamp(close/NS,timezone.utc).isoformat(),
