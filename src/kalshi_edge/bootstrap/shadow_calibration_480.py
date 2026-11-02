@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     from .final_history import read_final_history
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--last-markets", type=int, default=200)
+    parser.add_argument("--last-markets", type=int, default=100)
     args = parser.parse_args(argv)
     root = BootstrapSettings().bootstrap_dir
     history = read_final_history(root)["forecasts"]
