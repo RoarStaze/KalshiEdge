@@ -128,6 +128,12 @@ def evaluate_prospective_shadow(
     specialist_qualified=specialist_correct=0
     paired: list[tuple[int,float,float]]=[]
     shadow_skip_reasons=Counter()
+    missing_shadow_tickers: list[str] = []
+    matched_snapshot_settled = 0
+    matched_snapshot_explicit_skips = 0
+    matched_incumbent_qualified = matched_incumbent_correct = 0
+    matched_specialist_qualified = matched_specialist_correct = 0
+    matched_incumbent_probabilities: list[tuple[int,float]] = []
 
     for final in eligible:
         try:
@@ -153,11 +159,24 @@ def evaluate_prospective_shadow(
         if problem is not None:
             if problem=="MISSING_SHADOW":
                 counts["missing_shadow_records"]+=1
+                missing_shadow_tickers.append(final.market_ticker)
             else:
                 counts["invalid_shadow_records"]+=1
             shadow_skip_reasons[problem]+=1
             continue
+
+        # A matched snapshot can itself be an explicit research-only SKIP.
+        # Do not discard that market from this second, observability-matched
+        # denominator. Count the actual incumbent final decision, not a
+        # hypothetical recalculation of its confidence gate.
+        matched_snapshot_settled += 1
+        if incumbent_p is not None:
+            matched_incumbent_probabilities.append((label, incumbent_p))
+        if final.forecast in {"ABOVE", "BELOW"}:
+            matched_incumbent_qualified += 1
+            matched_incumbent_correct += int((final.forecast == "ABOVE") == bool(label))
         if shadow.status=="SKIP":
+            matched_snapshot_explicit_skips += 1
             counts["shadow_status_skips"]+=1
             shadow_skip_reasons[shadow.reason or "UNSPECIFIED"]+=1
             continue
@@ -168,6 +187,8 @@ def evaluate_prospective_shadow(
         if shadow.gate_qualified:
             specialist_qualified+=1
             specialist_correct+=int((p>=.5)==bool(label))
+            matched_specialist_qualified += 1
+            matched_specialist_correct += int((p>=.5)==bool(label))
         if incumbent_p is not None:
             paired.append((label,p,incumbent_p))
 
@@ -185,6 +206,15 @@ def evaluate_prospective_shadow(
         [p for _,p,_ in paired],
         [p for _,_,p in paired],
     ) if paired else None)
+    if paired_gate is not None:
+        paired_gate["note"] = (
+            "Prospective after-freeze hypothetical 69%-confidence-gate "
+            "diagnostics on markets where both point-in-time probabilities "
+            "were recorded. This subset does not include missing or explicit "
+            "shadow SKIPs, and hypothetical qualification may differ from "
+            "actual incumbent decisions. This does not establish live "
+            "superiority or after-fee trading profit."
+        )
 
     return {
         "report": "KXBTC15M_FROZEN_480S_PROSPECTIVE_SETTLED_V1",
@@ -203,6 +233,33 @@ def evaluate_prospective_shadow(
         "invalid_shadow_records":counts["invalid_shadow_records"],
         "shadow_status_skips":counts["shadow_status_skips"],
         "shadow_skip_reasons":dict(shadow_skip_reasons),
+        # This list is descriptive evidence of absent observations, not a
+        # claim that the specialist declined or mispredicted those markets.
+        "missing_shadow_market_tickers":missing_shadow_tickers,
+        "matched_snapshot_cohort":{
+            "settled_markets":matched_snapshot_settled,
+            "explicit_shadow_skips":matched_snapshot_explicit_skips,
+            "incumbent":_gate_metric(
+                matched_snapshot_settled,
+                matched_incumbent_qualified,
+                matched_incumbent_correct,
+                matched_incumbent_probabilities,
+            ),
+            "specialist":_gate_metric(
+                matched_snapshot_settled,
+                matched_specialist_qualified,
+                matched_specialist_correct,
+                specialist_predictions,
+            ),
+            "note":(
+                "Second, observationally matched denominator: only settled "
+                "markets with valid, frozen-model-identity-verified shadow "
+                "snapshots. Explicit recorded specialist SKIPs are retained. "
+                "Missing/invalid snapshots remain in conservative all-settled "
+                "coverage, not this cohort. Missingness may bias the paired "
+                "result; this is not proof of a net accuracy advantage."
+            ),
+        },
         "incumbent":incumbent,
         "specialist":specialist,
         "paired_probability_markets":len(paired),
@@ -230,7 +287,9 @@ def evaluate_prospective_shadow(
             "is counted as SKIP. Coverage uses ACTUAL immutable incumbent "
             "decisions, not hypothetical probability thresholds. Paired gate "
             "cohorts are probability-threshold diagnostics on the smaller "
-            "fully matched subset. Minimum sample alone never authorizes "
+            "fully matched subset. The extra matched_snapshot_cohort is "
+            "observability-selected, so it must not replace the conservative "
+            "all-settled result. Minimum sample alone never authorizes "
             "model promotion or proves an after-fee advantage."
         ),
     }
