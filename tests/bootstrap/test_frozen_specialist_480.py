@@ -14,7 +14,44 @@ from kalshi_edge.bootstrap.frozen_specialist_480 import (
     score_frozen_specialist,
 )
 from kalshi_edge.bootstrap.specialist_480 import FEATURES
-from tests.bootstrap.test_specialist_480 import NS, BASE, make_row
+from kalshi_edge.bootstrap.types import FeatureRow
+
+NS = 1_000_000_000
+BASE = 1_900_000_000 * NS
+
+
+def make_row(i: int, *, positive=None, feature_overrides=None):
+    yes = i % 2 == 0 if positive is None else bool(positive)
+    timestamp = BASE + i * 900 * NS
+    midpoint = .73 if yes else .27
+    f = {
+        "seconds_remaining": 480.0,
+        "btc_normalized_distance": 3.0 if yes else -3.0,
+        "btc_realized_vol_60s": .0003,
+        "btc_realized_vol_300s": .0004,
+        "btc_return_60s": .001 if yes else -.001,
+        "btc_return_60s_available": 1.0,
+        "kalshi_quote_available": 1.0,
+        "kalshi_yes_bid": midpoint - .025,
+        "kalshi_yes_ask": midpoint + .025,
+        "kalshi_mid": midpoint,
+        "kalshi_spread": .05,
+        "kalshi_quote_staleness_seconds": 35.0,
+    }
+    if feature_overrides:
+        f.update(feature_overrides)
+    return FeatureRow(
+        market_ticker=f"KXBTC15M-FREEZE-{i}",
+        split_group_id=f"KXBTC15M-FREEZE-{i}",
+        checkpoint_ts_ns=timestamp,
+        label_yes=int(yes),
+        features=f,
+        source_max_ts_ns={
+            "binance": timestamp - NS,
+            "kalshi_candles": timestamp - 2 * NS,
+        },
+    )
+
 
 
 def _training_rows():
