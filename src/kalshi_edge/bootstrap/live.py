@@ -671,12 +671,32 @@ def persist_prediction_tick(
 
 
 async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSettings) -> None:
+    from .frozen_specialist_480 import FILENAME, load_frozen_specialist
+    from .shadow_live_480 import Shadow480Writer, capture_research_shadow
+
     bundle, pipeline = load_default_model(bootstrap.bootstrap_dir)
     state = LiveFeatureState()
     predictor = LivePredictor(state=state, bundle=bundle, pipeline=pipeline, settings=bootstrap)
     writer = PredictionJsonlWriter(bootstrap.bootstrap_dir)
     final_gate = FinalForecastGate()
     final_writer = FinalForecastWriter(bootstrap.bootstrap_dir)
+    # This optional local research artifact is NEVER the promoted predictor.
+    shadow_model = None
+    shadow_writer = None
+    shadow_freeze_path = bootstrap.bootstrap_dir.resolve() / FILENAME
+    if shadow_freeze_path.is_file():
+        try:
+            shadow_model = load_frozen_specialist(shadow_freeze_path)
+            shadow_writer = Shadow480Writer(bootstrap.bootstrap_dir)
+            print(
+                "READ-ONLY 480S SHADOW ENABLED: "
+                f"frozen_sha={shadow_model['sha256']}", flush=True,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            print(
+                "READ-ONLY 480S SHADOW DISABLED: invalid frozen artifact "
+                f"({type(exc).__name__})", flush=True,
+            )
     kalshi = KalshiLiveFeed(collector, series_ticker=bootstrap.series_ticker)
     binance = BinanceLiveFeed(bootstrap.binance_symbol)
 
@@ -709,6 +729,22 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
                         f"remaining={final.seconds_remaining:.3f}s "
                         f"reason={final.reason or 'OK'} "
                         f"file={saved_path}",
+                        flush=True,
+                    )
+            # One future 480s shadow per saved final, AFTER the authoritative
+            # final and continuous diagnosis are persisted. Errors cannot
+            # change an incumbent decision or reach AutoTrade.
+            if saved_path is not None and shadow_model is not None and shadow_writer is not None:
+                try:
+                    shadow_path = capture_research_shadow(
+                        frozen=shadow_model, final=final, prediction=prediction,
+                        state=state, writer=shadow_writer,
+                    )
+                    if shadow_path is not None:
+                        print(f"RESEARCH 480S SHADOW: {shadow_path}", flush=True)
+                except Exception as exc:
+                    print(
+                        f"RESEARCH 480S SHADOW FAILED: {type(exc).__name__}",
                         flush=True,
                     )
             sleep_seconds = max(0.001, 1.0 - ((time.time_ns() - now_ns) / NS))
