@@ -63,6 +63,15 @@ def test_trains_actual_480s_specialist_with_out_of_fit_later_market_report():
     assert result["candidate_69_gate"]["eligible_markets"] > 0
     assert result["candidate_69_gate"]["correct"] > 0
     assert result["candidate_69_gate"]["coverage"] > 0
+    paired = result["candidate_vs_kalshi_69_overlap"]
+    assert paired["total_markets"] == 40
+    assert (paired["both_qualified"]["markets"] + paired["candidate_only"]["markets"]
+            + paired["baseline_only"]["markets"] + paired["neither_qualified"]) == 40
+    assert paired["net_new_qualifying_forecasts"] == (
+        result["candidate_69_gate"]["eligible_markets"]
+        - result["kalshi_69_gate"]["eligible_markets"]
+    )
+    assert result["joint_objective_against_kalshi_retrospectively"] is False
     assert result["qualified_69_gate_verified_profit"] is None
     assert result["model_saved"] is False
     assert result["can_promote"] is False
