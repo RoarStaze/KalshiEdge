@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .metrics import probability_metrics
+from .paired_gate_480 import summarize_gate_overlap
 from .types import FeatureRow
 
 CHECKPOINT_SECONDS = 480
@@ -212,12 +213,25 @@ def evaluate_eight_minute_specialist(
     labels_eval = [r.label_yes for r in valid]
     cscore = probability_metrics(labels_eval, candidate).model_dump(mode="json")
     mscore = probability_metrics(labels_eval, market).model_dump(mode="json")
+    candidate_gate = _gate(labels_eval, candidate)
+    market_gate = _gate(labels_eval, market)
+    paired_gate = summarize_gate_overlap(labels_eval, candidate, market)
     report.update(
         status="RESEARCH_VALIDATION_ONLY",
         candidate={"markets": len(valid), **cscore},
         kalshi_midpoint={"markets": len(valid), **mscore},
-        candidate_69_gate=_gate(labels_eval, candidate),
-        kalshi_69_gate=_gate(labels_eval, market),
+        candidate_69_gate=candidate_gate,
+        kalshi_69_gate=market_gate,
+        candidate_vs_kalshi_69_overlap=paired_gate,
+        joint_objective_against_kalshi_retrospectively=bool(
+            cscore["brier"] < mscore["brier"]
+            and cscore["log_loss"] < mscore["log_loss"]
+            and cscore["accuracy"] > mscore["accuracy"]
+            and candidate_gate["eligible_markets"] > market_gate["eligible_markets"]
+            and candidate_gate["accuracy"] is not None
+            and market_gate["accuracy"] is not None
+            and candidate_gate["accuracy"] >= market_gate["accuracy"]
+        ),
         brier_candidate_minus_market=cscore["brier"] - mscore["brier"],
         log_loss_candidate_minus_market=cscore["log_loss"] - mscore["log_loss"],
         comparison_same_market=True,
