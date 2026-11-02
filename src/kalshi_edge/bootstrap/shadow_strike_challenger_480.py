@@ -156,7 +156,7 @@ def evaluate_strike_challenger(
     challenger = Pipeline([
         ("scale", StandardScaler()),
         ("model", LogisticRegression(
-            solver="lbfgs", C=.15, max_iter=1000, random_state=0,
+            solver="lbfgs", C=.20, max_iter=1000, random_state=0,
         )),
     ])
     challenger.fit([x for _row, x in train], y_train)
