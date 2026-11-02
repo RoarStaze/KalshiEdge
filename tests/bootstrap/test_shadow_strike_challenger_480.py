@@ -130,18 +130,35 @@ def test_train_single_outcome_class_refuses_fitting():
 
 def test_replaying_480s_snapshot_preserves_original_brti_and_strike_fields(tmp_path):
     from kalshi_edge.bootstrap.shadow_eight_minute import replay_eight_minute_history
-    from tests.bootstrap.test_shadow_eight_minute import snapshot, archive, history, DUE
-    live=snapshot().model_copy(update={
-        "strike":100_000.0,"brti_value":100_150.0,
-        "brti_source_ts_ns":DUE,
-    })
-    archive(tmp_path,live)
-    result=replay_eight_minute_history(tmp_path,[history()],include_replay_rows=True)
+    from kalshi_edge.bootstrap.live import LivePredictionRecord
+    from kalshi_edge.bootstrap.types import FeedQuality
+    close = BASE + 900 * NS
+    due = close - 480 * NS
+    ticker = "KXBTC15M-REPLAY"
+    live = LivePredictionRecord(
+        prediction_ts_ns=due, market_ticker=ticker, status="OK",
+        p_yes=.9, p_no=.1, predicted_side="ABOVE", confidence=.8,
+        seconds_remaining=480, model_hash="hash", model_version="v5",
+        feed_quality=FeedQuality(healthy=True),
+        strike=100_000.0, brti_value=100_150.0,
+        brti_source_ts_ns=due,
+    )
+    day=datetime.fromtimestamp(due/NS,timezone.utc).date().isoformat()
+    file=tmp_path/"predictions"/day/"predictions.jsonl"
+    file.parent.mkdir(parents=True)
+    file.write_text(live.model_dump_json()+"\\n",encoding="utf-8")
+    old = {
+        "market_ticker":ticker,
+        "market_close":datetime.fromtimestamp(close/NS,timezone.utc).isoformat(),
+        "checkpoint_seconds":240,"settlement_status":"SETTLED",
+        "actual_side":"ABOVE",
+    }
+    result=replay_eight_minute_history(tmp_path,[old],include_replay_rows=True)
     assert len(result["replay_rows"])==1
     saved=result["replay_rows"][0]
     assert saved["strike"]==100_000
     assert saved["brti_value"]==100_150
-    assert saved["brti_source_ts_ns"]==DUE
+    assert saved["brti_source_ts_ns"]==due
     assert "brti_value" not in result["reliability"]
 
 
