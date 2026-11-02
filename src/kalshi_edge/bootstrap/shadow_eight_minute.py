@@ -175,6 +175,11 @@ def _report(
             "confidence": live.confidence,
             "model_version": live.model_version or "UNKNOWN",
             "model_hash": live.model_hash,
+            # Original same-tick observations for research-only challenger.
+            # Never reconstruct a later BRTI value or a new market quote.
+            "strike": live.strike,
+            "brti_value": live.brti_value,
+            "brti_source_ts_ns": live.brti_source_ts_ns,
             "kalshi_yes_bid": live.kalshi_yes_bid,
             "kalshi_yes_ask": live.kalshi_yes_ask,
             "source": "ARCHIVED_CONTINUOUS_PREDICTIONS_NOT_FINAL_LOCKS",
