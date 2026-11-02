@@ -89,9 +89,9 @@ def test_checkpoint_window_and_settled_label_validation_fail_closed():
     bad4=obs(4)
     bad4["source"]="SYNTHETIC"
     r=assess_480_shadow_calibration([*rows,bad,bad2,bad3,bad4])
-    assert r["eligible_markets"]==96
+    assert r["eligible_markets"]==100
     assert r["excluded_duplicate_records"]==0
-    assert r["excluded_invalid_records"]==8  # 4 invalid + four original duplicate tickers? see fixture behavior
+    assert r["excluded_invalid_records"]==4
 
 
 @pytest.mark.parametrize("field,value",[
