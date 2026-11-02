@@ -4,9 +4,28 @@ No test reads private user trading data or places orders.
 """
 import pytest
 
-from kalshi_edge.bootstrap import artifact, evaluate
+from kalshi_edge.bootstrap import artifact, evaluate, training
 from kalshi_edge.bootstrap.types import FeatureRow
-from test_evaluate import _metric, _report
+def _metric(*, brier: float, log_loss: float, ece: float = .02):
+    return artifact.MetricSnapshot(
+        brier=brier, log_loss=log_loss, accuracy=.60, ece=ece, sharpness=.15,
+    )
+
+
+def _report(*, candidate=None, prior=None):
+    return evaluate.BootstrapEvaluationReport(
+        bundle_sha256="a"*64, dataset_sha256="b"*64,
+        model_version=training.MODEL_VERSION, lockbox_start_ts_ns=300,
+        lockbox_end_ts_ns=400, evaluated_rows=20, excluded_rows=0,
+        feature_schema_match=True,
+        leakage_audit=artifact.LeakageEvidence(passed=True,finding_count=0,finding_codes=()),
+        required_ablations_present=True,
+        metrics={
+            "candidate": candidate or _metric(brier=.20,log_loss=.60),
+            "kalshi_prior": prior or _metric(brier=.23,log_loss=.66),
+        },
+        comparison_rule=evaluate.PROMOTION_RULE_ID,
+    )
 
 
 def _row(ticker, seconds, timestamp):
