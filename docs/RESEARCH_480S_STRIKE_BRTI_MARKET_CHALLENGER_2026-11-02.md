@@ -18,7 +18,7 @@ All sources must belong to that same observed forecast tick. BRTI value and posi
 
 The original model bundle hash must be identical throughout the selected sample. Duplicate market tickers exclude every duplicate. The existing eight-minute replay independently rejects unhealthy/late/ambiguous first observations and only attaches a market's official outcome **for research scoring after its settlement**.
 
-A fixed first 60 chronological eligible markets train `StandardScaler + LogisticRegression(C=0.15, solver=lbfgs)`, and a later at least 20 markets are the evaluation cohort. The scaler and model are fit only on the training set; no future labels, gate optimization or hyperparameter search are allowed.
+A fixed first 60 chronological eligible markets train `StandardScaler + LogisticRegression(C=0.20, solver=lbfgs)`, and a later at least 20 markets are the evaluation cohort. The scaler and model are fit only on the training set; no future labels, gate optimization or hyperparameter search are allowed.
 
 ## Required results to meet the research joint objective
 
