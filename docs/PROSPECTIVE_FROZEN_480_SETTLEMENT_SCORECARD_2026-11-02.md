@@ -60,3 +60,33 @@ provide no reliable estimate of profitability or out-of-sample accuracy.
 80 or more settled markets.** Future evaluations still need uncertainty
 estimates, robust multiple-week comparisons and execution costs, fees and
 liquidity to establish an actionable advantage.
+
+## Audit missing instrumentation separately from genuine specialist skips
+
+The **all-settled** headline above is a conservative operational coverage
+accounting: if no research shadow was saved for an otherwise verified
+settled incumbent forecast, the specialist counts as nonqualifying. That
+does **not** establish that the model itself would have skipped.
+
+The second `matched_snapshot_cohort` is restricted to settled markets with
+an integrity-verified shadow JSON for the exact market, timestamp, and frozen
+model. It includes explicit `status=SKIP` research records in its denominator.
+It scores the **actual immutable incumbent decisions**, not a reconstructed
+threshold decision, against the specialist's fixed 69% gate.
+
+```powershell
+"MATCHED OBSERVATIONS — ACTUAL FINAL DECISION VS SPECIALIST"
+$r.matched_snapshot_cohort | Select-Object settled_markets, explicit_shadow_skips | Format-List
+$r.matched_snapshot_cohort.incumbent | Select-Object qualified, correct, skipped, coverage, qualified_accuracy | Format-List
+$r.matched_snapshot_cohort.specialist | Select-Object qualified, correct, skipped, coverage, qualified_accuracy | Format-List
+
+"MISSING RESEARCH SNAPSHOTS"
+$r.missing_shadow_market_tickers
+```
+
+For the initial November 2 observation, market
+`KXBTC15M-26NOV020630-30` has a verified incumbent BELOW final
+and **no recorded specialist output**. Whether the research collector
+had started at that checkpoint is unknown. The prospective matched
+subset is more directly comparable but may be biased by missing snapshots.
+Neither denominator alone justifies promoting a model.
