@@ -173,22 +173,28 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         if candidate.ece - incumbent.ece > PROMOTION_MAX_ECE_DEGRADATION + PROMOTION_NONWORSE_TOLERANCE:
             reasons.append("INCUMBENT_CALIBRATION_DEGRADED")
 
-    if any(key.startswith("volatility_240_") for key in report.metrics):
-        required = ("volatility_240_candidate", "volatility_240_incumbent", "volatility_240_kalshi")
+    # Old 240s metrics are retained for comparison. New volatility
+    # experiments MUST also beat the incumbent and Kalshi at the actual
+    # eight-minute AutoTrade checkpoint, on the SAME lockbox markets.
+    for horizon in (240, 480):
+        prefix = f"volatility_{horizon}_"
+        if not any(key.startswith(prefix) for key in report.metrics):
+            continue
+        required = tuple(prefix + name for name in ("candidate", "incumbent", "kalshi"))
         if any(key not in report.metrics for key in required):
-            reasons.append("VOLATILITY_240_BENCHMARK_MISSING")
-        else:
-            final_candidate = report.metrics["volatility_240_candidate"]
-            final_incumbent = report.metrics["volatility_240_incumbent"]
-            final_kalshi = report.metrics["volatility_240_kalshi"]
-            for name, benchmark in (("INCUMBENT", final_incumbent), ("KALSHI", final_kalshi)):
-                final_nonworse, final_improved, _, _ = _dominates(final_candidate, benchmark)
-                if not final_nonworse or not final_improved:
-                    reasons.append(f"VOLATILITY_240_{name}_NOT_BEATEN")
-                if final_candidate.ece > benchmark.ece + PROMOTION_MAX_ECE_DEGRADATION:
-                    reasons.append(f"VOLATILITY_240_{name}_ECE_DEGRADED")
-                if final_candidate.accuracy + PROMOTION_NONWORSE_TOLERANCE < benchmark.accuracy:
-                    reasons.append(f"VOLATILITY_240_{name}_ACCURACY_DEGRADED")
+            reasons.append(f"VOLATILITY_{horizon}_BENCHMARK_MISSING")
+            continue
+        final_candidate, final_incumbent, final_kalshi = (
+            report.metrics[key] for key in required
+        )
+        for name, benchmark in (("INCUMBENT", final_incumbent), ("KALSHI", final_kalshi)):
+            final_nonworse, final_improved, _, _ = _dominates(final_candidate, benchmark)
+            if not final_nonworse or not final_improved:
+                reasons.append(f"VOLATILITY_{horizon}_{name}_NOT_BEATEN")
+            if final_candidate.ece > benchmark.ece + PROMOTION_MAX_ECE_DEGRADATION:
+                reasons.append(f"VOLATILITY_{horizon}_{name}_ECE_DEGRADED")
+            if final_candidate.accuracy + PROMOTION_NONWORSE_TOLERANCE < benchmark.accuracy:
+                reasons.append(f"VOLATILITY_{horizon}_{name}_ACCURACY_DEGRADED")
     promoted = superior and not reasons
     return PromotionDecision(
         promoted=promoted,
@@ -199,6 +205,42 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         ece_change=ece_change,
         comparison_rule=PROMOTION_RULE_ID,
     )
+
+
+def _one_checkpoint_per_market(
+    rows: Sequence[FeatureRow], seconds: int,
+) -> list[FeatureRow]:
+    """Select strictly causal locked-horizon rows, one per ticker.
+
+    Only rows within one second of the requested remaining time qualify.
+    In the unlikely case of multiple snapshots choose the closest, then the
+    earlier observation. Never interpolate to synthesize a checkpoint.
+    """
+    selected: dict[str, FeatureRow] = {}
+    for row in rows:
+        value = row.features.get("seconds_remaining")
+        if (type(value) not in (int, float) or not math.isfinite(value)
+                or abs(value - seconds) > 1.0):
+            continue
+        previous = selected.get(row.market_ticker)
+        if previous is None or (
+            abs(value - seconds), row.checkpoint_ts_ns
+        ) < (
+            abs(previous.features["seconds_remaining"] - seconds),
+            previous.checkpoint_ts_ns,
+        ):
+            selected[row.market_ticker] = row
+    return [selected[ticker] for ticker in sorted(selected)]
+
+
+def _require_horizon_sample(
+    rows: Sequence[FeatureRow], *, seconds: int, minimum: int = 80,
+) -> None:
+    if len(rows) < minimum or len({row.market_ticker for row in rows}) != len(rows):
+        raise EvaluationError(
+            f"volatility challenger needs at least {minimum} distinct fresh "
+            f"{seconds}s checkpoint markets on the same independent lockbox"
+        )
 
 
 def _dataset_hash(bundle: artifact.ModelBundle) -> str:
@@ -468,9 +510,11 @@ def finalize_evaluation(
         required_volatility = {
             "incumbent_current", "volatility_240_candidate",
             "volatility_240_incumbent", "volatility_240_kalshi",
+            "volatility_480_candidate", "volatility_480_incumbent",
+            "volatility_480_kalshi",
         }
         if not required_volatility.issubset(report.metrics):
-            raise EvaluationError("volatility challenger lacks locked-240s and incumbent benchmarks")
+            raise EvaluationError("volatility challenger lacks locked 240s/480s and incumbent benchmarks")
     decision = promotion_decision(report)
     _atomic_json(
         report_path,
@@ -579,31 +623,26 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
         )
         enriched = {**report.metrics, "incumbent_current": incumbent_snapshot}
         if is_volatility:
-            from .volatility import is_final_checkpoint
-            by_market = {}
-            for row in scored:
-                if not is_final_checkpoint(row):
-                    continue
-                existing = by_market.get(row.market_ticker)
-                if existing is None or (
-                    abs(row.features["seconds_remaining"] - 240) <
-                    abs(existing.features["seconds_remaining"] - 240)
-                ):
-                    by_market[row.market_ticker] = row
-            final_rows = tuple(sorted(by_market.values(), key=lambda row: row.checkpoint_ts_ns))
-            if len(final_rows) < 80:
-                raise EvaluationError("volatility challenger needs at least 80 fresh 240s final checkpoints")
-            candidate_outputs = _predict_bundle_rows(experiment, final_rows)
-            incumbent_outputs = _predict_bundle_rows(incumbent_bundle, final_rows)
-            baseline_outputs = [training._kalshi_prior(row) for row in final_rows]
-            final_labels = [row.label_yes for row in final_rows]
-            enriched.update({
-                "volatility_240_candidate": artifact.metric_snapshot(
-                    probability_metrics(final_labels, candidate_outputs["candidate"])),
-                "volatility_240_incumbent": artifact.metric_snapshot(
-                    probability_metrics(final_labels, incumbent_outputs["candidate"])),
-                "volatility_240_kalshi": artifact.metric_snapshot(
-                    probability_metrics(final_labels, baseline_outputs)),
-            })
+            # Preserve legacy 240s scoring while requiring the ACTUAL 480s
+            # live checkpoint to clear the same incumbent/market safeguards.
+            # All three participants share exact same distinct market rows.
+            for horizon in (240, 480):
+                horizon_rows = _one_checkpoint_per_market(scored, horizon)
+                _require_horizon_sample(horizon_rows, seconds=horizon, minimum=80)
+                candidate_outputs = _predict_bundle_rows(experiment, horizon_rows)
+                incumbent_outputs = _predict_bundle_rows(incumbent_bundle, horizon_rows)
+                baseline_outputs = [
+                    training._kalshi_prior(row) for row in horizon_rows
+                ]
+                labels = [row.label_yes for row in horizon_rows]
+                prefix = f"volatility_{horizon}_"
+                enriched.update({
+                    prefix + "candidate": artifact.metric_snapshot(
+                        probability_metrics(labels, candidate_outputs["candidate"])),
+                    prefix + "incumbent": artifact.metric_snapshot(
+                        probability_metrics(labels, incumbent_outputs["candidate"])),
+                    prefix + "kalshi": artifact.metric_snapshot(
+                        probability_metrics(labels, baseline_outputs)),
+                })
         report = report.model_copy(update={"metrics": enriched})
     return finalize_evaluation(root, experiment_path, report)
