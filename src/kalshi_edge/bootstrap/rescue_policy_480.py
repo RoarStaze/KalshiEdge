@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,11 @@ from .shadow_live_480 import Shadow480Record
 
 MIN_SETTLED_MARKETS = 80
 LOW_CONFIDENCE_SKIP = "CONFIDENCE_BELOW_69_PERCENT"
+# Committed after the previously viewed 3-market evaluation, before the
+# independent forward cohort. Fixed UTC boundary, never reset on restart.
+POLICY_REGISTERED_AT_NS = int(
+    datetime(2026, 11, 2, 13, 0, tzinfo=timezone.utc).timestamp() * 1_000_000_000
+)
 
 
 def choose_rescue_forecast(
@@ -77,6 +83,11 @@ def evaluate_rescue_policy(root: Path, *, minimum_settled: int = MIN_SETTLED_MAR
     old_probabilities: list[tuple[int, float]] = []
     hybrid_probabilities: list[tuple[int, float]] = []
     missing_tickers: list[str] = []
+    forward_total = forward_incumbent_qualified = forward_incumbent_correct = 0
+    forward_hybrid_qualified = forward_hybrid_correct = 0
+    forward_rescue_count = forward_rescue_correct = 0
+    forward_original_probabilities: list[tuple[int, float]] = []
+    forward_hybrid_probabilities: list[tuple[int, float]] = []
 
     for final in finals:
         try:
@@ -123,6 +134,27 @@ def evaluate_rescue_policy(root: Path, *, minimum_settled: int = MIN_SETTLED_MAR
             rescue_count += 1
             rescue_correct += int(side == actual)
 
+        # Exclude the already-observed early wins from genuine post-policy
+        # validation. The policy was fixed at the registration timestamp,
+        # not when official settlements were later read by this process.
+        if final.scheduled_ts_ns > POLICY_REGISTERED_AT_NS:
+            forward_total += 1
+            if incumbent_forecast in ("ABOVE", "BELOW"):
+                forward_incumbent_qualified += 1
+                forward_incumbent_correct += int(incumbent_forecast == actual)
+                if final.p_yes is not None:
+                    forward_original_probabilities.append((int(actual == "ABOVE"), final.p_yes))
+            if side in ("ABOVE", "BELOW"):
+                forward_hybrid_qualified += 1
+                forward_hybrid_correct += int(side == actual)
+                if chosen_probability is not None:
+                    forward_hybrid_probabilities.append(
+                        (int(actual == "ABOVE"), chosen_probability)
+                    )
+            if source == "FROZEN_RESCUE":
+                forward_rescue_count += 1
+                forward_rescue_correct += int(side == actual)
+
     total = counts["settled_market_count"]
     original = _gate_metric(total, incumbent_qualified, incumbent_correct, old_probabilities)
     hybrid = _gate_metric(total, hybrid_qualified, hybrid_correct, hybrid_probabilities)
@@ -160,6 +192,36 @@ def evaluate_rescue_policy(root: Path, *, minimum_settled: int = MIN_SETTLED_MAR
             if hybrid["qualified_accuracy"] is not None
             and original["qualified_accuracy"] is not None else None
         ),
+        "forward_validation": {
+            "policy_registered_at_ns": POLICY_REGISTERED_AT_NS,
+            "settled_market_count": forward_total,
+            "incumbent": _gate_metric(
+                forward_total, forward_incumbent_qualified,
+                forward_incumbent_correct, forward_original_probabilities,
+            ),
+            "rescue_hybrid": _gate_metric(
+                forward_total, forward_hybrid_qualified,
+                forward_hybrid_correct, forward_hybrid_probabilities,
+            ),
+            "rescues": {
+                "markets": forward_rescue_count,
+                "correct": forward_rescue_correct,
+                "wrong": forward_rescue_count - forward_rescue_correct,
+                "accuracy": (
+                    forward_rescue_correct / forward_rescue_count
+                    if forward_rescue_count else None
+                ),
+            },
+            "ready_to_promote": False,
+            "note": (
+                "Only settled markets whose checkpoint occurs strictly "
+                "after the fixed research-policy registration boundary. "
+                "This cohort excludes the early observed rescue successes "
+                "that motivated this policy; missing and invalid shadows "
+                "remain in the all-settled denominator. It is not proof "
+                "of an independent market edge or trade profitability."
+            ),
+        },
         "ready_to_promote": False,
         "independent_validation_proven": False,
         "note": (
@@ -170,7 +232,10 @@ def evaluate_rescue_policy(root: Path, *, minimum_settled: int = MIN_SETTLED_MAR
             "Missing/invalid shadows remain unqualified in the all-settled "
             "denominator. Training and live model remain unchanged. Small "
             "samples and selection effects limit accuracy conclusions. "
-            "This does not prove profits after spreads, slippage or fees."
+            "Earlier exploratory replays were used to select this policy. "
+            "Use forward_validation for later outcomes, without optimizing "
+            "the frozen 69-percent gate. This does not prove profits "
+            "after spreads, slippage or fees."
         ),
     }
 
