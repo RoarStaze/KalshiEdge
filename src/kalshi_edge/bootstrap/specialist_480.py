@@ -169,21 +169,23 @@ def evaluate_eight_minute_specialist(
         "INSUFFICIENT_TRAIN_MARKETS", train, valid,
         {"development": train_ex, "calibration": valid_ex},
     )
+    # Diagnose leakage BEFORE sample-size checks: do not conceal a reversed
+    # or overlapping evaluation period behind a smaller training count.
+    # Market groups must be disjoint and a whole BTC15m round must separate
+    # the final training observation from the first validation observation.
+    used_markets = {r.market_ticker for r in train}
+    if (train and valid and (
+            used_markets.intersection(r.market_ticker for r in valid)
+            or {r.split_group_id for r in train}.intersection(
+                r.split_group_id for r in valid
+            )
+            or train[-1].checkpoint_ts_ns + 900 * NS > valid[0].checkpoint_ts_ns)):
+        report["status"] = "LEAKAGE_OR_OVERLAPPING_PERIODS"
+        return report
     if len(train) < MIN_TRAIN_MARKETS:
         return report
     if len(valid) < MIN_VALIDATION_MARKETS:
         report["status"] = "INSUFFICIENT_VALIDATION_MARKETS"
-        return report
-
-    # Market groups can never occur in both partitions. Validation follows
-    # the final training tick by a full 15-minute round to reduce overlap.
-    used_markets = {r.market_ticker for r in train}
-    if (used_markets.intersection(r.market_ticker for r in valid)
-            or {r.split_group_id for r in train}.intersection(
-                r.split_group_id for r in valid
-            )
-            or train[-1].checkpoint_ts_ns + 900 * NS > valid[0].checkpoint_ts_ns):
-        report["status"] = "LEAKAGE_OR_OVERLAPPING_PERIODS"
         return report
 
     labels_train = [r.label_yes for r in train]
