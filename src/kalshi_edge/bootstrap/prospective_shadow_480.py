@@ -220,7 +220,9 @@ def evaluate_prospective_shadow(
         },
         "paired_gate_cohorts":paired_gate,
         "ready_to_promote":False,
-        "independent_prospective_evidence":total>=minimum_settled,
+        "minimum_settled_requirement_met": total >= minimum_settled,
+        "prospective_after_freeze_only": True,
+        "independence_proven": False,
         "note":(
             "Read-only historical report of future-after-freeze time-locked "
             "local observations. Valid official settlements only; no fees, "
