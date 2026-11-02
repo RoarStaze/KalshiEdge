@@ -193,3 +193,126 @@ def test_readonly_evaluation_does_not_create_files(tmp_path: Path):
     evaluate_prospective_shadow(tmp_path)
     after=sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file())
     assert before==after
+
+
+def test_rescue_policy_adds_high_confidence_wins_without_overriding_original(tmp_path: Path):
+    from kalshi_edge.bootstrap.rescue_policy_480 import evaluate_rescue_policy
+
+    _make_freeze(tmp_path)
+    _make_market(tmp_path, 1, incumbent=.79, candidate=.88, actual="ABOVE")
+    _make_market(tmp_path, 2, incumbent=.27, candidate=.26, actual="BELOW")
+    # Original remains authoritative even if specialist strongly disagrees.
+    _make_market(tmp_path, 3, incumbent=.94, candidate=.03, actual="ABOVE")
+    r=evaluate_rescue_policy(tmp_path)
+    assert r["status"]=="INSUFFICIENT_SETTLED_MARKETS"
+    assert r["settled_market_count"]==3
+    assert r["incumbent"]["qualified"]==1
+    assert r["incumbent"]["correct"]==1
+    assert r["rescue_hybrid"]["qualified"]==2
+    assert r["rescue_hybrid"]["correct"]==2
+    assert r["rescue_hybrid"]["coverage"]==pytest.approx(2/3)
+    assert r["rescue_hybrid"]["qualified_accuracy"]==1.0
+    assert r["rescues"]["markets"]==1
+    assert r["rescues"]["correct"]==1
+    assert r["rescues"]["wrong"]==0
+    assert r["net_new_correct_forecasts"]==1
+    assert r["ready_to_promote"] is False
+
+
+def test_rescue_policy_includes_losses_and_missing_or_explicit_skip(tmp_path: Path):
+    from kalshi_edge.bootstrap.rescue_policy_480 import evaluate_rescue_policy
+
+    _make_freeze(tmp_path)
+    _make_market(tmp_path, 1, incumbent=.79, candidate=.88, actual="ABOVE")
+    _make_market(tmp_path, 2, incumbent=.79, candidate=.96, actual="BELOW")
+    _make_market(tmp_path, 3, incumbent=.91, candidate=.96, actual="ABOVE",
+                 include_shadow=False)
+    _make_market(tmp_path, 4, incumbent=.79, candidate=None, actual="ABOVE",
+                 candidate_skip=True)
+    _make_market(tmp_path, 5, incumbent=.79, candidate=.96, actual=None)
+    r=evaluate_rescue_policy(tmp_path)
+    assert r["settled_market_count"]==4
+    assert r["pending_settlements"]==1
+    assert r["missing_shadow_records"]==1
+    assert r["explicit_shadow_skips"]==1
+    assert r["rescues"]["markets"]==2
+    assert r["rescues"]["correct"]==1
+    assert r["rescues"]["wrong"]==1
+    assert r["incumbent"]["qualified"]==1
+    assert r["rescue_hybrid"]["qualified"]==3
+    assert r["rescue_hybrid"]["correct"]==2
+    assert r["rescue_hybrid"]["qualified_accuracy"]==pytest.approx(2/3)
+    assert r["confidence_unchanged"]==.69
+    assert r["ready_to_promote"] is False
+
+
+def test_rescue_policy_cannot_override_original_or_rescue_other_skip_reasons(tmp_path: Path):
+    from kalshi_edge.bootstrap.rescue_policy_480 import evaluate_rescue_policy
+
+    _make_freeze(tmp_path)
+    ticker=_make_market(tmp_path, 1, incumbent=.79,candidate=.97,actual="ABOVE")
+    forecast_file=next((tmp_path/"final_forecasts").rglob(f"{ticker}.json"))
+    raw=json.loads(forecast_file.read_text(encoding="utf-8"))
+    raw["reason"]="MISSED_480S_CHECKPOINT"
+    forecast_file.write_text(json.dumps(raw),encoding="utf-8")
+    r=evaluate_rescue_policy(tmp_path)
+    assert r["incumbent"]["qualified"]==0
+    assert r["rescue_hybrid"]["qualified"]==0
+    assert r["rescues"]["markets"]==0
+
+
+def test_rescue_policy_fails_closed_on_invalid_shadow_and_does_not_write(tmp_path: Path):
+    from kalshi_edge.bootstrap.rescue_policy_480 import evaluate_rescue_policy
+
+    _make_freeze(tmp_path)
+    ticker=_make_market(tmp_path, 1, incumbent=.79,candidate=.97,actual="ABOVE")
+    shadow_file=next((tmp_path/"research"/"480_specialist"/"live_shadow").rglob(f"{ticker}.json"))
+    raw=json.loads(shadow_file.read_text(encoding="utf-8"))
+    raw["p_yes"]=.01
+    shadow_file.write_text(json.dumps(raw),encoding="utf-8")
+    before=sorted((p.relative_to(tmp_path),p.read_bytes()) for p in tmp_path.rglob("*") if p.is_file())
+    r=evaluate_rescue_policy(tmp_path)
+    after=sorted((p.relative_to(tmp_path),p.read_bytes()) for p in tmp_path.rglob("*") if p.is_file())
+    assert before==after
+    assert r["invalid_shadow_records"]==1
+    assert r["rescues"]["markets"]==0
+    assert r["rescue_hybrid"]["qualified"]==0
+
+
+def test_rescue_policy_rejects_any_promotion_and_no_live_or_trading_imports(tmp_path: Path):
+    import inspect
+    from kalshi_edge.bootstrap.rescue_policy_480 import evaluate_rescue_policy
+
+    _make_freeze(tmp_path)
+    r=evaluate_rescue_policy(tmp_path, minimum_settled=1)
+    assert r["ready_to_promote"] is False
+    assert r["settled_market_count"]==0
+    assert r["rescue_hybrid"]["qualified_accuracy"] is None
+    assert r["rescue_hybrid"]["coverage"] is None
+    source=inspect.getsource(evaluate_rescue_policy)
+    assert "place_order" not in source
+    assert "autotrade" not in source.lower()
+
+
+def test_rescue_policy_forward_validation_excludes_pre_registered_wins(
+    tmp_path: Path, monkeypatch,
+):
+    from kalshi_edge.bootstrap import rescue_policy_480 as policy
+
+    _make_freeze(tmp_path)
+    _make_market(tmp_path, 1, incumbent=.79, candidate=.88, actual="ABOVE")
+    _make_market(tmp_path, 2, incumbent=.79, candidate=.94, actual="BELOW")
+    # Simulate selecting policy AFTER seeing market #1. An unbiased
+    # forward report must not use that already-seen successful rescue.
+    monkeypatch.setattr(policy, "POLICY_REGISTERED_AT_NS", BASE + 900*NS)
+    r=policy.evaluate_rescue_policy(tmp_path)
+    fwd=r["forward_validation"]
+    assert fwd["settled_market_count"]==1
+    assert fwd["rescues"]["markets"]==1
+    assert fwd["rescues"]["correct"]==0
+    assert fwd["rescues"]["wrong"]==1
+    assert fwd["rescue_hybrid"]["qualified"]==1
+    assert fwd["rescue_hybrid"]["correct"]==0
+    assert r["rescues"]["markets"]==2
+    assert r["rescues"]["correct"]==1
+    assert r["ready_to_promote"] is False
