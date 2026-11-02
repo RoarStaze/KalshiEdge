@@ -168,7 +168,7 @@ def test_live_engine_records_approved_quote_atomically_in_order_stage(tmp_path):
     now = close - 239 * NS
     feed["final_forecast"] = {
         "market_ticker":TICKER,
-        "scheduled_ts_ns":close-240*NS,
+        "scheduled_ts_ns":close-480*NS,
         "forecast":"ABOVE", "confidence":0.9,
     }
     trader.tick()
@@ -186,7 +186,7 @@ def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_pa
     close = now + 900 * NS
     feed = {
         "market_ticker":TICKER, "market_close_ts_ns":close,
-        "checkpoint_ts_ns":close-240*NS, "status":"LIVE",
+        "checkpoint_ts_ns":close-480*NS, "status":"LIVE",
         "final_forecast": None,
     }
 
@@ -207,7 +207,7 @@ def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_pa
     now = close - 239 * NS
     feed["final_forecast"] = {
         "market_ticker":TICKER,
-        "scheduled_ts_ns":close-240*NS,
+        "scheduled_ts_ns":close-480*NS,
         "forecast":"ABOVE","confidence":.9,
     }
     trader.tick()
