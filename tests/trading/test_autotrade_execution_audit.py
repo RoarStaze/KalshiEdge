@@ -147,7 +147,7 @@ def test_live_engine_records_approved_quote_atomically_in_order_stage(tmp_path):
     feed = {
         "market_ticker": TICKER,
         "market_close_ts_ns": close,
-        "checkpoint_ts_ns": close - 240 * NS,
+        "checkpoint_ts_ns": close - 480 * NS,
         "final_forecast": None,
         "status": "LIVE",
     }
@@ -165,7 +165,7 @@ def test_live_engine_records_approved_quote_atomically_in_order_stage(tmp_path):
     trader = ArmedAutoTrader(fake, lambda: feed, now_ns=lambda: now,
                              history_path=journal_path)
     trader.arm("0.25", start_worker=False)
-    now = close - 239 * NS
+    now = close - 479 * NS
     feed["final_forecast"] = {
         "market_ticker":TICKER,
         "scheduled_ts_ns":close-480*NS,
@@ -204,7 +204,7 @@ def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_pa
     trader = ArmedAutoTrader(fake, lambda:feed, now_ns=lambda:now,
                              history_path=journal_path)
     trader.arm("0.25", start_worker=False)
-    now = close - 239 * NS
+    now = close - 479 * NS
     feed["final_forecast"] = {
         "market_ticker":TICKER,
         "scheduled_ts_ns":close-480*NS,
