@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from . import artifact, training
 from .config import BootstrapSettings
@@ -52,6 +52,63 @@ class BootstrapTrainingReport(BaseModel):
     excluded_components: tuple[str, ...]
 
 
+class GateSnapshot(BaseModel):
+    """Same-market confidence-gate outcomes, never exchange fills."""
+    model_config = ConfigDict(frozen=True)
+
+    total_markets: int = Field(gt=0)
+    qualified_markets: int = Field(ge=0)
+    qualified_correct: int = Field(ge=0)
+    minimum_confidence: float = Field(default=.69, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def valid_counts(self) -> "GateSnapshot":
+        if (self.qualified_markets > self.total_markets
+                or self.qualified_correct > self.qualified_markets):
+            raise ValueError("qualified counts exceed total markets")
+        return self
+
+    @computed_field
+    @property
+    def coverage(self) -> float:
+        return self.qualified_markets / self.total_markets
+
+    @computed_field
+    @property
+    def qualified_accuracy(self) -> float | None:
+        return (
+            self.qualified_correct / self.qualified_markets
+            if self.qualified_markets else None
+        )
+
+
+def checkpoint_gate_snapshot(
+    labels: Sequence[int], probabilities: Sequence[float],
+    *, minimum_confidence: float = .69,
+) -> GateSnapshot:
+    """Evaluate a frozen confidence threshold on matched verified outcomes."""
+    if (type(minimum_confidence) not in (int, float)
+            or not math.isfinite(minimum_confidence)
+            or not 0 <= minimum_confidence <= 1
+            or len(labels) == 0 or len(labels) != len(probabilities)):
+        raise ValueError("confidence gate requires equal nonempty matched data")
+    qualified = correct = 0
+    for label, raw in zip(labels, probabilities):
+        if (type(label) is not int or label not in (0, 1)
+                or type(raw) not in (float, int) or not math.isfinite(raw)
+                or not 0 <= raw <= 1):
+            raise ValueError("invalid label or probability for confidence gate")
+        if 2 * abs(raw - .5) >= minimum_confidence:
+            qualified += 1
+            correct += int((raw >= .5) == bool(label))
+    return GateSnapshot(
+        total_markets=len(labels),
+        qualified_markets=qualified,
+        qualified_correct=correct,
+        minimum_confidence=float(minimum_confidence),
+    )
+
+
 class BootstrapEvaluationReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -66,6 +123,9 @@ class BootstrapEvaluationReport(BaseModel):
     leakage_audit: artifact.LeakageEvidence
     required_ablations_present: bool
     metrics: dict[str, artifact.MetricSnapshot]
+    # Newly computed gate diagnostics are optional for old historical reports
+    # but MANDATORY for promotion of future 480s volatility challengers.
+    decision_metrics: dict[str, GateSnapshot] = Field(default_factory=dict)
     comparison_rule: str
 
 
@@ -195,6 +255,38 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
                 reasons.append(f"VOLATILITY_{horizon}_{name}_ECE_DEGRADED")
             if final_candidate.accuracy + PROMOTION_NONWORSE_TOLERANCE < benchmark.accuracy:
                 reasons.append(f"VOLATILITY_{horizon}_{name}_ACCURACY_DEGRADED")
+    if any(key.startswith("volatility_480_") for key in report.metrics):
+        prefix = "volatility_480_"
+        candidate_gate = report.decision_metrics.get(prefix + "candidate")
+        incumbent_gate = report.decision_metrics.get(prefix + "incumbent")
+        if candidate_gate is None or incumbent_gate is None:
+            reasons.append("VOLATILITY_480_CONFIDENCE_GATE_MISSING")
+        elif (
+            candidate_gate.total_markets != incumbent_gate.total_markets
+            or candidate_gate.total_markets < 80
+            or abs(candidate_gate.minimum_confidence - .69) > 1e-9
+            or abs(incumbent_gate.minimum_confidence - .69) > 1e-9
+        ):
+            reasons.append("VOLATILITY_480_CONFIDENCE_GATE_MISMATCH")
+        else:
+            if incumbent_gate.qualified_accuracy is None:
+                reasons.append("VOLATILITY_480_QUALIFIED_BASELINE_UNAVAILABLE")
+            if candidate_gate.qualified_markets <= incumbent_gate.qualified_markets:
+                reasons.append("VOLATILITY_480_COVERAGE_NOT_INCREASED")
+            if (
+                candidate_gate.qualified_accuracy is None
+                or (incumbent_gate.qualified_accuracy is not None
+                    and candidate_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
+                    < incumbent_gate.qualified_accuracy)
+            ):
+                reasons.append("VOLATILITY_480_QUALIFIED_ACCURACY_DEGRADED")
+        # Strictly higher directional accuracy is the user's other stated goal.
+        better = report.metrics.get("volatility_480_candidate")
+        existing = report.metrics.get("volatility_480_incumbent")
+        if (better is not None and existing is not None
+                and better.accuracy <= existing.accuracy + PROMOTION_NONWORSE_TOLERANCE):
+            reasons.append("VOLATILITY_480_OVERALL_ACCURACY_NOT_IMPROVED")
+
     promoted = superior and not reasons
     return PromotionDecision(
         promoted=promoted,
@@ -622,6 +714,7 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
             probability_metrics([row.label_yes for row in scored], incumbent_p)
         )
         enriched = {**report.metrics, "incumbent_current": incumbent_snapshot}
+        gate_reports = dict(report.decision_metrics)
         if is_volatility:
             # Preserve legacy 240s scoring while requiring the ACTUAL 480s
             # live checkpoint to clear the same incumbent/market safeguards.
@@ -644,5 +737,16 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
                     prefix + "kalshi": artifact.metric_snapshot(
                         probability_metrics(labels, baseline_outputs)),
                 })
-        report = report.model_copy(update={"metrics": enriched})
+                if horizon == 480:
+                    # Capture the qualifying forecasts on EXACTLY the same
+                    # untouched lockbox markets as the proper-score snapshots.
+                    gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
+                        labels, candidate_outputs["candidate"],
+                    )
+                    gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
+                        labels, incumbent_outputs["candidate"],
+                    )
+        report = report.model_copy(update={
+            "metrics": enriched, "decision_metrics": gate_reports,
+        })
     return finalize_evaluation(root, experiment_path, report)
