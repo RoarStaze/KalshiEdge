@@ -15,14 +15,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .metrics import probability_metrics
-from .paired_gate_480 import summarize_gate_overlap
+from .paired_gate_480 import MIN_CONFIDENCE, summarize_gate_overlap
 from .types import FeatureRow
 
 CHECKPOINT_SECONDS = 480
 CHECKPOINT_TOLERANCE_SECONDS = 1.0
 MIN_TRAIN_MARKETS = 80
 MIN_VALIDATION_MARKETS = 20
-MIN_CONFIDENCE = .69
 FEATURES = (
     "btc_normalized_distance",
     "btc_realized_vol_60s",
