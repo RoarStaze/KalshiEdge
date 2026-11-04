@@ -256,15 +256,14 @@ class ArmedAutoTrader:
             except (KeyError, InvalidOperation, ValueError):
                 return "NO_QUOTE", {}
         if action == "BUY":
-            # The sealed final forecast is the only BUY trigger. Retain the
-            # pre-existing conservative fee-inclusive order safety gate.
+            # A locked final ABOVE/BELOW is the explicitly armed BUY signal.
+            # Model-estimated edge is diagnostic, not a separate trading gate.
+            # Still reject malformed/inconsistent quotes before any live POST.
             edge = assess_auto_buy_edge(preview, confidence)
             quote_evidence = sanitize_quote_snapshot(
                 preview, edge, preview_received_at_ns=preview_received_at_ns,
             )
-            if not edge["approved"]:
-                # Best-effort RESEARCH telemetry only. Never let audit failure
-                # override the existing safety decision to reject this BUY.
+            if edge["reason"] == "INVALID_QUOTE":
                 if self.history_store is not None:
                     try:
                         self.history_store.record_quote_rejection(
@@ -274,7 +273,13 @@ class ArmedAutoTrader:
                         )
                     except Exception:
                         LOG.warning("Rejected quote evidence unavailable", exc_info=True)
-                return "NO_EDGE", {"edge_diagnostics": edge}
+                return "NO_QUOTE", {"edge_diagnostics": edge}
+            if not edge["approved"]:
+                LOG.warning(
+                    "User-armed AutoTrade proceeding with final %s despite %s "
+                    "estimated net edge; model EV is not a safety veto",
+                    direction, edge["reason"],
+                )
         else:
             quote_evidence = sanitize_quote_snapshot(
                 preview, None, preview_received_at_ns=preview_received_at_ns,
@@ -440,10 +445,6 @@ class ArmedAutoTrader:
         )
         if status in ("UNKNOWN", "ERROR"):
             self._status_after_order(status, "Final BUY unconfirmed")
-            return
-        if status == "NO_EDGE":
-            self._finish("SKIPPED",
-                         "Final BUY skipped: insufficient fee-adjusted model edge")
             return
         if status == "NO_QUOTE":
             if not armed.get("continuous"):
