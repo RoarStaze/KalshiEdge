@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .execution_quality import measure_execution_quality
+from .fill_reconciliation import validated_fill_unit_price
 
 
 MAX_PAGES = 5
@@ -138,21 +139,11 @@ def _calculate(contracts, stages, fills, result: str, ticker: str) -> str:
             # Exchange order IDs are not a substitute for confirming the fill
             # belongs to the expected action, contract side, and market.
             # The Kalshi fill API documents action=buy/sell and side=yes/no.
-            reported_ticker = item.get("market_ticker") or item.get("ticker")
-            if (reported_ticker != ticker
-                    or (item.get("ticker") is not None
-                        and item.get("market_ticker") is not None
-                        and item["ticker"] != item["market_ticker"])
-                    or item.get("action") != action.lower()
-                    or item.get("side") != ("yes" if side == "UP" else "no")):
-                raise ValueError("Exchange fill conflicts with recorded AutoTrade")
+            price = validated_fill_unit_price(
+                item, ticker=ticker, action=action, outcome=side,
+            )
             qty = _positive(item.get("count_fp"))
-            price = _positive(
-                item.get("yes_price_dollars") if side == "UP"
-                else item.get("no_price_dollars"), zero=True)
             fee = _positive(item.get("fee_cost"), zero=True)
-            if price > 1:
-                raise ValueError("Invalid fill price")
             total_count += qty
             principal = qty * price
             net_cash += ((-principal if action == "BUY" else principal) - fee)
