@@ -30,6 +30,7 @@ def _prediction(
     now: int, *, probability: float = 0.90, confidence: float = 0.80,
     status: str = "OK", reason: str | None = None,
     ticker: str = TICKER, healthy: bool = True,
+    risk_ratio: float | None = None,
 ) -> LivePredictionRecord:
     if status != "OK":
         return LivePredictionRecord(
@@ -53,6 +54,7 @@ def _prediction(
         model_version="bootstrap-hybrid-v5",
         confidence=confidence,
         final_probability=probability,
+        brti_shadow_risk_ratio=risk_ratio,
     )
 
 
@@ -225,3 +227,79 @@ def test_legacy_final_forecast_json_without_market_reference_still_parses():
     old = FinalForecastRecord.model_validate(record)
     assert old.kalshi_yes_bid is None
     assert old.kalshi_yes_ask is None
+
+
+
+def test_near_strike_coinflip_actively_skips_strong_final_forecast(tmp_path):
+    """A live 480s near-strike signal vetoes an otherwise qualified trade."""
+    prediction = _prediction(DUE, probability=0.96, confidence=0.92, risk_ratio=0.10)
+    final = FinalForecastGate().evaluate(_market(), now_ns=DUE, prediction=prediction)
+    assert final.forecast == "SKIP"
+    assert final.reason == "COIN_FLIP_RISK_HIGH"
+    assert final.confidence == pytest.approx(0.92)
+    assert final.p_yes == pytest.approx(0.96)
+    assert final.coin_flip_assessment == "HIGH"
+    assert final.coin_flip_risk_z == pytest.approx(0.10)
+
+    path = FinalForecastWriter(tmp_path).save(final, market_close_ts_ns=CLOSE)
+    assert path is not None
+    from kalshi_edge.bootstrap.final_forecast import FinalForecastRecord
+    restored = FinalForecastRecord.model_validate_json(path.read_text())
+    assert restored.forecast == "SKIP"
+    assert restored.coin_flip_assessment == "HIGH"
+    assert restored.coin_flip_risk_z == pytest.approx(0.10)
+
+
+@pytest.mark.parametrize("probability", [0.93, 0.07])
+def test_coinflip_vetoes_either_direction(probability):
+    final = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE,
+        prediction=_prediction(
+            DUE, probability=probability, confidence=0.86, risk_ratio=0.20,
+        ),
+    )
+    assert final.forecast == "SKIP"
+    assert final.reason == "COIN_FLIP_RISK_HIGH"
+
+
+def test_coinflip_preserves_trades_when_sufficiently_far_from_strike():
+    final = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE,
+        prediction=_prediction(DUE, risk_ratio=0.200001),
+    )
+    assert final.forecast == "ABOVE"
+    assert final.reason is None
+    assert final.coin_flip_assessment == "LOW"
+    assert final.coin_flip_risk_z == pytest.approx(0.200001)
+
+
+def test_missing_coinflip_inputs_do_not_create_additional_skips():
+    final = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE, prediction=_prediction(DUE),
+    )
+    assert final.forecast == "ABOVE"
+    assert final.coin_flip_assessment == "UNAVAILABLE"
+    assert final.coin_flip_risk_z is None
+
+
+def test_low_confidence_skip_keeps_original_reason_and_records_coinflip_risk():
+    final = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE,
+        prediction=_prediction(DUE, probability=0.8, confidence=0.6, risk_ratio=0.05),
+    )
+    assert final.forecast == "SKIP"
+    assert final.reason == "CONFIDENCE_BELOW_69_PERCENT"
+    assert final.coin_flip_assessment == "HIGH"
+
+
+def test_legacy_final_forecast_without_coinflip_fields_still_loads():
+    from kalshi_edge.bootstrap.final_forecast import FinalForecastRecord
+    final = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE, prediction=_prediction(DUE),
+    )
+    record = final.model_dump(mode="json")
+    record.pop("coin_flip_risk_z", None)
+    record.pop("coin_flip_assessment", None)
+    restored = FinalForecastRecord.model_validate(record)
+    assert restored.coin_flip_assessment == "UNAVAILABLE"
+    assert restored.coin_flip_risk_z is None
