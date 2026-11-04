@@ -212,3 +212,19 @@ def test_tampered_official_outcome_or_forecast_never_becomes_training_label(tmp_
     summary=evaluate_forward_feature_evidence(tmp_path)
     assert summary["invalid_settlements"]==1
     assert summary["verified_feature_examples"]==0
+
+
+def test_unexpected_label_field_is_rejected_even_if_other_hash_fields_untouched(tmp_path:Path):
+    from kalshi_edge.bootstrap.forward_feature_evidence_480 import (
+        Forward480FeatureWriter,build_forward_snapshot,load_forward_snapshot,
+    )
+    r,p=final_at(tmp_path,30)
+    output=Forward480FeatureWriter(tmp_path).save(build_forward_snapshot(r,p,features(r)))
+    assert output is not None
+    raw=json.loads(output.read_text())
+    # The digest covers the modeled fields, but a malicious extra label
+    # must not be silently discarded by Pydantic during validation.
+    raw["label_yes"]=1
+    output.write_text(json.dumps(raw),encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_forward_snapshot(tmp_path,r)
