@@ -335,6 +335,7 @@ class ArmedAutoTrader:
             if action == "BUY" and callable(value_place):
                 result = value_place(
                     preview["preview_id"], ticker, confidence=confidence,
+                    prefer_maker=(stage == "FINAL_BUY"),
                 )
             elif callable(auto_place):
                 result = auto_place(preview["preview_id"],ticker)
