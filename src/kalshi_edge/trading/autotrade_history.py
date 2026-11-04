@@ -15,7 +15,7 @@ from contextlib import closing
 from .autotrade_execution_audit import QUOTE_FIELDS
 
 
-_VALID_STATUS = frozenset(("ATTEMPTED", "FILLED", "PARTIAL", "NO_FILL", "UNKNOWN"))
+_VALID_STATUS = frozenset(("ATTEMPTED", "FILLED", "PARTIAL", "NO_FILL", "UNKNOWN", "NOT_SUBMITTED"))
 _FIELDS = (
     "ticker", "attempted_at_ns", "outcome", "amount",
     "confidence", "status", "order_id", "fill_count",
@@ -188,7 +188,7 @@ class AutoTradeHistory:
     def record_stage_result(self, *, ticker: str, stage: str,
                             status: str, order_id: str | None,
                             fill_count: str | None) -> None:
-        if status not in ("FILLED", "PARTIAL", "NO_FILL", "UNKNOWN"):
+        if status not in ("FILLED", "PARTIAL", "NO_FILL", "UNKNOWN", "NOT_SUBMITTED"):
             raise ValueError("Invalid exchange execution status")
         with closing(sqlite3.connect(self.path, timeout=5.0)) as db:
             with db:
