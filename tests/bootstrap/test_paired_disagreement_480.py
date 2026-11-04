@@ -108,8 +108,36 @@ def test_invalid_paired_evidence_fails_closed(bad):
 
 def test_rejected_nonlinear_development_still_reports_both_paired_cohorts():
     from kalshi_edge.bootstrap.nonlinear_direction_480 import evaluate_nonlinear_direction
-    from test_nonlinear_direction_480 import cohorts
-    development,calibration=cohorts()
+    from kalshi_edge.bootstrap.types import FeatureRow
+
+    ns=1_000_000_000
+    def record(i):
+        ts=1_900_000_000*ns+i*900*ns
+        up=i%2==0
+        outcome=int(up if i%17 else not up)
+        mid=.73 if up else .27
+        features={
+            "seconds_remaining":480.,
+            "btc_normalized_distance":2. if up else -2.,
+            "btc_realized_vol_60s":.0003+(i%7)*.00002,
+            "btc_realized_vol_300s":.0005+(i%9)*.00002,
+            "btc_return_60s":(.001 if up else -.001),
+            "btc_return_60s_available":1.,
+            "kalshi_quote_available":1.,
+            "kalshi_yes_bid":mid-.025,
+            "kalshi_yes_ask":mid+.025,
+            "kalshi_mid":mid,
+            "kalshi_spread":.05,
+            "kalshi_quote_staleness_seconds":12.,
+        }
+        ticker=f"KXBTC15M-PAIRED-{i}"
+        return FeatureRow(
+            market_ticker=ticker,split_group_id=ticker,
+            checkpoint_ts_ns=ts,label_yes=outcome,features=features,
+            source_max_ts_ns={"binance":ts-ns,"kalshi_candles":ts-2*ns},
+        )
+    rows=[record(i) for i in range(750)]
+    development,calibration=rows[:650],rows[650:]
     result=evaluate_nonlinear_direction(development,calibration)
     for key in ("development_screen","development_confirm"):
         report=result[key]["paired_disagreement"]
