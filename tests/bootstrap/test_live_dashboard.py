@@ -123,3 +123,25 @@ def test_invalid_jsonl_tail_does_not_break_history_view(tmp_path: Path):
     with (tmp_path / "predictions" / day / "predictions.jsonl").open("a") as stream:
         stream.write('{"half-written":\n')
     assert read_live_dashboard(tmp_path, now_ns=DUE)["status"] == "LIVE"
+
+
+def test_coinflip_veto_is_exposed_by_saved_live_dashboard(tmp_path: Path):
+    now = DUE + NS
+    _write_prediction(tmp_path, now - NS // 10)
+    record = FinalForecastRecord(
+        market_ticker=TICKER, strike=81043.29,
+        scheduled_ts_ns=DUE, checkpoint_seconds=480,
+        prediction_ts_ns=DUE, seconds_remaining=480.0,
+        forecast="SKIP", reason="COIN_FLIP_RISK_HIGH",
+        confidence=0.94, directional_probability=0.97,
+        p_yes=0.97, p_no=0.03,
+        coin_flip_assessment="HIGH", coin_flip_risk_z=0.12,
+        coin_flip_policy="brti-near-strike-z0.20-v1",
+    )
+    assert FinalForecastWriter(tmp_path).save(record, market_close_ts_ns=CLOSE)
+    snapshot = read_live_dashboard(tmp_path, now_ns=now)
+    final = snapshot["final_forecast"]
+    assert final["forecast"] == "SKIP"
+    assert final["reason"] == "COIN_FLIP_RISK_HIGH"
+    assert final["coin_flip_assessment"] == "HIGH"
+    assert final["coin_flip_risk_z"] == pytest.approx(0.12)
