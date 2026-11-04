@@ -57,7 +57,7 @@ def _final_file(root:Path,final:FinalForecastRecord) -> Path:
 
 
 class Forward480FeatureSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version:Literal["KXBTC15M_480S_FORWARD_FEATURE_EVIDENCE_V1"] = SCHEMA
     market_ticker:str
