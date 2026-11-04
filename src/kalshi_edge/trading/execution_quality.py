@@ -11,6 +11,8 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .fill_reconciliation import validated_fill_unit_price
+
 
 SIX = Decimal("0.000001")
 
@@ -104,21 +106,12 @@ def measure_execution_quality(
             observed_principal = Decimal("0")
             observed_fees = Decimal("0")
             for item in grouped.get(order, []):
-                observed_market = item.get("market_ticker") or item.get("ticker")
-                if (observed_market != ticker
-                        or (item.get("market_ticker") is not None
-                            and item.get("ticker") is not None
-                            and item["market_ticker"] != item["ticker"])
-                        or item.get("action") != action.lower()
-                        or item.get("side") != ("yes" if side == "UP" else "no")):
-                    return unknown
-                qty = _value(item.get("count_fp"), positive=True)
-                px = _value(
-                    item.get("yes_price_dollars") if side == "UP"
-                    else item.get("no_price_dollars")
+                px = validated_fill_unit_price(
+                    item, ticker=ticker, action=action, outcome=side,
                 )
+                qty = _value(item.get("count_fp"), positive=True)
                 fee = _value(item.get("fee_cost"))
-                if px < 0 or px > 1 or fee < 0:
+                if fee < 0:
                     return unknown
                 observed_count += qty
                 observed_principal += px * qty
