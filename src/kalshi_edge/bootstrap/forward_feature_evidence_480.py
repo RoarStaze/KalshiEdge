@@ -245,3 +245,159 @@ def capture_forward_480_feature(
             reason="CAUSAL_FEATURE_ROW_UNAVAILABLE"
     item=build_forward_snapshot(final,forecast_file,row,reason=reason)
     return writer.save(item)
+
+
+def _joined(root:Path) -> tuple[list[FeatureRow],dict[str,Any]]:
+    """Join only immutable snapshots and official settlements, never raw labels."""
+    root=Path(root).resolve()
+    counts=Counter()
+    examples:list[FeatureRow]=[]
+    confidence_skip_counterfactual_wrong=0
+    for final in _forecasts(root):
+        if final.checkpoint_seconds!=FINAL_CHECKPOINT_SECONDS:
+            counts["legacy_240_excluded"]+=1
+            continue
+        counts["total_480_final_records"]+=1
+        snapshot=None
+        try:
+            snapshot=load_forward_snapshot(root,final)
+            counts["valid_snapshots"]+=1
+            if snapshot.status=="FEATURES_UNAVAILABLE":
+                counts["snapshots_without_features"]+=1
+        except (OSError,ValueError):
+            # Missing snapshots from BEFORE this collector was introduced
+            # cannot be reconstructed retrospectively and are NOT trades
+            # or predictions the challenger chose to skip.
+            path=(root/FEATURE_DIR/_day(_close_ns(final))
+                  /f"{final.market_ticker}.json")
+            if path.exists():
+                counts["invalid_snapshot_records"]+=1
+            else:
+                counts["missing_snapshot_records"]+=1
+
+        try:
+            settled=_load_saved_settlement(root,final)
+        except (SettlementIntegrityError,OSError,ValueError):
+            counts["invalid_settlements"]+=1
+            continue
+        if settled is None:
+            counts["pending_outcomes"]+=1
+            continue
+        counts["settled_480s"]+=1
+        if snapshot is None:
+            counts["missing_or_invalid_snapshot_settled"]+=1
+            if not (root/FEATURE_DIR/_day(_close_ns(final))/f"{final.market_ticker}.json").exists():
+                counts["missing_snapshot_settled"]+=1
+            continue_flag=False
+        else:
+            continue_flag=True
+
+        if final.forecast in ("ABOVE","BELOW"):
+            if final.forecast==settled.actual_side:
+                counts["issued_correct"]+=1
+            else:
+                counts["issued_incorrect"]+=1
+        elif final.forecast=="SKIP" and final.reason=="CONFIDENCE_BELOW_69_PERCENT":
+            counts["confidence_skips"]+=1
+            if (final.p_yes is not None and type(final.p_yes) in (int,float)
+                    and math.isfinite(final.p_yes) and 0<=final.p_yes<=1):
+                predicted="ABOVE" if final.p_yes>=.5 else "BELOW"
+                if predicted==settled.actual_side:
+                    counts["confidence_skip_counterfactual_correct"]+=1
+                else:
+                    confidence_skip_counterfactual_wrong+=1
+            else:
+                counts["confidence_skips_without_probability"]+=1
+        else:
+            counts["other_skips"]+=1
+
+        if not continue_flag or snapshot is None or snapshot.status!="FEATURES_OK":
+            continue
+        # The live feature builder populates a dummy label_yes=0. It is
+        # NEVER saved. The ONLY label here is the verified official result.
+        examples.append(FeatureRow(
+            market_ticker=final.market_ticker,
+            market_date=_day(_close_ns(final)),
+            split_group_id=final.market_ticker,
+            checkpoint_ts_ns=snapshot.prediction_ts_ns,
+            label_yes=1 if settled.result=="yes" else 0,
+            features=dict(snapshot.features),
+            source_max_ts_ns=dict(snapshot.source_max_ts_ns),
+        ))
+        counts["verified_feature_examples"]+=1
+    examples.sort(key=lambda row:(row.checkpoint_ts_ns,row.market_ticker))
+    summary={
+        "report":"KXBTC15M_480S_PROSPECTIVE_FEATURE_EVIDENCE_AUDIT_V1",
+        "status":"DESCRIPTIVE_ONLY" if counts["settled_480s"] else "NO_VERIFIED_SETTLED_EXAMPLES",
+        **{name:counts[name] for name in (
+            "total_480_final_records","legacy_240_excluded",
+            "settled_480s","pending_outcomes","invalid_settlements",
+            "valid_snapshots","missing_snapshot_records","invalid_snapshot_records",
+            "missing_snapshot_settled","missing_or_invalid_snapshot_settled",
+            "snapshots_without_features","verified_feature_examples",
+            "issued_correct","issued_incorrect","confidence_skips",
+            "confidence_skip_counterfactual_correct",
+            "confidence_skips_without_probability","other_skips",
+        )},
+        "confidence_skip_counterfactual_wrong":confidence_skip_counterfactual_wrong,
+        "issued_accuracy":(
+            counts["issued_correct"]/(counts["issued_correct"]+counts["issued_incorrect"])
+            if counts["issued_correct"]+counts["issued_incorrect"] else None
+        ),
+        "issued_coverage":(
+            (counts["issued_correct"]+counts["issued_incorrect"])/counts["settled_480s"]
+            if counts["settled_480s"] else None
+        ),
+        "verified_feature_market_tickers":[r.market_ticker for r in examples[-5:]],
+        "label_source":"VERIFIED_OFFICIAL_KALSHI_SETTLEMENT_ONLY",
+        "recording_policy":"CREATE_ONCE_AFTER_FINAL_480S_LOCK",
+        "model_trained":False,
+        "ready_to_promote":False,
+        "threshold_changed":False,
+        "live_trading_changed":False,
+        "reserved_lockbox_opened":False,
+        "note":(
+            "Only new, immutable forward feature evidence is useful for "
+            "prospective training/evaluation. Old 480s finals necessarily "
+            "have no snapshots and MUST NOT be backfilled from settlement. "
+            "Snapshot contains NO settlement labels; verified cases are "
+            "joined with official terminal outcomes after settlement. "
+            "Confidence-skip directional correctness is counterfactual, "
+            "not issued prediction performance. No trained challenger or "
+            "verified accuracy-and-coverage improvement is claimed."
+        ),
+    }
+    return examples,summary
+
+
+def verified_forward_feature_examples(root:Path) -> list[FeatureRow]:
+    """Supply future supervised research rows ONLY after official verification.
+
+    Caller must separate fitting from later unseen prospective evaluation;
+    this function does not fit, tune or automatically save any model.
+    """
+    return _joined(root)[0]
+
+
+def evaluate_forward_feature_evidence(root:Path) -> dict[str,Any]:
+    return _joined(root)[1]
+
+
+def main(argv:list[str]|None=None) -> int:
+    from .config import BootstrapSettings
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root",type=Path,default=BootstrapSettings().bootstrap_dir)
+    args=parser.parse_args(argv)
+    try:
+        result=evaluate_forward_feature_evidence(args.root)
+    except (OSError,ValueError) as exc:
+        result={"status":"EVALUATION_REFUSED","error":str(exc),
+                "model_trained":False,"ready_to_promote":False}
+        print(json.dumps(result,sort_keys=True,indent=2,allow_nan=False))
+        return 2
+    print(json.dumps(result,sort_keys=True,indent=2,allow_nan=False))
+    return 0
+
+
+if __name__=="__main__":
+    raise SystemExit(main())
