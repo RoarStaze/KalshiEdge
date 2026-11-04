@@ -457,6 +457,34 @@ class ManualTrader:
         """
         return self._place(preview_id, current_ticker, auto_reprice_buy=True)
 
+    def preview_auto_maker(self, preview: dict, confidence: float) -> dict | None:
+        """Read-only maker-price check, even if the displayed taker quote loses EV.
+
+        Never posts or journals. The actual maker path independently
+        refreshes the account, order book and EV before it can send a POST.
+        """
+        from .maker_entry import build_maker_plan
+        if (not isinstance(preview, dict)
+                or preview.get("action") != "BUY"
+                or preview.get("outcome") not in ("UP", "DOWN")
+                or not isinstance(preview.get("ticker"), str)
+                or not preview["ticker"].startswith("KXBTC15M-")):
+            return None
+        try:
+            market, book = self.market_client.quote(preview["ticker"])
+            details = market.get("market", {})
+            if (details.get("ticker") != preview["ticker"]
+                    or details.get("status") not in ("active", "open")):
+                return None
+            return build_maker_plan(
+                book, preview["outcome"], count=preview["count"],
+                requested=preview["input_amount"],
+                balance=preview["available_balance"],
+                confidence=confidence, ask_price=preview["unit_price"],
+            )
+        except (KeyError, ValueError, TypeError, TradingError):
+            return None
+
     def place_auto_value(self, preview_id, current_ticker, *,
                          confidence: float, prefer_maker: bool = False):
         """Profit-gated AutoTrade: bounded maker first, verified IOC if no passive quote."""
