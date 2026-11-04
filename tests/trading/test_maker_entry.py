@@ -44,7 +44,7 @@ def test_maker_only_retries_after_verified_zero_fill():
         def get(self, path, *, params=None):
             return {"order": {"status": "canceled", "fill_count_fp": "0.00",
                               "ticker": "KXBTC15M-TEST"}}
-        def cancel_resting_order(self, order_id):
+        def cancel_resting_order(self, order_id, *, market_ticker):
             self.cancelled.append(order_id)
             return {"order_id": order_id}
     client = Exchange()
@@ -63,7 +63,7 @@ def test_maker_unknown_order_state_never_assumed_zero_fill():
         def get(self, path, *, params=None):
             return {"order": {"status": "resting", "fill_count_fp": "0.00",
                               "ticker": "KXBTC15M-TEST"}}
-        def cancel_resting_order(self, order_id):
+        def cancel_resting_order(self, order_id, *, market_ticker):
             return {"order_id": order_id}
     try:
         finalize_resting_order(
