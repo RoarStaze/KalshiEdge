@@ -5,12 +5,12 @@ short exchange-side expiration_time and a durable pre-POST journal entry.
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 import time
 import uuid
 from typing import Callable
 
-from .auto_edge import assess_auto_buy_edge, MAX_BANKROLL_FRACTION
+from .auto_edge import assess_auto_buy_edge, MAX_BANKROLL_FRACTION, suggest_auto_stake
 from .risk import reference_nondirect_fee
 
 
@@ -65,10 +65,38 @@ def build_maker_plan(
                 or not Decimal("0") < taker_unit < Decimal("1")
                 or maker_unit >= taker_unit):
             return None
+        # Unlike an aggressive immediate BUY, a maker order may be
+        # profitable when the current taker ask is not. Calculate Kelly
+        # sizing on the maker *unit price* rather than the rejected ask.
+        initial_fee = reference_nondirect_fee(maker_unit, qty)
+        initial_quote = {
+            "unit_price": format(maker_unit, ".4f"),
+            "count": format(qty, ".2f"),
+            "fee_estimate": format(initial_fee, ".6f"),
+            "amount_estimate": format(maker_unit * qty + initial_fee, ".6f"),
+            "available_balance": format(cash, ".4f"),
+        }
+        risk_dollars = suggest_auto_stake(
+            initial_quote, confidence, format(ceiling, ".2f"),
+        )
+        if risk_dollars is None:
+            return None
+        budget = min(risk_dollars, ceiling, cash * MAX_BANKROLL_FRACTION)
+        step = Decimal("0.01")
+        low, high = 0, int((qty / step).to_integral_value(rounding=ROUND_FLOOR))
+        while low < high:
+            mid = (low + high + 1) // 2
+            candidate = step * mid
+            if (maker_unit * candidate
+                    + reference_nondirect_fee(maker_unit, candidate)) <= budget:
+                low = mid
+            else:
+                high = mid - 1
+        qty = step * low
+        if qty < step:
+            return None
         fee = reference_nondirect_fee(maker_unit, qty)
         total = maker_unit * qty + fee
-        if total <= 0 or total > min(ceiling, cash * MAX_BANKROLL_FRACTION):
-            return None
         yes_price = maker_unit if outcome == "UP" else Decimal("1") - maker_unit
         preview = {
             "unit_price": format(maker_unit, ".4f"),
