@@ -360,7 +360,7 @@ SCRIPT = r"""
     side.textContent=entry.outcome==="UP"?"UP":"DOWN";
     const state=document.createElement("span");
     state.className="mt-auto-record-status "+(entry.status==="FILLED"?"filled":"warn");
-    state.textContent=entry.status==="NO_FILL"?"NO FILL":String(entry.status||"UNKNOWN");
+    state.textContent=entry.status==="NO_FILL"?"NO FILL":entry.status==="NOT_SUBMITTED"?"NOT SENT":String(entry.status||"UNKNOWN");
     header.append(side,state);item.appendChild(header);
     const meta=document.createElement("div");meta.className="mt-auto-record-sub";
     const amount=document.createElement("span");amount.textContent="Amount "+money(entry.amount);
@@ -388,7 +388,7 @@ SCRIPT = r"""
      pnl.className="mt-auto-pnl-pending";
      pnl.textContent=entry.pnl_status==="PENDING"?"P/L pending settlement":
        entry.pnl_status==="MIXED"?"P/L unavailable · other market trades":
-       entry.status==="NO_FILL"?"No shares filled":"P/L unavailable · verify Kalshi";
+       entry.status==="NO_FILL"?"No shares filled":entry.status==="NOT_SUBMITTED"?"No order submitted":"P/L unavailable · verify Kalshi";
     }
     finance.append(pnl);item.appendChild(finance);
     if(Array.isArray(entry.stages)&&entry.stages.length){
