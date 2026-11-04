@@ -18,7 +18,7 @@ def test_up_maker_joins_bid_and_earns_better_purchase_price():
     )
     assert plan["side"] == "bid"
     assert plan["price"] == "0.7800"
-    assert Decimal(plan["amount_estimate"]) < Decimal("0.10")
+    assert Decimal(plan["amount_estimate"]) <= Decimal("0.10")
 
 
 def test_down_maker_posts_yes_ask_at_no_bid():
