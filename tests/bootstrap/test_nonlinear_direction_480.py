@@ -130,7 +130,7 @@ def test_240s_and_unhealthy_quotes_and_duplicate_excluded():
     assert report["development_exclusions"]["duplicate_rows"]==2
     assert report["development_exclusions"]["wrong_checkpoint"]==1
     assert report["development_exclusions"]["invalid_or_stale_quote"]==1
-    assert report["fit_markets"]==599*60//100
+    assert report["fit_markets"]==int(999*.6)
 
 
 def test_single_class_training_refuses_even_when_later_rows_have_both_labels():
