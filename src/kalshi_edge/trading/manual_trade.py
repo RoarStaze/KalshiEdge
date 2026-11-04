@@ -449,10 +449,96 @@ class ManualTrader:
         """
         return self._place(preview_id, current_ticker, auto_reprice_buy=True)
 
-    def place_auto_value(self, preview_id, current_ticker, *, confidence: float):
-        """Auto-only final order: revalidate modeled net edge against fresh executable price."""
+    def place_auto_value(self, preview_id, current_ticker, *,
+                         confidence: float, prefer_maker: bool = False):
+        """Profit-gated AutoTrade: bounded maker first, verified IOC if no passive quote."""
+        if prefer_maker and callable(getattr(self.client, "send_resting_order", None)):
+            return self._place_auto_maker(preview_id, current_ticker, confidence)
         return self._place(preview_id, current_ticker,
                            auto_reprice_buy=True, edge_confidence=confidence)
+
+    def _place_auto_maker(self, preview_id, current_ticker, confidence):
+        """At most ONE maker POST. Remote expiry caps outstanding order lifetime.
+
+        If a maker quote cannot be constructed before any POST, fall back
+        to the same fresh-quote-checked IOC path. After an accepted maker POST
+        an IOC is forbidden until zero fill and cancellation are verified.
+        """
+        from .maker_entry import build_maker_plan, finalize_resting_order
+        with self._lock:
+            data = self._pending.get(preview_id)
+        if (data is None or time.monotonic() - data["at"] > QUOTE_LIFETIME_SECONDS
+                or current_ticker != data["ticker"]):
+            raise OrderNotSubmitted("AutoTrade maker preview expired or market changed")
+        if data["action"] != "BUY" or data["units"] != "DOLLARS":
+            raise OrderNotSubmitted("Maker-first AutoTrade requires dollar BUY")
+        try:
+            fresh = self._prepare(data["ticker"], "BUY", data["outcome"],
+                                  "DOLLARS", data["amount"], fresh_account=True)
+            old = data["plan"]
+            if (fresh.get("ticker") != data["ticker"]
+                    or fresh.get("outcome") != data["outcome"]
+                    or fresh.get("side") != old.get("side")
+                    or Decimal(fresh["unit_price"]) > Decimal(old["unit_price"])):
+                raise TradingError("Fresh maker quote moved against AutoTrade")
+            market, book = self.market_client.quote(data["ticker"])
+            if market.get("market", {}).get("ticker") != data["ticker"]:
+                raise TradingError("Maker market changed")
+            plan = build_maker_plan(
+                book, data["outcome"], count=fresh["count"],
+                requested=data["amount"], balance=fresh["available_balance"],
+                confidence=confidence, ask_price=fresh["unit_price"],
+            )
+        except Exception as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                reason = f"Maker pre-submit quote HTTP {exc.response.status_code}"
+            elif isinstance(exc, (TradingError, ValueError, KeyError)):
+                reason = str(exc)[:160]
+            else:
+                reason = f"Maker pre-submit validation ({type(exc).__name__})"
+            raise OrderNotSubmitted(reason) from exc
+        if plan is None:
+            # Nothing posted yet: the ordinary IOC path STILL applies its
+            # own fresh quote, budget and positive net-EV validations.
+            return self._place(preview_id, current_ticker,
+                               auto_reprice_buy=True, edge_confidence=confidence)
+        # Consume the held preview atomically BEFORE any exchange POST.
+        with self._lock:
+            popped = self._pending.pop(preview_id, None)
+        if popped is not data or time.monotonic() - data["at"] > QUOTE_LIFETIME_SECONDS:
+            raise OrderNotSubmitted("Maker quote expired before submission")
+        request = {
+            "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
+            "side": plan["side"], "count": plan["count"], "price": plan["price"],
+        }
+        expiry = int(time.time()) + 18
+        try:
+            try:
+                response = self.client.send_resting_order(
+                    request, expiration_time=expiry,
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in (400, 401, 403, 404, 422):
+                    raise OrderNotSubmitted(
+                        f"Kalshi rejected maker order (HTTP {exc.response.status_code})"
+                    ) from exc
+                raise
+        finally:
+            with self._account_lock:
+                self._account_cache = None
+        order_id = response.get("order_id")
+        if not isinstance(order_id, str) or not order_id:
+            raise TradingError("Maker order response lacks ID; outcome unknown")
+        result = finalize_resting_order(
+            self.client, order_id, data["ticker"], Decimal(plan["count"]),
+            poll_seconds=14,
+        )
+        return {
+            **result, "ticker": data["ticker"], "action": "BUY",
+            "outcome": data["outcome"], "requested_count": plan["count"],
+            "estimated_per_share": plan["unit_price"],
+            "execution_style": "MAKER_POST_ONLY",
+        }
 
     def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool,
                edge_confidence: float | None = None):
