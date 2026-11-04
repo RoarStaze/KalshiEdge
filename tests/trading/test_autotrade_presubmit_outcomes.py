@@ -89,3 +89,13 @@ def test_auto_journals_precheck_failures_separately_from_unknown(tmp_path):
     for _ in range(3):
         engine.tick()
     assert manual.place_calls == 1
+
+
+def test_consumed_or_missing_preview_cannot_be_mistaken_for_exchange_order(tmp_path):
+    trader = ManualTrader(
+        tmp_path, vault=SimpleNamespace(),
+        client=SimpleNamespace(send_order=lambda _: pytest.fail("Must not POST")),
+        market_client=SimpleNamespace(),
+    )
+    with pytest.raises(OrderNotSubmitted, match="Quote expired"):
+        trader.place("missing-preview", TICKER)
