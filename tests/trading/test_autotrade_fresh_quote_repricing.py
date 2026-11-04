@@ -45,7 +45,7 @@ def plans(outcome):
 @pytest.mark.parametrize("outcome", ["UP", "DOWN"])
 def test_autotrade_submits_latest_repriced_budgeted_direction_once(tmp_path, outcome):
     client = Exchange()
-    trader = ManualTrader(tmp_path, client=client, market_client=SimpleNamespace())
+    trader = ManualTrader(tmp_path, vault=SimpleNamespace(), client=client, market_client=SimpleNamespace())
     old, new = plans(outcome)
     seen = []
     def prepare(ticker, action, side, units, amount, *, fresh_account=False):
@@ -70,7 +70,7 @@ def test_autotrade_submits_latest_repriced_budgeted_direction_once(tmp_path, out
 
 def test_manual_one_click_buy_still_rejects_adverse_price_movement(tmp_path):
     client = Exchange()
-    trader = ManualTrader(tmp_path, client=client, market_client=SimpleNamespace())
+    trader = ManualTrader(tmp_path, vault=SimpleNamespace(), client=client, market_client=SimpleNamespace())
     old, new = plans("UP")
     trader._prepare = lambda *args, fresh_account=False, **kwargs: dict(new if fresh_account else old)
     preview = trader.preview(TICKER, "BUY", "UP", "DOLLARS", "0.10")
@@ -81,7 +81,7 @@ def test_manual_one_click_buy_still_rejects_adverse_price_movement(tmp_path):
 
 def test_autotrade_repricing_cannot_exceed_original_dollar_budget(tmp_path):
     client = Exchange()
-    trader = ManualTrader(tmp_path, client=client, market_client=SimpleNamespace())
+    trader = ManualTrader(tmp_path, vault=SimpleNamespace(), client=client, market_client=SimpleNamespace())
     old, new = plans("UP")
     new.update(count="0.11",fee_estimate="0.001100",amount_estimate="0.1100")
     trader._prepare = lambda *args, fresh_account=False, **kwargs: dict(new if fresh_account else old)
