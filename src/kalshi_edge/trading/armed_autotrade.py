@@ -307,7 +307,13 @@ class ArmedAutoTrader:
             LOG.exception("Cannot journal order attempt")
             return "ERROR", {}
         try:
-            result=self.manual.place(preview["preview_id"],ticker)
+            # Armed final orders use the fresh, budget-capped AutoTrade path.
+            # Legacy test doubles without place_auto retain their fake place.
+            auto_place = getattr(self.manual, "place_auto", None)
+            if callable(auto_place):
+                result = auto_place(preview["preview_id"],ticker)
+            else:
+                result = self.manual.place(preview["preview_id"],ticker)
         except OrderNotSubmitted as exc:
             # The manual trader has confirmed failure before POST or a
             # definite exchange rejection. Do not mislabel as UNKNOWN.
