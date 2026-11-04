@@ -43,6 +43,11 @@ class NoLiquidityError(TradingError):
     pass
 
 
+class OrderNotSubmitted(TradingError):
+    """Definitely no signed order was accepted: validation failed or exchange rejected."""
+    pass
+
+
 def _money(value):
     return format(value.quantize(Decimal("0.0001")), ".4f")
 
@@ -415,16 +420,27 @@ class ManualTrader:
         if current_ticker != data["ticker"]:
             raise TradingError("Market changed; refresh quote")
         old = data["plan"]
-        fresh = self._prepare(data["ticker"], data["action"], data["outcome"],
-                              data["units"], data["amount"], fresh_account=True)
-        if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:
-            raise TradingError("Position changed; refresh sell quote")
-        if fresh["side"] != old["side"] or Decimal(fresh["count"]) < Decimal(old["count"]):
-            raise TradingError("Position, balance or liquidity changed; quote again")
-        if data["action"] == "BUY" and Decimal(fresh["unit_price"]) > Decimal(old["unit_price"]):
-            raise TradingError("Price moved against you; quote again")
-        if data["action"] == "SELL" and Decimal(fresh["unit_price"]) < Decimal(old["unit_price"]):
-            raise TradingError("Sell price moved against you; quote again")
+        # All checks in this block happen BEFORE creating/sending the order.
+        # A failure here cannot have generated a Kalshi order.
+        try:
+            fresh = self._prepare(data["ticker"], data["action"], data["outcome"],
+                                  data["units"], data["amount"], fresh_account=True)
+            if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:
+                raise TradingError("Position changed; refresh sell quote")
+            if fresh["side"] != old["side"] or Decimal(fresh["count"]) < Decimal(old["count"]):
+                raise TradingError("Position, balance or liquidity changed; quote again")
+            if data["action"] == "BUY" and Decimal(fresh["unit_price"]) > Decimal(old["unit_price"]):
+                raise TradingError("Price moved against you; quote again")
+            if data["action"] == "SELL" and Decimal(fresh["unit_price"]) < Decimal(old["unit_price"]):
+                raise TradingError("Sell price moved against you; quote again")
+        except Exception as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                reason = f"Pre-submit account/quote read HTTP {exc.response.status_code}"
+            elif isinstance(exc, TradingError):
+                reason = str(exc)[:160]
+            else:
+                reason = f"Pre-submit validation failed ({type(exc).__name__})"
+            raise OrderNotSubmitted(reason) from exc
         # A short-lived, explicitly clicked action makes ONE signed POST.
         order = {
             "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
@@ -433,7 +449,17 @@ class ManualTrader:
         }
         # The exchange enforces IOC; no unfilled shares remain resting.
         try:
-            result = self.client.send_order(order)
+            try:
+                result = self.client.send_order(order)
+            except httpx.HTTPStatusError as exc:
+                # Explicit client-error responses mean Kalshi rejected the
+                # request. Timeouts, server errors, and conflicts are still
+                # UNKNOWN: they might have been accepted.
+                if exc.response.status_code in (400, 401, 403, 404, 422):
+                    raise OrderNotSubmitted(
+                        f"Kalshi rejected order (HTTP {exc.response.status_code})"
+                    ) from exc
+                raise
         finally:
             # A fill or uncertain order outcome invalidates all cached balances.
             with self._account_lock:
