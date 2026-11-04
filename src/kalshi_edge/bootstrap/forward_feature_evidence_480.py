@@ -224,6 +224,53 @@ def load_forward_snapshot(root:Path,final:FinalForecastRecord) -> Forward480Feat
     return snapshot
 
 
+def _with_brti_reference_features(
+    row: FeatureRow, prediction: "LivePredictionRecord",
+    final: FinalForecastRecord,
+) -> FeatureRow:
+    """Add causal, same-tick BRTI settlement-reference signals for research.
+
+    Never infer missing reference prices from later settlement data. A
+    mismatched or stale cross-feed observation simply leaves the optional
+    signals absent; all pre-existing research features remain untouched.
+    """
+    brti = getattr(prediction, "brti_value", None)
+    btc = getattr(prediction, "btc_reference", None)
+    brti_ts = getattr(prediction, "brti_source_ts_ns", None)
+    btc_ts = getattr(prediction, "binance_source_ts_ns", None)
+    reported_gap = getattr(prediction, "brti_binance_gap_bps", None)
+    numbers = (brti, btc, reported_gap, final.strike)
+    if any(type(value) not in (float, int) or not math.isfinite(value)
+           for value in numbers):
+        return row
+    if brti <= 0 or btc <= 0 or final.strike <= 0:
+        return row
+    ts = final.prediction_ts_ns
+    if (type(brti_ts) is not int or type(btc_ts) is not int
+            or not 0 <= ts - brti_ts <= 5 * NS
+            or not 0 <= ts - btc_ts <= 5 * NS):
+        return row
+    # The same Binance source timestamp must underlie both the existing
+    # feature vector and the recorded cross-reference, avoiding feed mixing.
+    if row.source_max_ts_ns.get("binance") != btc_ts:
+        return row
+    gap = (brti - btc) / final.strike * 10_000
+    if abs(gap - reported_gap) > 0.0001:
+        return row
+    distance = (brti - final.strike) / final.strike * 10_000
+    if any(name in row.features for name in (
+            "brti_distance_to_strike_bps", "brti_binance_gap_bps")):
+        return row
+    return row.model_copy(update={
+        "features": {
+            **row.features,
+            "brti_distance_to_strike_bps": float(distance),
+            "brti_binance_gap_bps": float(gap),
+        },
+        "source_max_ts_ns": {**row.source_max_ts_ns, "brti": brti_ts},
+    })
+
+
 def capture_forward_480_feature(
     *,state:"LiveFeatureState",prediction:"LivePredictionRecord",
     final:FinalForecastRecord,forecast_file:Path,
@@ -241,6 +288,7 @@ def capture_forward_480_feature(
     else:
         try:
             row=state.feature_row(final.prediction_ts_ns)
+            row=_with_brti_reference_features(row,prediction,final)
         except Exception:
             reason="CAUSAL_FEATURE_ROW_UNAVAILABLE"
     item=build_forward_snapshot(final,forecast_file,row,reason=reason)
