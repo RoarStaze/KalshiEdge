@@ -152,7 +152,7 @@ class ArmedAutoTrader:
                 "market_close_ts_ns": close, "checkpoint_ts_ns": checkpoint,
                 "outcome": None, "order_id": None, "trigger": None,
                 "final_attempts": 0, "final_retry_after_ns": 0,
-                "last_result": None,
+                "last_quote_reason": None, "last_result": None,
                 "message": ("Waiting for next BTC market" if skip
                             else "Armed — waiting for eight-minute final forecast"),
             }
@@ -261,7 +261,33 @@ class ArmedAutoTrader:
             # Legacy fake exchanges retain the historical interface.
             value_first = callable(getattr(self.manual, "place_auto_value", None))
             edge = assess_auto_buy_edge(preview, confidence)
-            if value_first and edge["approved"]:
+            evidence_preview = preview
+            maker_approved = False
+            # A negative taker-ask EV is NOT sufficient to reject a
+            # cheaper maker limit. Check its independently sized EV before
+            # journaling, keeping malformed taker quotes fail-closed.
+            if (value_first and stage == "FINAL_BUY"
+                    and not edge["approved"] and edge["reason"] != "INVALID_QUOTE"):
+                preflight = getattr(self.manual, "preview_auto_maker", None)
+                if callable(preflight):
+                    try:
+                        maker_plan = preflight(preview, confidence)
+                    except Exception:
+                        maker_plan = None
+                    if (isinstance(maker_plan, dict)
+                            and isinstance(maker_plan.get("edge_diagnostics"), dict)
+                            and maker_plan["edge_diagnostics"].get("approved") is True):
+                        maker_approved = True
+                        edge = maker_plan["edge_diagnostics"]
+                        # Journal the actual contemplated maker limit rather
+                        # than the rejected taker ask. This is still only a
+                        # quote; authenticated fills remain authoritative.
+                        evidence_preview = {**preview, **{
+                            key: maker_plan[key]
+                            for key in ("unit_price", "count",
+                                        "fee_estimate", "amount_estimate")
+                        }}
+            if value_first and edge["approved"] and not maker_approved:
                 sized = suggest_auto_stake(preview, confidence, amount)
                 if sized is None:
                     edge = {**edge, "approved": False, "reason": "INSUFFICIENT_EDGE"}
@@ -281,7 +307,7 @@ class ArmedAutoTrader:
                     except Exception:
                         return "NO_QUOTE", {}
             quote_evidence = sanitize_quote_snapshot(
-                preview, edge, preview_received_at_ns=preview_received_at_ns,
+                evidence_preview, edge, preview_received_at_ns=preview_received_at_ns,
             )
             if edge["reason"] == "INVALID_QUOTE" or (value_first and not edge["approved"]):
                 if self.history_store is not None:
@@ -448,6 +474,7 @@ class ArmedAutoTrader:
                     checkpoint_ts_ns=new_checkpoint,
                     outcome=None, order_id=None, trigger=None,
                     final_attempts=0, final_retry_after_ns=0,
+                    last_quote_reason=None,
                     message=("Waiting for following BTC market" if skip
                              else "New market found — waiting for eight-minute final"),
                 )
@@ -463,7 +490,13 @@ class ArmedAutoTrader:
             # before the immutable 8-minute final forecast is sealed.
             return
         if now > checkpoint + MAX_LOCK_DELAY_NS or now >= close - MIN_EXECUTION_REMAINING_NS:
-            self._finish("EXPIRED", "Final forecast too late to execute")
+            rejected = armed.get("last_quote_reason")
+            self._finish(
+                "EXPIRED",
+                (f"No profitable entry in final quote window ({rejected}); no order sent"
+                 if rejected and not self._attempted(ticker)
+                 else "Final forecast too late to execute"),
+            )
             return
 
         final = self._locked(current, ticker, checkpoint)
@@ -501,10 +534,12 @@ class ArmedAutoTrader:
                          "Final BUY not sent: " + result.get("reason", "pre-submit check failed"))
             return
         if status == "NO_EDGE":
-            # Do not journal or submit a poor-value quote. Watch for a
-            # better price only within the original 30-second final window.
+            # Keep the rejection cause visible instead of overwriting it
+            # with a misleading generic "too late" once the window ends.
+            reason = result.get("edge_diagnostics", {}).get("reason", "NO_EDGE")
             self._set(state="WAITING", final_retry_after_ns=now + RETRY_DELAY_NS,
-                      message="Waiting for profitable final quote; no order sent")
+                      last_quote_reason=reason,
+                      message=f"Waiting for positive-value quote ({reason}); no order sent")
             return
         if status == "NO_QUOTE":
             if not armed.get("continuous"):
