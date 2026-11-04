@@ -144,6 +144,31 @@ class KalshiOrderClient:
         }
         return self._request("POST", "/portfolio/events/orders", body=payload)
 
+    def send_resting_order(self, request: dict, *, expiration_time: int):
+        """Post-only maker order with a hard exchange-side expiry."""
+        if set(request) != {"ticker", "client_order_id", "side", "count", "price"}:
+            raise TradingError("Invalid resting order fields")
+        if (not str(request["ticker"]).startswith("KXBTC15M-")
+                or request["side"] not in ("bid", "ask")
+                or not isinstance(expiration_time, int)
+                or not int(time.time()) + 2 <= expiration_time <= int(time.time()) + 30):
+            raise TradingError("Invalid or unbounded resting order")
+        payload = {
+            **request, "time_in_force": "good_till_canceled",
+            "expiration_time": expiration_time, "post_only": True,
+            "self_trade_prevention_type": "taker_at_cross",
+            "cancel_order_on_pause": True, "reduce_only": False,
+            "exchange_index": -1,
+        }
+        return self._request("POST", "/portfolio/events/orders", body=payload)
+
+    def cancel_resting_order(self, order_id: str):
+        try:
+            safe_id = str(uuid.UUID(order_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise TradingError("Invalid resting order ID") from exc
+        return self._request("DELETE", f"/portfolio/events/orders/{safe_id}")
+
     def close(self):
         self.http.close()
 
