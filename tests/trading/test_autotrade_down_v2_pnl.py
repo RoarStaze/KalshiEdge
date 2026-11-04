@@ -50,7 +50,7 @@ class Client:
 
 
 @pytest.mark.parametrize("result,expected",[
-    ("no","0.0200"),
+    ("no","0.02"),
     ("yes","-0.09"),
 ])
 def test_down_buy_as_yes_ask_reconciles_realized_fees_for_both_outcomes(result,expected):
@@ -67,20 +67,20 @@ def test_down_buy_no_bid_is_same_economic_action():
     # Some V2 representations may express BUY NO as NO/BID.
     f=v2_fill(outcome_side="no",book_side="bid")
     row=enrich_history(history(),Client([f],"no"))[0]
-    assert row["realized_pnl_dollars"]=="0.0200"
+    assert row["realized_pnl_dollars"]=="0.02"
     assert row["pnl_status"]=="SETTLED"
 
 
 def test_down_legacy_yes_sell_is_accepted_only_when_equivalent():
     f=v2_fill(side="yes",action="sell")
     row=enrich_history(history(),Client([f],"no"))[0]
-    assert row["realized_pnl_dollars"]=="0.0200"
+    assert row["realized_pnl_dollars"]=="0.02"
 
 
 def test_down_legacy_no_buy_is_accepted_only_when_equivalent():
     f=v2_fill(side="no",action="buy")
     row=enrich_history(history(),Client([f],"no"))[0]
-    assert row["realized_pnl_dollars"]=="0.0200"
+    assert row["realized_pnl_dollars"]=="0.02"
 
 
 def test_up_v2_yes_bid_reconciles_normal_buy():
@@ -95,7 +95,7 @@ def test_can_reconcile_with_only_one_authentic_binary_price(missing_field):
     f=v2_fill()
     del f[missing_field]
     row=enrich_history(history(),Client([f],"no"))[0]
-    assert row["realized_pnl_dollars"]=="0.0200"
+    assert row["realized_pnl_dollars"]=="0.02"
 
 
 @pytest.mark.parametrize("patch",[
