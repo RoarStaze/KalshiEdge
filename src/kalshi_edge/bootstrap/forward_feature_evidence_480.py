@@ -373,6 +373,10 @@ def _joined(root:Path) -> tuple[list[FeatureRow],dict[str,Any]]:
             source_max_ts_ns=dict(snapshot.source_max_ts_ns),
         ))
         counts["verified_feature_examples"]+=1
+        if (all(name in snapshot.features for name in (
+                "brti_distance_to_strike_bps", "brti_binance_gap_bps"))
+                and "brti" in snapshot.source_max_ts_ns):
+            counts["verified_brti_feature_examples"]+=1
     examples.sort(key=lambda row:(row.checkpoint_ts_ns,row.market_ticker))
     summary={
         "report":"KXBTC15M_480S_PROSPECTIVE_FEATURE_EVIDENCE_AUDIT_V1",
@@ -383,6 +387,7 @@ def _joined(root:Path) -> tuple[list[FeatureRow],dict[str,Any]]:
             "valid_snapshots","missing_snapshot_records","invalid_snapshot_records",
             "missing_snapshot_settled","missing_or_invalid_snapshot_settled",
             "snapshots_without_features","verified_feature_examples",
+            "verified_brti_feature_examples",
             "issued_correct","issued_incorrect","confidence_skips",
             "confidence_skip_counterfactual_correct",
             "confidence_skips_without_probability","other_skips",
