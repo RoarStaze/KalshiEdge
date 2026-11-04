@@ -162,12 +162,20 @@ class KalshiOrderClient:
         }
         return self._request("POST", "/portfolio/events/orders", body=payload)
 
-    def cancel_resting_order(self, order_id: str):
+    def cancel_resting_order(self, order_id: str, *, market_ticker: str):
         try:
             safe_id = str(uuid.UUID(order_id))
         except (ValueError, TypeError, AttributeError) as exc:
             raise TradingError("Invalid resting order ID") from exc
-        return self._request("DELETE", f"/portfolio/events/orders/{safe_id}")
+        if (not isinstance(market_ticker, str)
+                or not market_ticker.startswith("KXBTC15M-")
+                or not market_ticker.replace("-", "").isalnum()):
+            raise TradingError("Invalid maker cancellation market")
+        # V2 writes with exchange_index=-1 need the ticker for shard routing.
+        return self._request(
+            "DELETE", f"/portfolio/events/orders/{safe_id}",
+            params={"market_ticker": market_ticker, "exchange_index": -1},
+        )
 
     def close(self):
         self.http.close()
