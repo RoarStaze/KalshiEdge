@@ -59,7 +59,7 @@ def test_profitable_fresh_price_submits_at_most_once(tmp_path):
 
 
 def test_worsening_price_cannot_override_approved_preview(tmp_path):
-    trader, client, preview = _setup(tmp_path, _plan("0.8000"), _plan("0.8200"))
+    trader, client, preview = _setup(tmp_path, _plan("0.8000"), _plan("0.8200", count="0.11"))
     with pytest.raises(OrderNotSubmitted, match="worsened"):
         trader.place_auto_value(
             preview["preview_id"], "KXBTC15M-VALUE-REPRICE", confidence=0.98
