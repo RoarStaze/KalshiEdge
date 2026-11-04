@@ -98,3 +98,25 @@ def test_bad_or_future_brti_reference_never_creates_fake_training_signal(tmp_pat
     assert "brti_binance_gap_bps" not in snapshot.features
     assert "brti" not in snapshot.source_max_ts_ns
     assert snapshot.features["btc_normalized_distance"]==0.1
+
+
+def test_audit_counts_only_verified_settled_brti_feature_examples(tmp_path):
+    from kalshi_edge.bootstrap.final_history import OfficialSettlement, _save_settlement
+    from kalshi_edge.bootstrap.forward_feature_evidence_480 import (
+        evaluate_forward_feature_evidence,
+    )
+    final,path,state,prediction=fixture(tmp_path)
+    capture_forward_480_feature(
+        state=state,prediction=prediction,final=final,
+        forecast_file=path,writer=Forward480FeatureWriter(tmp_path),
+    )
+    close=CHECKPOINT+480*NS
+    _save_settlement(tmp_path,final,OfficialSettlement(
+        market_ticker=TICKER,market_close_ts_ns=close,
+        result="yes",actual_side="ABOVE",market_status="settled",
+        source="kalshi-public-market-api",fetched_ts_ns=close+90*NS,
+    ))
+    report=evaluate_forward_feature_evidence(tmp_path)
+    assert report["verified_feature_examples"]==1
+    assert report["verified_brti_feature_examples"]==1
+    assert report["model_trained"] is False
