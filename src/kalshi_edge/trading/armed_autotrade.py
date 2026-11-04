@@ -21,7 +21,7 @@ from .autotrade_pnl import enrich_history
 from .autotrade_scorecard import summarize_autotrade_performance
 from .auto_edge import assess_auto_buy_edge
 from .autotrade_execution_audit import sanitize_quote_snapshot
-from .manual_trade import MAX_REQUEST_DOLLARS
+from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted
 from kalshi_edge.bootstrap.final_forecast import FINAL_CHECKPOINT_SECONDS
 
 LOG = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ class ArmedAutoTrader:
     def _finish(self, state: str, message: str, **details):
         with self._lock:
             if self._state.get("continuous") and state in (
-                "FILLED", "PARTIAL", "NO_FILL", "SKIPPED", "EXPIRED", "NO_QUOTE"
+                "FILLED", "PARTIAL", "NO_FILL", "SKIPPED", "EXPIRED", "NO_QUOTE", "NOT_SUBMITTED"
             ):
                 self._processed.add(self._state["ticker"])
                 self._state.update(state="WAITING", last_result=state,
@@ -308,6 +308,23 @@ class ArmedAutoTrader:
             return "ERROR", {}
         try:
             result=self.manual.place(preview["preview_id"],ticker)
+        except OrderNotSubmitted as exc:
+            # The manual trader has confirmed failure before POST or a
+            # definite exchange rejection. Do not mislabel as UNKNOWN.
+            reason = str(exc)[:160]
+            LOG.warning("AutoTrade order not submitted: %s", reason)
+            if self.history_store:
+                try:
+                    self.history_store.record_stage_result(
+                        ticker=ticker,stage=stage,status="NOT_SUBMITTED",
+                        order_id=None,fill_count=None)
+                    if first:
+                        self.history_store.record_result(
+                            ticker=ticker,status="NOT_SUBMITTED")
+                except Exception:
+                    LOG.exception("Cannot journal unsubmitted order outcome")
+                    return "ERROR", {}
+            return "NOT_SUBMITTED", {"reason": reason}
         except Exception:
             LOG.exception("AutoTrade exchange result unknown")
             if self.history_store:
@@ -445,6 +462,10 @@ class ArmedAutoTrader:
         )
         if status in ("UNKNOWN", "ERROR"):
             self._status_after_order(status, "Final BUY unconfirmed")
+            return
+        if status == "NOT_SUBMITTED":
+            self._finish("NOT_SUBMITTED",
+                         "Final BUY not sent: " + result.get("reason", "pre-submit check failed"))
             return
         if status == "NO_QUOTE":
             if not armed.get("continuous"):
