@@ -556,7 +556,9 @@ class LivePredictor:
             })
             if seconds_remaining >= 60.0 else None
         )
-        # Research-only diagnostic: never gates, calibrates, or changes V5/V6.
+        # Causal BRTI near-strike diagnostic. The live final-forecast gate
+        # uses this normalized distance to veto high coin-flip risk at 480s;
+        # the promoted direction model and its probabilities stay unchanged.
         # The feature filters out observations after now_ns.
         shadow_risk = (
             compute_brti_strike_risk(
@@ -570,7 +572,7 @@ class LivePredictor:
         )
 
         # Frozen, research-only confidence shrinker. Not a fitted calibrator.
-        # V5 p_yes, V6 shadow, and FinalForecastGate remain unchanged.
+        # It does not replace V5 p_yes or control the live coin-flip veto.
         v61_shadow_p = risk_adjusted_shadow_probability(
             None if brti_shadow is None else brti_shadow.probability_above,
             None if shadow_risk is None else shadow_risk.adjusted_distance,
