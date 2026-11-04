@@ -75,3 +75,21 @@ def test_maker_unknown_order_state_never_assumed_zero_fill():
         assert "unconfirmed" in str(exc)
     else:
         raise AssertionError("Resting order state must never be treated as zero fill")
+
+
+def test_signed_v2_maker_cancel_routes_to_exchange_shard():
+    from kalshi_edge.trading.manual_trade import KalshiOrderClient
+    client = object.__new__(KalshiOrderClient)
+    calls = []
+    client._request = lambda method, path, **kwargs: (
+        calls.append((method, path, kwargs)) or {"order_id": "test"}
+    )
+    client.cancel_resting_order(
+        "11111111-1111-4111-8111-111111111111",
+        market_ticker="KXBTC15M-TEST",
+    )
+    assert calls == [(
+        "DELETE",
+        "/portfolio/events/orders/11111111-1111-4111-8111-111111111111",
+        {"params": {"market_ticker": "KXBTC15M-TEST", "exchange_index": -1}},
+    )]
