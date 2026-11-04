@@ -416,9 +416,9 @@ class ManualTrader:
         with self._lock:
             data = self._pending.pop(preview_id, None)
         if data is None or time.monotonic() - data["at"] > QUOTE_LIFETIME_SECONDS:
-            raise TradingError("Quote expired; refresh and click again")
+            raise OrderNotSubmitted("Quote expired; refresh and click again")
         if current_ticker != data["ticker"]:
-            raise TradingError("Market changed; refresh quote")
+            raise OrderNotSubmitted("Market changed; refresh quote")
         old = data["plan"]
         # All checks in this block happen BEFORE creating/sending the order.
         # A failure here cannot have generated a Kalshi order.
