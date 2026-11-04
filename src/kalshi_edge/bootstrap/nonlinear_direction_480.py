@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .metrics import probability_metrics
+from .paired_disagreement_480 import paired_disagreement_480
 from .reliability_480_core import BASELINE_GATE, DIRECTION_C, classifier, gate_metrics
 from .specialist_480 import FEATURES, MIN_VALIDATION_MARKETS, NS, select_eight_minute_rows
 from .types import FeatureRow
@@ -88,6 +89,7 @@ def _compare(
         "markets":len(rows),
         "baseline_logistic": b,
         "candidate_nonlinear": c,
+        "paired_disagreement": paired_disagreement_480(labels, baseline, candidate),
         "joint_objective_met": objective,
         "coverage_delta":challenger["coverage"]-base["coverage"],
         "conditional_accuracy_delta":(
