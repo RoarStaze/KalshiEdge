@@ -64,7 +64,7 @@ def test_require_significant_edge_relative_to_spend():
     assert Decimal(decision["minimum_required_dollars"]) == Decimal("0.171000")
 
 
-def test_no_edge_is_checked_before_exchange_submit_in_armed_auto(tmp_path):
+def test_expensive_valid_quote_does_not_veto_explicit_final_autotrade(tmp_path):
     from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
     NS = 1_000_000_000
     now = 1_900_000_000 * NS
@@ -86,7 +86,7 @@ def test_no_edge_is_checked_before_exchange_submit_in_armed_auto(tmp_path):
                     "preview_id": "unsafe", **quote("0.9900", "0.11", "0.0030", "0.1119")}
         def place(self, preview_id, ticker):
             self.orders.append((preview_id, ticker))
-            raise AssertionError("Unprofitable order must never be submitted")
+            return {"status": "FILLED", "fill_count": "0.11", "order_id": "fake-order"}
 
     manual = Manual()
     engine = ArmedAutoTrader(manual, lambda: state, now_ns=lambda: now,
@@ -98,9 +98,10 @@ def test_no_edge_is_checked_before_exchange_submit_in_armed_auto(tmp_path):
     }
     now = checkpoint
     engine.tick()
-    assert manual.previews and not manual.orders
-    assert engine.status()["last_result"] == "SKIPPED"
-    assert engine.history()["entries"] == []
+    assert manual.previews
+    assert manual.orders == [("unsafe", ticker)]
+    assert engine.status()["last_result"] == "FILLED"
+    assert len(engine.history()["entries"]) == 1
 
 
 def test_reversal_sells_are_not_blocked_by_new_buy_value_gate():
@@ -111,12 +112,9 @@ def test_reversal_sells_are_not_blocked_by_new_buy_value_gate():
     assert 'if action == "BUY":' in source
 
 
-def test_auto_ui_displays_value_edge_skip_reason_instead_of_low_confidence():
+def test_auto_ui_displays_engine_skip_reason_instead_of_a_hardcoded_message():
     from kalshi_edge.bootstrap.dashboard_ui import PAGE
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
     html = integrate_manual_trade(PAGE)
     assert 'SKIPPED:autoCurrent.message||' in html
     assert 'SKIPPED:"Final forecast SKIP' not in html
-    import inspect
-    from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
-    assert "insufficient fee-adjusted model edge" in inspect.getsource(ArmedAutoTrader._tick)

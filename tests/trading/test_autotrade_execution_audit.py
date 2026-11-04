@@ -181,7 +181,7 @@ def test_live_engine_records_approved_quote_atomically_in_order_stage(tmp_path):
     assert b"sensitive-preview-token-never-store" not in journal_path.read_bytes()
 
 
-def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_path):
+def test_live_engine_journals_valid_quote_despite_unfavorable_model_edge(tmp_path):
     now = 1_900_000_000 * NS
     close = now + 900 * NS
     feed = {
@@ -197,7 +197,7 @@ def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_pa
                     "amount_estimate":"0.2535"}
         def place(self,*args):
             self.orders.append(args)
-            raise AssertionError("Uneconomic quote must not trade")
+            return {"order_id": "exec-2", "status": "FILLED", "fill_count": "0.25"}
 
     fake = Manual()
     journal_path = tmp_path / "rejection.sqlite3"
@@ -211,12 +211,15 @@ def test_live_engine_records_rejected_value_gate_without_pretending_trade(tmp_pa
         "forecast":"ABOVE","confidence":.9,
     }
     trader.tick()
-    assert fake.orders == []
-    assert AutoTradeHistory(journal_path).recent_stages(TICKER) == []
-    rejections = AutoTradeHistory(journal_path).recent_quote_rejections()
-    assert rejections[0]["reason"] == "NON_POSITIVE_EDGE"
-    assert rejections[0]["quoted_unit_price_dollars"] == "0.9900"
-    assert trader.status()["last_result"] == "SKIPPED"
+    assert fake.orders == [("sensitive-preview-token-never-store", TICKER)]
+    stages = AutoTradeHistory(journal_path).recent_stages(TICKER)
+    assert len(stages) == 1
+    assert stages[0]["status"] == "FILLED"
+    assert stages[0]["quote_gate"] == "NON_POSITIVE_EDGE"
+    assert stages[0]["quoted_unit_price_dollars"] == "0.9900"
+    assert AutoTradeHistory(journal_path).recent_quote_rejections() == []
+    assert trader.status()["last_result"] == "FILLED"
+    assert b"SECRET-NEVER-STORE" not in journal_path.read_bytes()
 
 
 def test_execution_audit_does_not_invent_prices_for_legacy_stages(tmp_path):
