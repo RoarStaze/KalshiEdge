@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .confidence_reliability_480 import wilson_interval
+from .rescue_score_diagnostics_480 import describe_rescue_scores
 from .reliability_480_core import (
     BASELINE_GATE, CORRECTNESS_C, DIRECTION_C, FOLDS, MIN_OOF,
     classifier, gate_metrics, reliability_features,
@@ -142,6 +143,7 @@ def choose_guarded_threshold(
             chosen["rescue_wilson_lower"] if chosen else None
         ),
         "grid": grid,
+        "score_diagnostics": describe_rescue_scores(labels, direction_p, meta_p),
         "selection_objective": (
             "Maximize added CORRECT forecasts, subject to >=40 rescues "
             "and Wilson-95%-lower rescue hit rate above baseline hit rate. "
