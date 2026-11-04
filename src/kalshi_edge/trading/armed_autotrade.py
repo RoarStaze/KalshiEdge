@@ -19,7 +19,7 @@ from typing import Callable
 from .autotrade_history import AutoTradeHistory
 from .autotrade_pnl import enrich_history
 from .autotrade_scorecard import summarize_autotrade_performance
-from .auto_edge import assess_auto_buy_edge
+from .auto_edge import assess_auto_buy_edge, suggest_auto_stake
 from .autotrade_execution_audit import sanitize_quote_snapshot
 from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted
 from kalshi_edge.bootstrap.final_forecast import FINAL_CHECKPOINT_SECONDS
@@ -256,14 +256,34 @@ class ArmedAutoTrader:
             except (KeyError, InvalidOperation, ValueError):
                 return "NO_QUOTE", {}
         if action == "BUY":
-            # A locked final ABOVE/BELOW is the explicitly armed BUY signal.
-            # Model-estimated edge is diagnostic, not a separate trading gate.
-            # Still reject malformed/inconsistent quotes before any live POST.
+            # The production ManualTrader has a second, mandatory
+            # fresh-quote value guard immediately before the signed POST.
+            # Legacy fake exchanges retain the historical interface.
+            value_first = callable(getattr(self.manual, "place_auto_value", None))
             edge = assess_auto_buy_edge(preview, confidence)
+            if value_first and edge["approved"]:
+                sized = suggest_auto_stake(preview, confidence, amount)
+                if sized is None:
+                    edge = {**edge, "approved": False, "reason": "INSUFFICIENT_EDGE"}
+                elif sized < Decimal(amount):
+                    try:
+                        amount = format(sized, ".2f")
+                        preview = self.manual.preview(
+                            ticker, action, side, units, amount,
+                        )
+                        preview_received_at_ns = self.now_ns()
+                        if (preview.get("ticker") != ticker
+                                or preview.get("action") != action
+                                or preview.get("outcome") != side
+                                or not isinstance(preview.get("preview_id"), str)):
+                            return "NO_QUOTE", {}
+                        edge = assess_auto_buy_edge(preview, confidence)
+                    except Exception:
+                        return "NO_QUOTE", {}
             quote_evidence = sanitize_quote_snapshot(
                 preview, edge, preview_received_at_ns=preview_received_at_ns,
             )
-            if edge["reason"] == "INVALID_QUOTE":
+            if edge["reason"] == "INVALID_QUOTE" or (value_first and not edge["approved"]):
                 if self.history_store is not None:
                     try:
                         self.history_store.record_quote_rejection(
@@ -273,12 +293,13 @@ class ArmedAutoTrader:
                         )
                     except Exception:
                         LOG.warning("Rejected quote evidence unavailable", exc_info=True)
-                return "NO_QUOTE", {"edge_diagnostics": edge}
+                return ("NO_QUOTE" if edge["reason"] == "INVALID_QUOTE"
+                        else "NO_EDGE"), {"edge_diagnostics": edge}
             if not edge["approved"]:
                 LOG.warning(
-                    "User-armed AutoTrade proceeding with final %s despite %s "
-                    "estimated net edge; model EV is not a safety veto",
-                    direction, edge["reason"],
+                    "Legacy fake AutoTrade proceeding despite %s; "
+                    "production uses mandatory fresh-price gate",
+                    edge["reason"],
                 )
         else:
             quote_evidence = sanitize_quote_snapshot(
@@ -309,8 +330,13 @@ class ArmedAutoTrader:
         try:
             # Armed final orders use the fresh, budget-capped AutoTrade path.
             # Legacy test doubles without place_auto retain their fake place.
+            value_place = getattr(self.manual, "place_auto_value", None)
             auto_place = getattr(self.manual, "place_auto", None)
-            if callable(auto_place):
+            if action == "BUY" and callable(value_place):
+                result = value_place(
+                    preview["preview_id"], ticker, confidence=confidence,
+                )
+            elif callable(auto_place):
                 result = auto_place(preview["preview_id"],ticker)
             else:
                 result = self.manual.place(preview["preview_id"],ticker)
@@ -472,6 +498,12 @@ class ArmedAutoTrader:
         if status == "NOT_SUBMITTED":
             self._finish("NOT_SUBMITTED",
                          "Final BUY not sent: " + result.get("reason", "pre-submit check failed"))
+            return
+        if status == "NO_EDGE":
+            # Do not journal or submit a poor-value quote. Watch for a
+            # better price only within the original 30-second final window.
+            self._set(state="WAITING", final_retry_after_ns=now + RETRY_DELAY_NS,
+                      message="Waiting for profitable final quote; no order sent")
             return
         if status == "NO_QUOTE":
             if not armed.get("continuous"):
