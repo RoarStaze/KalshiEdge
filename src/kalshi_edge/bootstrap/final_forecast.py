@@ -27,6 +27,10 @@ NS = 1_000_000_000
 FINAL_CHECKPOINT_SECONDS = 480
 LEGACY_FINAL_CHECKPOINT_SECONDS = 240
 MINIMUM_FINAL_CONFIDENCE = 0.69
+# Heuristic live veto: <= 0.20 expected remaining BRTI standard deviations
+# from strike. NOT a calibrated coin-flip probability; validate prospectively.
+COIN_FLIP_MAX_RISK_Z = 0.20
+COIN_FLIP_POLICY = "brti-near-strike-z0.20-v1"
 MAX_CHECKPOINT_LATENESS_NS = 2 * NS
 _SAFE_TICKER = re.compile(r"^[A-Z0-9-]+$")
 
@@ -53,8 +57,28 @@ class FinalForecastRecord(BaseModel):
     # Captured at the immutable model checkpoint, not reconstructed after settlement.
     kalshi_yes_bid: float | None = Field(default=None, ge=0, le=1)
     kalshi_yes_ask: float | None = Field(default=None, ge=0, le=1)
+    # Immutable, checkpoint-time causal risk assessment for auditing all SKIPs.
+    # Legacy records omit these fields, so defaults preserve their meaning.
+    coin_flip_risk_z: float | None = Field(default=None, ge=0)
+    coin_flip_assessment: Literal["HIGH", "LOW", "UNAVAILABLE"] = "UNAVAILABLE"
+    coin_flip_policy: str | None = None
     model_hash: str | None = None
     model_version: str | None = None
+
+
+def _coin_flip_assessment(prediction: "LivePredictionRecord") -> tuple[str, float | None]:
+    """Classify normalized BRTI strike distance using checkpoint-time data only.
+
+    The live predictor supplies z = abs(log(BRTI / strike)) /
+    (trailing_BRTI_sigma * sqrt(remaining_effective_seconds)). A small z
+    indicates a near-strike round. It is a heuristic, NOT a calibrated
+    chance that the eventual market outcome is a coin flip.
+    """
+    z = prediction.brti_shadow_risk_ratio
+    if type(z) not in (float, int) or not math.isfinite(z) or z < 0:
+        return "UNAVAILABLE", None
+    z = float(z)
+    return ("HIGH" if z <= COIN_FLIP_MAX_RISK_Z else "LOW"), z
 
 
 class FinalForecastGate:
@@ -117,11 +141,15 @@ class FinalForecastGate:
             return FinalForecastRecord(**base, forecast="SKIP", reason="INCOMPLETE_MODEL_OUTPUT")
 
         directional_probability = p_yes if side == "ABOVE" else p_no
+        assessment, risk_z = _coin_flip_assessment(prediction)
         fields = dict(
             confidence=confidence,
             directional_probability=directional_probability,
             p_yes=p_yes,
             p_no=p_no,
+            coin_flip_risk_z=risk_z,
+            coin_flip_assessment=assessment,
+            coin_flip_policy=COIN_FLIP_POLICY,
         )
         bid, ask = prediction.kalshi_yes_bid, prediction.kalshi_yes_ask
         # A valid synchronized two-sided quote is required for independent
@@ -134,6 +162,15 @@ class FinalForecastGate:
         if confidence < MINIMUM_FINAL_CONFIDENCE:
             return FinalForecastRecord(
                 **base, **fields, forecast="SKIP", reason="CONFIDENCE_BELOW_69_PERCENT",
+            )
+        # Active 480s gate: a high-confidence prediction can still be near
+        # the strike relative to realized BRTI volatility. Fail safe to SKIP
+        # rather than submitting a directional AutoTrade order in this case.
+        # Missing risk history does not manufacture a coin-flip label or
+        # additional SKIPs; the incumbent confidence gate remains authoritative.
+        if assessment == "HIGH":
+            return FinalForecastRecord(
+                **base, **fields, forecast="SKIP", reason="COIN_FLIP_RISK_HIGH",
             )
 
         return FinalForecastRecord(**base, **fields, forecast=side)
