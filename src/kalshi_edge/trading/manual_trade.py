@@ -424,7 +424,13 @@ class ManualTrader:
         """
         return self._place(preview_id, current_ticker, auto_reprice_buy=True)
 
-    def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool):
+    def place_auto_value(self, preview_id, current_ticker, *, confidence: float):
+        """Auto-only final order: revalidate modeled net edge against fresh executable price."""
+        return self._place(preview_id, current_ticker,
+                           auto_reprice_buy=True, edge_confidence=confidence)
+
+    def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool,
+               edge_confidence: float | None = None):
         # Atomically consume BEFORE doing anything that may submit an order.
         with self._lock:
             data = self._pending.pop(preview_id, None)
@@ -463,6 +469,17 @@ class ManualTrader:
                         or estimate <= 0 or budget <= 0
                         or count * unit + fee > budget or estimate > budget):
                     raise TradingError("Fresh quote exceeds AutoTrade dollar budget")
+                if edge_confidence is not None:
+                    # The original expected-value decision NEVER authorizes
+                    # buying an adversarially repriced contract.
+                    from .auto_edge import assess_auto_buy_edge, MAX_BANKROLL_FRACTION
+                    if unit > Decimal(old["unit_price"]):
+                        raise TradingError("Fresh AutoTrade price worsened after preview")
+                    if estimate > Decimal(fresh["available_balance"]) * MAX_BANKROLL_FRACTION:
+                        raise TradingError("Fresh AutoTrade quote exceeds 5% cash risk ceiling")
+                    latest_edge = assess_auto_buy_edge(fresh, edge_confidence)
+                    if not latest_edge["approved"]:
+                        raise TradingError("Fresh AutoTrade quote has insufficient expected value")
                 working = fresh
             else:
                 if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:
