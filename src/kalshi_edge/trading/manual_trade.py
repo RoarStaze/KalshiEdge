@@ -144,6 +144,39 @@ class KalshiOrderClient:
         }
         return self._request("POST", "/portfolio/events/orders", body=payload)
 
+    def send_resting_order(self, request: dict, *, expiration_time: int):
+        """Post-only maker order with a hard exchange-side expiry."""
+        if set(request) != {"ticker", "client_order_id", "side", "count", "price"}:
+            raise TradingError("Invalid resting order fields")
+        if (not str(request["ticker"]).startswith("KXBTC15M-")
+                or request["side"] not in ("bid", "ask")
+                or not isinstance(expiration_time, int)
+                or not int(time.time()) + 2 <= expiration_time <= int(time.time()) + 30):
+            raise TradingError("Invalid or unbounded resting order")
+        payload = {
+            **request, "time_in_force": "good_till_canceled",
+            "expiration_time": expiration_time, "post_only": True,
+            "self_trade_prevention_type": "taker_at_cross",
+            "cancel_order_on_pause": True, "reduce_only": False,
+            "exchange_index": -1,
+        }
+        return self._request("POST", "/portfolio/events/orders", body=payload)
+
+    def cancel_resting_order(self, order_id: str, *, market_ticker: str):
+        try:
+            safe_id = str(uuid.UUID(order_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise TradingError("Invalid resting order ID") from exc
+        if (not isinstance(market_ticker, str)
+                or not market_ticker.startswith("KXBTC15M-")
+                or not market_ticker.replace("-", "").isalnum()):
+            raise TradingError("Invalid maker cancellation market")
+        # V2 writes with exchange_index=-1 need the ticker for shard routing.
+        return self._request(
+            "DELETE", f"/portfolio/events/orders/{safe_id}",
+            params={"market_ticker": market_ticker, "exchange_index": -1},
+        )
+
     def close(self):
         self.http.close()
 
@@ -424,7 +457,99 @@ class ManualTrader:
         """
         return self._place(preview_id, current_ticker, auto_reprice_buy=True)
 
-    def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool):
+    def place_auto_value(self, preview_id, current_ticker, *,
+                         confidence: float, prefer_maker: bool = False):
+        """Profit-gated AutoTrade: bounded maker first, verified IOC if no passive quote."""
+        if prefer_maker and callable(getattr(self.client, "send_resting_order", None)):
+            return self._place_auto_maker(preview_id, current_ticker, confidence)
+        return self._place(preview_id, current_ticker,
+                           auto_reprice_buy=True, edge_confidence=confidence)
+
+    def _place_auto_maker(self, preview_id, current_ticker, confidence):
+        """At most ONE maker POST. Remote expiry caps outstanding order lifetime.
+
+        If a maker quote cannot be constructed before any POST, fall back
+        to the same fresh-quote-checked IOC path. After an accepted maker POST
+        an IOC is forbidden until zero fill and cancellation are verified.
+        """
+        from .maker_entry import build_maker_plan, finalize_resting_order
+        with self._lock:
+            data = self._pending.get(preview_id)
+        if (data is None or time.monotonic() - data["at"] > QUOTE_LIFETIME_SECONDS
+                or current_ticker != data["ticker"]):
+            raise OrderNotSubmitted("AutoTrade maker preview expired or market changed")
+        if data["action"] != "BUY" or data["units"] != "DOLLARS":
+            raise OrderNotSubmitted("Maker-first AutoTrade requires dollar BUY")
+        try:
+            fresh = self._prepare(data["ticker"], "BUY", data["outcome"],
+                                  "DOLLARS", data["amount"], fresh_account=True)
+            old = data["plan"]
+            if (fresh.get("ticker") != data["ticker"]
+                    or fresh.get("outcome") != data["outcome"]
+                    or fresh.get("side") != old.get("side")
+                    or Decimal(fresh["unit_price"]) > Decimal(old["unit_price"])):
+                raise TradingError("Fresh maker quote moved against AutoTrade")
+            market, book = self.market_client.quote(data["ticker"])
+            if market.get("market", {}).get("ticker") != data["ticker"]:
+                raise TradingError("Maker market changed")
+            plan = build_maker_plan(
+                book, data["outcome"], count=fresh["count"],
+                requested=data["amount"], balance=fresh["available_balance"],
+                confidence=confidence, ask_price=fresh["unit_price"],
+            )
+        except Exception as exc:
+            if isinstance(exc, httpx.HTTPStatusError):
+                reason = f"Maker pre-submit quote HTTP {exc.response.status_code}"
+            elif isinstance(exc, (TradingError, ValueError, KeyError)):
+                reason = str(exc)[:160]
+            else:
+                reason = f"Maker pre-submit validation ({type(exc).__name__})"
+            raise OrderNotSubmitted(reason) from exc
+        if plan is None:
+            # Nothing posted yet: the ordinary IOC path STILL applies its
+            # own fresh quote, budget and positive net-EV validations.
+            return self._place(preview_id, current_ticker,
+                               auto_reprice_buy=True, edge_confidence=confidence)
+        # Consume the held preview atomically BEFORE any exchange POST.
+        with self._lock:
+            popped = self._pending.pop(preview_id, None)
+        if popped is not data or time.monotonic() - data["at"] > QUOTE_LIFETIME_SECONDS:
+            raise OrderNotSubmitted("Maker quote expired before submission")
+        request = {
+            "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
+            "side": plan["side"], "count": plan["count"], "price": plan["price"],
+        }
+        expiry = int(time.time()) + 18
+        try:
+            try:
+                response = self.client.send_resting_order(
+                    request, expiration_time=expiry,
+                )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in (400, 401, 403, 404, 422):
+                    raise OrderNotSubmitted(
+                        f"Kalshi rejected maker order (HTTP {exc.response.status_code})"
+                    ) from exc
+                raise
+        finally:
+            with self._account_lock:
+                self._account_cache = None
+        order_id = response.get("order_id")
+        if not isinstance(order_id, str) or not order_id:
+            raise TradingError("Maker order response lacks ID; outcome unknown")
+        result = finalize_resting_order(
+            self.client, order_id, data["ticker"], Decimal(plan["count"]),
+            poll_seconds=14,
+        )
+        return {
+            **result, "ticker": data["ticker"], "action": "BUY",
+            "outcome": data["outcome"], "requested_count": plan["count"],
+            "estimated_per_share": plan["unit_price"],
+            "execution_style": "MAKER_POST_ONLY",
+        }
+
+    def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool,
+               edge_confidence: float | None = None):
         # Atomically consume BEFORE doing anything that may submit an order.
         with self._lock:
             data = self._pending.pop(preview_id, None)
@@ -463,6 +588,17 @@ class ManualTrader:
                         or estimate <= 0 or budget <= 0
                         or count * unit + fee > budget or estimate > budget):
                     raise TradingError("Fresh quote exceeds AutoTrade dollar budget")
+                if edge_confidence is not None:
+                    # The original expected-value decision NEVER authorizes
+                    # buying an adversarially repriced contract.
+                    from .auto_edge import assess_auto_buy_edge, MAX_BANKROLL_FRACTION
+                    if unit > Decimal(old["unit_price"]):
+                        raise TradingError("Fresh AutoTrade price worsened after preview")
+                    if estimate > Decimal(fresh["available_balance"]) * MAX_BANKROLL_FRACTION:
+                        raise TradingError("Fresh AutoTrade quote exceeds 5% cash risk ceiling")
+                    latest_edge = assess_auto_buy_edge(fresh, edge_confidence)
+                    if not latest_edge["approved"]:
+                        raise TradingError("Fresh AutoTrade quote has insufficient expected value")
                 working = fresh
             else:
                 if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:

@@ -61,7 +61,7 @@ def test_require_significant_edge_relative_to_spend():
     # 2% of debit is more demanding than half a cent for large orders.
     decision = assess_auto_buy_edge(quote("0.8500", "10.00", "0.0500", "8.5500"), 0.80)
     assert decision["approved"] is False
-    assert Decimal(decision["minimum_required_dollars"]) == Decimal("0.171000")
+    assert Decimal(decision["minimum_required_dollars"]) == Decimal("0.300000")
 
 
 def test_expensive_valid_quote_does_not_veto_explicit_final_autotrade(tmp_path):

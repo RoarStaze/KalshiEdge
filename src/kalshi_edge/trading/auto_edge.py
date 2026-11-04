@@ -10,12 +10,15 @@ a minimum expected-value margin address modest model/fee uncertainty.
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
 
 WIN_PROBABILITY_HAIRCUT = Decimal("0.03")
 MIN_NET_EXPECTED_DOLLARS = Decimal("0.005")
 MIN_EDGE_ON_SPEND = Decimal("0.02")
+MIN_EDGE_PER_CONTRACT = Decimal("0.03")
+MAX_BANKROLL_FRACTION = Decimal("0.05")
+KELLY_FRACTION = Decimal("0.25")
 QUOTE_ROUNDING_TOLERANCE = Decimal("0.0001")
 
 
@@ -68,7 +71,8 @@ def assess_auto_buy_edge(preview: dict, confidence: float) -> dict[str, object]:
     )
     expected_net = conservative_win_probability * count - conservative_debit
     minimum = max(MIN_NET_EXPECTED_DOLLARS,
-                  MIN_EDGE_ON_SPEND * conservative_debit)
+                  MIN_EDGE_ON_SPEND * conservative_debit,
+                  MIN_EDGE_PER_CONTRACT * count)
     approved = expected_net >= minimum
     reason = ("APPROVED" if approved else
               "NON_POSITIVE_EDGE" if expected_net <= 0 else "INSUFFICIENT_EDGE")
@@ -81,3 +85,42 @@ def assess_auto_buy_edge(preview: dict, confidence: float) -> dict[str, object]:
         "minimum_required_dollars": format(minimum, ".6f"),
         "fee_inclusive_debit_dollars": format(conservative_debit, ".6f"),
     }
+
+
+def suggest_auto_stake(preview: dict, confidence: float, requested_dollars: str) -> Decimal | None:
+    """Quarter-Kelly sizing with 5% cash exposure cap and user-specified ceiling.
+
+    Predictions are not proven calibrated: this is deliberately a restrictive
+    upper bound, never an instruction to increase beyond a user's arm amount.
+    Returns None on missing live account data or nonpositive conservative EV.
+    """
+    if not isinstance(preview, dict):
+        return None
+    try:
+        p = _number(confidence)
+        if not Decimal("0") <= p <= Decimal("1"):
+            return None
+        cash = _number(preview.get("available_balance"))
+        requested = _number(requested_dollars)
+        count = _number(preview.get("count"))
+        price = _number(preview.get("unit_price"))
+        fees = _number(preview.get("fee_estimate"))
+        debit = _number(preview.get("amount_estimate"))
+        if (cash <= 0 or requested <= 0 or count <= 0
+                or not Decimal("0") < price < Decimal("1")
+                or fees < 0 or debit <= 0
+                or debit + QUOTE_ROUNDING_TOLERANCE < count * price + fees):
+            return None
+        unit_cost = max(debit, count * price + fees) / count
+        if unit_cost >= 1:
+            return None
+        conservative_p = max(Decimal("0"), (1 + p) / 2 - WIN_PROBABILITY_HAIRCUT)
+        if conservative_p <= unit_cost:
+            return None
+        full_kelly = (conservative_p - unit_cost) / (1 - unit_cost)
+        risk_fraction = min(MAX_BANKROLL_FRACTION, full_kelly * KELLY_FRACTION)
+        amount = min(requested, cash * risk_fraction)
+        amount = amount.quantize(Decimal("0.01"), rounding=ROUND_FLOOR)
+        return amount if amount >= Decimal("0.01") else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
