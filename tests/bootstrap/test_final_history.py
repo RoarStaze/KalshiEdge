@@ -243,3 +243,30 @@ def test_localhost_dashboard_and_json_api(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+def test_history_preserves_active_coinflip_veto_for_future_accuracy_audits(tmp_path: Path):
+    final = FinalForecastRecord(
+        market_ticker=TICKER,
+        strike=81043.29,
+        scheduled_ts_ns=CLOSE - 480 * NS,
+        checkpoint_seconds=480,
+        prediction_ts_ns=CLOSE - 480 * NS,
+        seconds_remaining=480.0,
+        forecast="SKIP",
+        reason="COIN_FLIP_RISK_HIGH",
+        confidence=0.94,
+        directional_probability=0.97,
+        p_yes=0.97,
+        p_no=0.03,
+        coin_flip_assessment="HIGH",
+        coin_flip_risk_z=0.12,
+        coin_flip_policy="brti-near-strike-z0.20-v1",
+    )
+    assert FinalForecastWriter(tmp_path).save(final, market_close_ts_ns=CLOSE)
+    row = read_final_history(tmp_path)["forecasts"][0]
+    assert row["forecast"] == "SKIP"
+    assert row["reason"] == "COIN_FLIP_RISK_HIGH"
+    assert row["coin_flip_assessment"] == "HIGH"
+    assert row["coin_flip_risk_z"] == pytest.approx(0.12)
+    assert row["coin_flip_policy"] == "brti-near-strike-z0.20-v1"
