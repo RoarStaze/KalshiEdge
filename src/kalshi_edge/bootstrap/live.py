@@ -673,6 +673,7 @@ def persist_prediction_tick(
 async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSettings) -> None:
     from .frozen_specialist_480 import FILENAME, load_frozen_specialist
     from .shadow_live_480 import Shadow480Writer, capture_research_shadow
+    from .forward_feature_evidence_480 import Forward480FeatureWriter, capture_forward_480_feature
 
     bundle, pipeline = load_default_model(bootstrap.bootstrap_dir)
     state = LiveFeatureState()
@@ -680,6 +681,7 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     writer = PredictionJsonlWriter(bootstrap.bootstrap_dir)
     final_gate = FinalForecastGate()
     final_writer = FinalForecastWriter(bootstrap.bootstrap_dir)
+    forward_feature_writer = Forward480FeatureWriter(bootstrap.bootstrap_dir)
     # This optional local research artifact is NEVER the promoted predictor.
     shadow_model = None
     shadow_writer = None
@@ -745,6 +747,22 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
                 except Exception as exc:
                     print(
                         f"RESEARCH 480S SHADOW FAILED: {type(exc).__name__}",
+                        flush=True,
+                    )
+            # Append immutable, LABEL-FREE causal feature evidence only AFTER
+            # the authoritative final decision is saved. A failure cannot
+            # change the final decision, live model or any AutoTrade outcome.
+            if saved_path is not None:
+                try:
+                    captured = capture_forward_480_feature(
+                        state=state, prediction=prediction, final=final,
+                        forecast_file=saved_path, writer=forward_feature_writer,
+                    )
+                    if captured is not None:
+                        print(f"RESEARCH 480S FEATURE SNAPSHOT: {captured}", flush=True)
+                except Exception as exc:
+                    print(
+                        f"RESEARCH 480S FEATURE SNAPSHOT FAILED: {type(exc).__name__}",
                         flush=True,
                     )
             sleep_seconds = max(0.001, 1.0 - ((time.time_ns() - now_ns) / NS))
