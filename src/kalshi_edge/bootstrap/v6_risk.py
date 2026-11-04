@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Causal BRTI strike-distance risk feature for V6 shadow research.
+"""Causal BRTI strike-distance risk used by final coin-flip gate and V6 shadow.
 
-Diagnostic feature, not a probability or a trade signal. All observations
-used must be available by the requested prediction timestamp.
+This normalized-distance feature is NOT a calibrated probability or trade
+signal. All observations must be available by the prediction timestamp.
 """
 
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ def compute_brti_strike_risk(
     strike: float,
     seconds_remaining: float = 240.0,
 ) -> BrtiStrikeRisk | None:
-    """Return a pre-checkpoint volatility-adjusted strike distance, if supported.
+    """Return a causal volatility-adjusted strike distance, if supported.
 
     Uses a 120s trailing window. Adjacent samples require 0.5-5.0s spacing;
     at least 31 points and 60s of usable pairs are required. Newer observations
