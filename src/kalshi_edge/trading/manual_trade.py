@@ -412,6 +412,19 @@ class ManualTrader:
                 "units": units, "input_amount": str(amount), **plan}
 
     def place(self, preview_id, current_ticker):
+        """Strict 1-click manual submit: never worsen the accepted preview."""
+        return self._place(preview_id, current_ticker, auto_reprice_buy=False)
+
+    def place_auto(self, preview_id, current_ticker):
+        """Armed final-only dollar BUY: submit at a fresh, budgeted IOC limit.
+
+        Unlike manual one-click orders, AutoTrade has permission to use the
+        contemporaneous executable book even when the preview price worsens.
+        A preview is still consumed once and at most one signed POST is sent.
+        """
+        return self._place(preview_id, current_ticker, auto_reprice_buy=True)
+
+    def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool):
         # Atomically consume BEFORE doing anything that may submit an order.
         with self._lock:
             data = self._pending.pop(preview_id, None)
@@ -419,20 +432,47 @@ class ManualTrader:
             raise OrderNotSubmitted("Quote expired; refresh and click again")
         if current_ticker != data["ticker"]:
             raise OrderNotSubmitted("Market changed; refresh quote")
+        if auto_reprice_buy and (
+            data["action"] != "BUY" or data["units"] != "DOLLARS"
+            or data.get("sell_all")
+        ):
+            raise OrderNotSubmitted("AutoTrade repricing requires a dollar BUY")
         old = data["plan"]
+        working = old
         # All checks in this block happen BEFORE creating/sending the order.
         # A failure here cannot have generated a Kalshi order.
         try:
             fresh = self._prepare(data["ticker"], data["action"], data["outcome"],
                                   data["units"], data["amount"], fresh_account=True)
-            if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:
-                raise TradingError("Position changed; refresh sell quote")
-            if fresh["side"] != old["side"] or Decimal(fresh["count"]) < Decimal(old["count"]):
-                raise TradingError("Position, balance or liquidity changed; quote again")
-            if data["action"] == "BUY" and Decimal(fresh["unit_price"]) > Decimal(old["unit_price"]):
-                raise TradingError("Price moved against you; quote again")
-            if data["action"] == "SELL" and Decimal(fresh["unit_price"]) < Decimal(old["unit_price"]):
-                raise TradingError("Sell price moved against you; quote again")
+            if auto_reprice_buy:
+                # Re-size from the just-fetched balance, market and orderbook.
+                # Never send the stale preview's count or limit price.
+                if (fresh.get("ticker") != data["ticker"]
+                        or fresh.get("action") != "BUY"
+                        or fresh.get("outcome") != data["outcome"]
+                        or fresh["side"] != old["side"]):
+                    raise TradingError("AutoTrade refreshed quote identity changed")
+                count = Decimal(fresh["count"])
+                unit = Decimal(fresh["unit_price"])
+                fee = Decimal(fresh["fee_estimate"])
+                estimate = Decimal(fresh["amount_estimate"])
+                budget = Decimal(data["amount"])
+                if (not all(value.is_finite() for value in
+                            (count, unit, fee, estimate, budget))
+                        or count <= 0 or not 0 < unit < 1 or fee < 0
+                        or estimate <= 0 or budget <= 0
+                        or count * unit + fee > budget or estimate > budget):
+                    raise TradingError("Fresh quote exceeds AutoTrade dollar budget")
+                working = fresh
+            else:
+                if data.get("sell_all") and fresh["position_yes"] != old["position_yes"]:
+                    raise TradingError("Position changed; refresh sell quote")
+                if fresh["side"] != old["side"] or Decimal(fresh["count"]) < Decimal(old["count"]):
+                    raise TradingError("Position, balance or liquidity changed; quote again")
+                if data["action"] == "BUY" and Decimal(fresh["unit_price"]) > Decimal(old["unit_price"]):
+                    raise TradingError("Price moved against you; quote again")
+                if data["action"] == "SELL" and Decimal(fresh["unit_price"]) < Decimal(old["unit_price"]):
+                    raise TradingError("Sell price moved against you; quote again")
         except Exception as exc:
             if isinstance(exc, httpx.HTTPStatusError):
                 reason = f"Pre-submit account/quote read HTTP {exc.response.status_code}"
@@ -444,7 +484,7 @@ class ManualTrader:
         # A short-lived, explicitly clicked action makes ONE signed POST.
         order = {
             "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
-            "side": old["side"], "price": old["price"], "count": old["count"],
+            "side": working["side"], "price": working["price"], "count": working["count"],
             "reduce_only": data["action"] == "SELL",
         }
         # The exchange enforces IOC; no unfilled shares remain resting.
@@ -468,7 +508,7 @@ class ManualTrader:
         if not isinstance(order_id, str) or not order_id:
             raise TradingError("Exchange response ambiguous; check Kalshi orders before retry")
         fills = decimal(result.get("fill_count"))
-        if fills < 0 or fills > Decimal(old["count"]):
+        if fills < 0 or fills > Decimal(working["count"]):
             raise TradingError("Exchange-reported fill quantity invalid")
         average = result.get("average_fill_price")
         fees = result.get("average_fee_paid")
@@ -492,7 +532,7 @@ class ManualTrader:
             else:
                 actual_proceeds = _money(principal - fee_paid) if fee_paid is not None else None
         return {
-            "status": "FILLED" if fills == Decimal(old["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
+            "status": "FILLED" if fills == Decimal(working["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
             "order_id": order_id, "ticker": data["ticker"],
             "action": data["action"], "outcome": data["outcome"],
             "fill_count": _shares(fills),
@@ -502,8 +542,8 @@ class ManualTrader:
             "actual_fees": actual_fees,
             "actual_cost": actual_cost, "actual_proceeds": actual_proceeds,
             "max_payout": max_payout,
-            "requested_count": old["count"],
-            "estimated_per_share": old["unit_price"],
+            "requested_count": working["count"],
+            "estimated_per_share": working["unit_price"],
         }
 
     def close(self):
