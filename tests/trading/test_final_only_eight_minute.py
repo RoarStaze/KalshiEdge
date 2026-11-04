@@ -134,3 +134,36 @@ def test_no_reversal_or_early_stage_code_is_reachable_by_final_only_engine():
     assert "EARLY_BUY" not in source
     assert "_early_signal(" not in source
     assert '"FINAL_BUY"' in source
+
+
+def test_armed_autotrade_never_buys_after_live_coinflip_final_skip(tmp_path):
+    market = LiveMarket(
+        ticker=TICKER, strike=70000.0, open_ts_ns=OPEN, close_ts_ns=CLOSE,
+    )
+    suspicious = prediction(DUE).model_copy(update={
+        "p_yes": 0.96, "p_no": 0.04,
+        "confidence": 0.92, "brti_shadow_risk_ratio": 0.10,
+    })
+    final = FinalForecastGate().evaluate(market, now_ns=DUE, prediction=suspicious)
+    assert final.forecast == "SKIP"
+    assert final.reason == "COIN_FLIP_RISK_HIGH"
+
+    clock = [OPEN]
+    feed = {
+        "market_ticker": TICKER,
+        "market_close_ts_ns": CLOSE,
+        "checkpoint_ts_ns": DUE,
+        "status": "LIVE",
+        "final_forecast": None,
+    }
+    exchange = FakeExchange()
+    trader = ArmedAutoTrader(
+        exchange, lambda: feed, now_ns=lambda: clock[0],
+        history_path=tmp_path / "coinflip_autotrade.sqlite3",
+    )
+    trader.arm("0.25", start_worker=False)
+    clock[0] = DUE + NS
+    feed["final_forecast"] = final.model_dump(mode="json")
+    trader.tick()
+    assert exchange.orders == []
+    assert exchange.previews == []

@@ -34,6 +34,9 @@ def test_trade_route_retains_live_price_hero_without_autotrader(tmp_path):
             assert ".forecast .round-price-hero" in response.text
             assert response.text.count('id="autotrader"') == 0
             assert 'id="hero-current"' in response.text
+            assert 'id="detail-coinflip-risk"' in response.text
+            assert 'id="detail-coinflip-z"' in response.text
+            assert 'text("detail-coinflip-risk",' in response.text
             assert 'id="hero-strike"' in response.text
             assert 'id="hero-countdown"' in response.text
             assert "renderRoundPriceHero(data);" in response.text

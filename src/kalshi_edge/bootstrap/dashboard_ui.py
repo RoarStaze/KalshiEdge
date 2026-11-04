@@ -159,7 +159,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <div class="right"><div class="time-label" id="lock-time-label">Forecast locks at</div><div class="time-value" id="lock-time">—</div></div>
   </div>
   <div class="record-note"><div class="record-title" id="record-title">Waiting to save the forecast</div>
-   <div class="record-details" id="record-description">At the scheduled checkpoint, ABOVE/BELOW is locked only if model inputs are healthy and confidence meets 69%. Otherwise the decision is SKIP.</div>
+   <div class="record-details" id="record-description">At the eight-minute checkpoint, low confidence, unhealthy inputs, or high near-strike coin-flip risk result in SKIP.</div>
   </div>
   <details id="record-details"><summary>Forecast record details</summary><div class="detail-grid">
    <span>Model</span><strong id="detail-model">—</strong>
@@ -167,6 +167,8 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <span>Model hash</span><strong id="detail-hash">—</strong>
    <span>Record status</span><strong id="detail-status">—</strong>
    <span>Reason</span><strong id="detail-reason">—</strong>
+   <span>Coin-flip risk</span><strong id="detail-coinflip-risk">—</strong>
+   <span>Distance from strike</span><strong id="detail-coinflip-z">—</strong>
   </div></details>
  </article>
  <div class="context">
@@ -283,12 +285,12 @@ function renderLive(data){
  const side=locked?f.forecast:p?.status==="OK"?p.predicted_side:null;
  const display=side==="ABOVE"?"UP":side==="BELOW"?"DOWN":side==="SKIP"?"SKIP":current?"WAITING":"WAITING";
  const direction=el("direction");direction.className="direction "+(display==="UP"?"up":display==="DOWN"?"down":display==="SKIP"?"skip":"waiting");direction.textContent=display;
- text("direction-caption",locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires at least 69% confidence at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
+ text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires at least 69% confidence at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
  const strength=locked?f.confidence:p?.confidence;
  text("confidence",Number.isFinite(strength)?Math.round(strength*100)+"%":"—");
  el("confidence-fill").style.width=Number.isFinite(strength)?Math.min(100,Math.max(0,strength*100))+"%":"0%";
  text("confidence-sub",locked?"Locked with this forecast":"Live strength · can change");
- text("confidence-note",locked?"Saved "+display+" call has model probability "+pct(f.directional_probability)+". Model confidence is not historical accuracy.":"Model confidence measures the strength of the estimated direction. At 480 seconds before close, values below 69% produce SKIP.");
+ text("confidence-note",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Model confidence cannot override the near-strike risk veto. This is a heuristic, not a calibrated coin-flip probability.":locked?"Saved "+display+" call has model probability "+pct(f.directional_probability)+". Model confidence is not historical accuracy.":"Model confidence measures the strength of the estimated direction. At 480 seconds before close, values below 69% produce SKIP.");
  text("record-title",locked?"Forecast saved":"Waiting to save the forecast");
  text("record-description",locked?"The final decision is immutable. Official settlement verification will score ABOVE or BELOW; SKIP is excluded from accuracy.":"The model locks once at the scheduled 480-second checkpoint. Low-confidence, late, or unhealthy inputs produce SKIP.");
  text("detail-model",f?.model_version||p?.model_version);
@@ -296,6 +298,8 @@ function renderLive(data){
  text("detail-hash",f?.model_hash||p?.model_hash||"—");
  text("detail-status",locked?"IMMUTABLE":p?.status||"WAITING");
  text("detail-reason",locked?f.reason||"OK":p?.reason||"—");
+ text("detail-coinflip-risk",locked?(f.coin_flip_assessment||"UNAVAILABLE"):"AWAITING LOCK");
+ text("detail-coinflip-z",locked&&Number.isFinite(f.coin_flip_risk_z)?f.coin_flip_risk_z.toFixed(2)+"σ":"—");
 }
 function cell(tr,value){const td=document.createElement("td");if(value instanceof Node)td.appendChild(value);else td.textContent=value==null?"—":String(value);tr.appendChild(td)}
 function renderHistory(data){
