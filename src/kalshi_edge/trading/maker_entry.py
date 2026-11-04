@@ -135,7 +135,7 @@ def finalize_resting_order(
         if remaining <= 0:
             break
         sleep(min(1.0, remaining))
-    client.cancel_resting_order(safe_id)
+    client.cancel_resting_order(safe_id, market_ticker=ticker)
     final = _terminal_order(client.get(path), safe_id, ticker, count)
     if final is None:
         raise ValueError("Maker cancellation unconfirmed; do not retry")
