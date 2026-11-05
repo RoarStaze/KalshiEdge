@@ -19,6 +19,7 @@ from typing import Callable
 from .autotrade_history import AutoTradeHistory
 from .autotrade_pnl import enrich_history
 from .autotrade_scorecard import summarize_autotrade_performance
+from .profit_intelligence import build_profit_intelligence
 from .auto_edge import assess_auto_buy_edge, suggest_auto_stake
 from .autotrade_execution_audit import sanitize_quote_snapshot
 from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted
@@ -54,6 +55,7 @@ class ArmedAutoTrader:
         self._used: set[str] = set()
         self._processed: set[str] = set()
         self.history_store = AutoTradeHistory(history_path) if history_path else None
+        self._profit_root = Path(history_path).parent.parent if history_path else None
         self._history_fetch_lock = threading.Lock()
         self._history_cache = None
 
@@ -61,9 +63,21 @@ class ArmedAutoTrader:
         with self._lock:
             return dict(self._state)
 
+    def _profit_report(self, entries: list[dict]) -> dict:
+        # Read-only official settlement evidence; never used to authorize a BUY.
+        forecasts = []
+        if self._profit_root is not None:
+            try:
+                from kalshi_edge.bootstrap.final_history import read_final_history
+                forecasts = read_final_history(self._profit_root)["forecasts"]
+            except Exception:
+                LOG.exception("Profit intelligence settlement evidence unavailable")
+        return build_profit_intelligence(forecasts, entries)
+
     def history(self) -> dict:
         if self.history_store is None:
-            return {"entries": [], "summary": summarize_autotrade_performance([])}
+            return {"entries": [], "summary": summarize_autotrade_performance([]),
+                    "profit_intelligence": self._profit_report([])}
         rows = self.history_store.recent()
         for row in rows:
             row["stages"] = self.history_store.recent_stages(row["ticker"])
@@ -81,13 +95,16 @@ class ArmedAutoTrader:
             if (cached and cached["fingerprint"] == fingerprint
                     and now - cached["at"] < 30):
                 entries = [dict(entry) for entry in cached["entries"]]
-                return {"entries": entries, "summary": summarize_autotrade_performance(entries)}
+                return {"entries": entries, "summary": summarize_autotrade_performance(entries),
+                        "profit_intelligence": cached["profit_intelligence"]}
             client = getattr(self.manual, "client", None)
             enriched = enrich_history(rows, client)
-            self._history_cache = {"fingerprint": fingerprint,
-                                   "at": time.monotonic(), "entries": enriched}
             entries = [dict(entry) for entry in enriched]
-            return {"entries": entries, "summary": summarize_autotrade_performance(entries)}
+            report = self._profit_report(entries)
+            self._history_cache = {"fingerprint": fingerprint, "at": time.monotonic(),
+                                   "entries": enriched, "profit_intelligence": report}
+            return {"entries": entries, "summary": summarize_autotrade_performance(entries),
+                    "profit_intelligence": report}
 
     def _attempted(self, ticker: str) -> bool:
         return ticker in self._used or bool(
@@ -153,6 +170,7 @@ class ArmedAutoTrader:
                 "outcome": None, "order_id": None, "trigger": None,
                 "final_attempts": 0, "final_retry_after_ns": 0,
                 "last_quote_reason": None, "last_result": None,
+                "latest_opportunity": None,
                 "message": ("Waiting for next BTC market" if skip
                             else "Armed — waiting for eight-minute final forecast"),
             }
@@ -267,7 +285,7 @@ class ArmedAutoTrader:
             # cheaper maker limit. Check its independently sized EV before
             # journaling, keeping malformed taker quotes fail-closed.
             if (value_first and stage == "FINAL_BUY"
-                    and not edge["approved"] and edge["reason"] != "INVALID_QUOTE"):
+                    and edge["reason"] != "INVALID_QUOTE"):
                 preflight = getattr(self.manual, "preview_auto_maker", None)
                 if callable(preflight):
                     try:
@@ -309,6 +327,17 @@ class ArmedAutoTrader:
             quote_evidence = sanitize_quote_snapshot(
                 evidence_preview, edge, preview_received_at_ns=preview_received_at_ns,
             )
+            if value_first:
+                route = ("MAKER_FIRST" if maker_approved else
+                         "TAKER_IOC" if edge["approved"] else "NO_TRADE")
+                self._set(latest_opportunity={
+                    "ticker": ticker, "route": route,
+                    "reason": edge.get("reason"),
+                    "expected_net_dollars": edge.get("expected_net_dollars"),
+                    "model_win_probability": edge.get("model_win_probability"),
+                    "quote_received_at_ns": preview_received_at_ns,
+                    "estimated_only": True,
+                })
             if edge["reason"] == "INVALID_QUOTE" or (value_first and not edge["approved"]):
                 if self.history_store is not None:
                     try:
@@ -361,7 +390,7 @@ class ArmedAutoTrader:
             if action == "BUY" and callable(value_place):
                 result = value_place(
                     preview["preview_id"], ticker, confidence=confidence,
-                    prefer_maker=(stage == "FINAL_BUY"),
+                    prefer_maker=(stage == "FINAL_BUY" and maker_approved),
                 )
             elif callable(auto_place):
                 result = auto_place(preview["preview_id"],ticker)
@@ -474,7 +503,7 @@ class ArmedAutoTrader:
                     checkpoint_ts_ns=new_checkpoint,
                     outcome=None, order_id=None, trigger=None,
                     final_attempts=0, final_retry_after_ns=0,
-                    last_quote_reason=None,
+                    last_quote_reason=None, latest_opportunity=None,
                     message=("Waiting for following BTC market" if skip
                              else "New market found — waiting for eight-minute final"),
                 )
