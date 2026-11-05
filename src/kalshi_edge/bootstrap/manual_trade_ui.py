@@ -267,7 +267,16 @@ SCRIPT = r"""
    UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry",
    REVIEW:"Reversal not confirmed · manual review required before further AUTO orders"
   };
-  shown("manual-auto-status",messages[autoCurrent.state]||"AutoTrade buys UP/DOWN only after the eight-minute final forecast locks, subject to quote and fee/edge checks.");
+  const opportunity=autoCurrent.latest_opportunity;
+  const route=opportunity&&opportunity.route;
+  const ev=opportunity&&opportunity.expected_net_dollars;
+  const quoteInfo=route?(
+   " · Latest pretrade quote: "+String(route).replaceAll("_"," ")+
+   (typeof ev==="string"?" · Modeled net EV $"+ev:"")+
+   " (estimate, not actual P/L)"
+  ):"";
+  shown("manual-auto-status",
+   (messages[autoCurrent.state]||"AutoTrade buys only after the eight-minute final forecast; live fee/edge checks apply.")+quoteInfo);
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
   if(selected)renderAutoPayout();
  }
@@ -343,6 +352,24 @@ SCRIPT = r"""
      (summary.is_complete_for_filled_markets?"All filled trades in this window verified":
       "Partial results: pending, unknown or unverified trades excluded");
     performance.append(title,figure,note);
+    const intelligence=result.profit_intelligence;
+    if(intelligence&&intelligence.forecast&&intelligence.execution){
+     const model=intelligence.forecast,execution=intelligence.execution;
+     const detail=document.createElement("div");
+     detail.className="mt-profit-insights";
+     const n=Number(model.settled_markets||0);
+     const brier=model.brier_score;
+     const quality=n>0&&typeof brier==="number"&&Number.isFinite(brier)
+      ?"480s model Brier "+brier.toFixed(4)+" on "+n+" verified markets (including SKIPs)"
+      :"480s calibration evidence not yet available";
+     const hourly=execution.net_per_observed_hour_dollars;
+     const rate=typeof hourly==="string"
+      ?" · Recent verified net/observed hour "+signedPnl(hourly)
+      :" · Hourly profit rate unavailable until fills/settlements reconcile over at least 1 hour";
+     detail.textContent="Profit Intelligence · "+quality+rate+
+      " · Model skill is not proof of executable profit";
+     performance.appendChild(detail);
+    }
    }else{performance.textContent="Verified net P/L unavailable";}
    autoHistoryRows=result.entries;
    renderAutoPayout();
