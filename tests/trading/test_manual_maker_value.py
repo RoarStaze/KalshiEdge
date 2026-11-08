@@ -20,8 +20,8 @@ def test_first_value_order_uses_expiring_post_only_when_passive_bid_is_available
             self.iocs.append(dict(order))
             return {"order_id": order_id, "fill_count": order["count"]}
         def get(self, path, *, params=None):
-            return {"order": {"order_id": order_id, "ticker": ticker,
-                              "status": "canceled", "fill_count_fp": "0.00"}}
+            return {"orders": [{"order_id": order_id, "ticker": ticker,
+                                "status": "canceled", "fill_count_fp": "0.00"}], "cursor": ""}
         def cancel_resting_order(self, order, *, market_ticker):
             return {"order_id": order}
     client = Client()

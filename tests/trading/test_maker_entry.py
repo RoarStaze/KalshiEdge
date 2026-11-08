@@ -42,8 +42,9 @@ def test_maker_only_retries_after_verified_zero_fill():
     class Exchange:
         cancelled = []
         def get(self, path, *, params=None):
-            return {"order": {"status": "canceled", "fill_count_fp": "0.00",
-                              "ticker": "KXBTC15M-TEST"}}
+            return {"orders": [{"order_id": "11111111-1111-4111-8111-111111111111",
+                                "status": "canceled", "fill_count_fp": "0.00",
+                                "ticker": "KXBTC15M-TEST"}], "cursor": ""}
         def cancel_resting_order(self, order_id, *, market_ticker):
             self.cancelled.append(order_id)
             return {"order_id": order_id}
@@ -61,8 +62,9 @@ def test_maker_only_retries_after_verified_zero_fill():
 def test_maker_unknown_order_state_never_assumed_zero_fill():
     class Exchange:
         def get(self, path, *, params=None):
-            return {"order": {"status": "resting", "fill_count_fp": "0.00",
-                              "ticker": "KXBTC15M-TEST"}}
+            return {"orders": [{"order_id": "11111111-1111-4111-8111-111111111111",
+                                "status": "resting", "fill_count_fp": "0.00",
+                                "ticker": "KXBTC15M-TEST"}], "cursor": ""}
         def cancel_resting_order(self, order_id, *, market_ticker):
             return {"order_id": order_id}
     try:

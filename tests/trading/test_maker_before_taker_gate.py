@@ -35,11 +35,11 @@ def _setup(tmp_path, yes_bid="0.7000"):
             self.iocs.append(dict(order))
             raise AssertionError("Should not submit an expensive taker order")
         def get(self, path, *, params=None):
-            return {"order": {
+            return {"orders": [{
                 "ticker": TICKER, "order_id": order_id,
                 "status": "executed",
                 "fill_count_fp": self.makers[-1]["count"],
-            }}
+            }], "cursor": ""}
         def cancel_resting_order(self, order, *, market_ticker):
             raise AssertionError("Fully executed maker should not be cancelled")
 
