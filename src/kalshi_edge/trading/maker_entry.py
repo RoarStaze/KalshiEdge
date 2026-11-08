@@ -140,6 +140,43 @@ def _terminal_order(
     }
 
 
+def _market_scoped_order(client, order_id: str, ticker: str) -> dict | None:
+    """Read an exact maker order from Kalshi's cross-shard market order list.
+
+    GET /portfolio/orders/{order_id} alone cannot identify the exchange shard
+    and can return 404 for BTC orders. GET /portfolio/orders?ticker=... omits
+    exchange_index deliberately: Kalshi documents that as all exchange shards.
+    Missing or unparseable evidence is never equivalent to a zero fill.
+    """
+    cursor = ""
+    for _ in range(8):
+        params = {"ticker": ticker, "limit": 1000}
+        if cursor:
+            params["cursor"] = cursor
+        payload = client.get("/portfolio/orders", params=params)
+        if not isinstance(payload, dict) or not isinstance(payload.get("orders"), list):
+            raise ValueError("Invalid maker order list; do not retry")
+        matches = []
+        for order in payload["orders"]:
+            if not isinstance(order, dict):
+                raise ValueError("Malformed maker order list; do not retry")
+            if order.get("order_id") == order_id:
+                if order.get("ticker") != ticker:
+                    raise ValueError("Maker order returned wrong market")
+                matches.append(order)
+        if len(matches) > 1:
+            raise ValueError("Duplicate maker order ID; do not retry")
+        if matches:
+            return {"order": matches[0]}
+        next_cursor = payload.get("cursor")
+        if not next_cursor:
+            return None
+        if not isinstance(next_cursor, str) or next_cursor == cursor:
+            raise ValueError("Invalid maker order pagination; do not retry")
+        cursor = next_cursor
+    raise ValueError("Maker order pagination incomplete; do not retry")
+
+
 def finalize_resting_order(
     client, order_id: str, ticker: str, count: Decimal, *,
     poll_seconds: float = 14,
@@ -153,10 +190,10 @@ def finalize_resting_order(
     safe_id = str(uuid.UUID(order_id))
     if count <= 0 or poll_seconds < 0 or poll_seconds > 20:
         raise ValueError("Invalid maker order verification")
-    path = f"/portfolio/orders/{safe_id}"
     deadline = time.monotonic() + poll_seconds
     while True:
-        final = _terminal_order(client.get(path), safe_id, ticker, count)
+        payload = _market_scoped_order(client, safe_id, ticker)
+        final = _terminal_order(payload, safe_id, ticker, count) if payload else None
         if final is not None:
             return final
         remaining = deadline - time.monotonic()
@@ -164,7 +201,8 @@ def finalize_resting_order(
             break
         sleep(min(1.0, remaining))
     client.cancel_resting_order(safe_id, market_ticker=ticker)
-    final = _terminal_order(client.get(path), safe_id, ticker, count)
+    payload = _market_scoped_order(client, safe_id, ticker)
+    final = _terminal_order(payload, safe_id, ticker, count) if payload else None
     if final is None:
         raise ValueError("Maker cancellation unconfirmed; do not retry")
     return final
