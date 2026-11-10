@@ -64,6 +64,7 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
  // Verify the browser actually applies a nonzero-duration orbit animation;
  // a separate browser timing check verifies the stroke moves over time.
  const css=rect?getComputedStyle(rect):null;
+ document.body.dataset.rainbowDebug=[css?.animationName,css?.animationDuration,matchMedia("(prefers-reduced-motion:reduce)").matches].join("|");
  const moving=!!css &&
   css.animationName.split(",").map(x=>x.trim()).includes("ke-rainbow-orbit") &&
   parseFloat(css.animationDuration)>0;
@@ -84,4 +85,4 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
     import re
     match=re.search(r'data-rainbow-probe="([^"]+)"',p.stdout)
     assert match is not None, "Browser probe did not execute: " + p.stderr[-1200:]
-    assert match.group(1)=="true,true,true,true,true,true", match.group(1)
+    assert match.group(1)=="true,true,true,true,true,true", (match.group(1), re.search(r\'data-rainbow-debug="([^"]+)"\',p.stdout).group(1))
