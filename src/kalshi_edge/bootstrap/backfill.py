@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
 
 import httpx
@@ -382,6 +382,7 @@ def backfill_binance(
     client: BinanceArchiveClient | Any | None = None,
     parquet_converter: Callable[[Path, Path], int] = convert_spot_1s_to_parquet,
     as_of_utc: datetime | None = None,
+    required_dates: Iterable[date] | None = None,
 ) -> BinanceBackfillReport:
     root = bootstrap.bootstrap_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -392,6 +393,19 @@ def backfill_binance(
     availability = record_daily_availability_snapshot(root, effective_as_of.date())
 
     dates = _dates_for_valid_kalshi_markets(root)
+    if required_dates is not None:
+        requested = set(required_dates)
+        # Repair only verified dates already required by settled Kalshi
+        # market history. Never download arbitrary/unrelated dates.
+        if not requested or not all(type(day) is date for day in requested):
+            raise BinanceDataError("Binance repair requires valid UTC dates")
+        unverified = requested.difference(dates)
+        if unverified:
+            raise BinanceDataError(
+                "Binance repair date is not required by verified Kalshi markets: "
+                + ", ".join(day.isoformat() for day in sorted(unverified))
+            )
+        dates = sorted(requested)
     available_dates = [day for day in dates if day <= availability.available_through_date]
     unavailable_dates = [day for day in dates if day > availability.available_through_date]
     urls = archive_urls(bootstrap.binance_symbol, available_dates, dataset="klines", interval="1s")

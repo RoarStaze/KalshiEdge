@@ -453,11 +453,11 @@ function renderTrainingSession(run,running){
  el("dataset-build-bar-fill").style.width=datasetPct+"%";
  el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(datasetPct)));
  text("dataset-build-detail",hasRun?
-  (run.dataset_verified?"Dataset verified":"Dataset processing")+
+  (run.dataset_verified?"Dataset verified":failed?"Dataset build stopped":"Dataset processing")+
   counts+" · "+(run.dataset_action||"Checking official settlement and source integrity"):
   "Dataset creation begins when you press Train Now; it uses only verified source data.");
  const pct=hasRun?Math.max(0,Math.min(100,Number(run.progress_percent)||0)):0;
- text("training-worker-progress",hasRun?pct+"%":"—");
+ text("training-worker-progress",hasRun?(failed?"FAILED":pct+"%"):"—");
  el("training-worker-bar-fill").style.width=pct+"%";
  el("training-worker-bar").setAttribute("aria-valuenow",String(pct));
  const comparison=el("training-comparison");
@@ -591,6 +591,7 @@ function renderTraining(info){
  text("baseline-retrain-ready",(baseline.ready?"Full model ready: ":"Full model: ")+
   (baseline.reason||"Checking historical dataset and fresh independent lockbox"));
  text("training-headline",run.stage==="PAUSED"?"Training paused":
+   run.stage==="FAILED"?"Previous training stopped — model unchanged":
   info.pause_requested?"Pausing after the next safe checkpoint…":
   running?"Training and evaluating…":
   mode==="forward_480"?"Ready to train the 480-second research challenger":

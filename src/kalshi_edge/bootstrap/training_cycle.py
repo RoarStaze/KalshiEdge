@@ -10,12 +10,13 @@ No live forecast, dataset or untouched lockbox is modified by status reads.
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -710,6 +711,92 @@ def _lockbox_rejection_reasons(codes: tuple[str, ...],
     return out
 
 
+
+# Fail closed on provenance/checksum errors. Only genuine missing history (or
+# a verified raw ZIP awaiting normalization) may be repaired automatically.
+_MISSING_BINANCE_DAY = re.compile(
+    r"(?:required Binance history is missing for |"
+    r"Binance normalized history is missing for verified raw archive )"
+    r"(\d{4}-\d{2}-\d{2})\Z"
+)
+MAX_TRAIN_BINANCE_DAY_REPAIRS = 32
+
+
+def _build_dataset_with_binance_repair(
+    root: Path,
+    settings: Any,
+    *,
+    progress_callback: Callable[[int, int, str, str], None] | None,
+    mode: str,
+    round_number: int,
+) -> Any:
+    """Repair one official, checksum-verified Binance day and resume checkpoints.
+
+    Never invent OHLCV, skip eligible settled markets, alter existing
+    provenance, or retry an unchanged missing date indefinitely.
+    """
+    from . import backfill, dataset
+
+    repaired: set[date] = set()
+    while True:
+        try:
+            return dataset.build_dataset(
+                root, settings, progress_callback=progress_callback,
+            )
+        except dataset.DatasetBuildError as exc:
+            match = _MISSING_BINANCE_DAY.fullmatch(str(exc))
+            if match is None:
+                raise
+            missing_day = date.fromisoformat(match.group(1))
+            if missing_day in repaired:
+                raise CycleError(
+                    f"Binance {missing_day} still missing after verified repair; "
+                    "saved dataset checkpoints retained. Check the official "
+                    "archive and local disk before retrying Train Now."
+                ) from exc
+            if len(repaired) >= MAX_TRAIN_BINANCE_DAY_REPAIRS:
+                raise CycleError(
+                    f"More than {MAX_TRAIN_BINANCE_DAY_REPAIRS} Binance archive "
+                    "dates need recovery. Saved dataset checkpoints retained; "
+                    "run full verified Binance backfill before Train Now."
+                ) from exc
+
+            _pause_boundary(
+                root, stage="BUILDING_DATASET",
+                mode=mode, round_number=round_number,
+                dataset_action=(
+                    f"Recovering verified Binance BTC 1-second history "
+                    f"for {missing_day} from the official archive"
+                ),
+            )
+            try:
+                report = backfill.backfill_binance(
+                    settings, required_dates=(missing_day,),
+                )
+            except Exception as backfill_error:
+                raise CycleError(
+                    f"Official Binance archive repair failed for "
+                    f"{missing_day}: {type(backfill_error).__name__}: "
+                    f"{backfill_error}. No unverified replacement was used; "
+                    "saved dataset checkpoints retained."
+                ) from backfill_error
+            if missing_day.isoformat() in report.unavailable_dates:
+                raise CycleError(
+                    f"Official Binance archive for {missing_day} has not "
+                    "reached the verified daily publication window; "
+                    "saved dataset checkpoints retained."
+                )
+            repaired.add(missing_day)
+            _pause_boundary(
+                root, stage="BUILDING_DATASET",
+                mode=mode, round_number=round_number,
+                dataset_action=(
+                    f"Verified Binance archive for {missing_day}; "
+                    "continuing saved dataset checkpoints"
+                ),
+            )
+
+
 def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: str) -> int:
     """Long-running, explicitly user-triggered train + one-time evaluation."""
 
@@ -763,8 +850,9 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                             "BUILDING_DATASET","VERIFYING_DATASET",
                         ) else 0,
                     )
-                    dataset_report = dataset.build_dataset(
+                    dataset_report = _build_dataset_with_binance_repair(
                         root, settings, progress_callback=on_build_progress,
+                        mode=mode, round_number=round_number,
                     )
                     _pause_boundary(
                         root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
