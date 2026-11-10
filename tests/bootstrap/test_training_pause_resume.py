@@ -200,3 +200,39 @@ def test_training_worker_restarts_checkpointed_dataset_without_resetting_counter
     assert values==[]
     reporter(203,500,"market-203","markets")
     assert values[-1]["dataset_markets_completed"]==203
+
+
+def test_forward_resume_reuses_same_sealed_dataset_not_new_settlements(tmp_path, monkeypatch):
+    from kalshi_edge.bootstrap import forward_learning_480
+    folder=tmp_path/"training_runs"/"datasets"
+    folder.mkdir(parents=True)
+    path=folder/("forward-480-"+"a"*64+".json")
+    path.write_text("{}")
+    training_cycle._write_worker_state(
+        tmp_path,stage="PAUSED",mode="forward_480",round_number=0,
+        run_id="frozen1",git_sha="a"*40,
+        resume_stage="SCORING",dataset_path=str(path),dataset_verified=True,
+    )
+    training_pause.reset_pause(tmp_path, run_id="frozen1")
+    monkeypatch.setattr(
+        forward_learning_480,"create_verified_forward_dataset",
+        lambda root: pytest.fail("must reuse original frozen 480s snapshot"),
+    )
+    monkeypatch.setattr(
+        forward_learning_480,"load_verified_forward_dataset",
+        lambda actual: (["valid-saved-row"], {"prior":"frozen"}),
+    )
+    monkeypatch.setattr(
+        forward_learning_480,"assess_forward_training_readiness",
+        lambda rows: {"ready":True,"eligible_480_markets":1},
+    )
+    seen=[]
+    def fake_evaluation(root, *, progress, dataset_path):
+        seen.append(dataset_path)
+        return {"status":"NO_VALIDATED_JOINT_GAIN"}
+    monkeypatch.setattr(
+        forward_learning_480,"evaluate_verified_forward_candidate",fake_evaluation,
+    )
+    assert training_cycle.run_forward_training_worker(tmp_path)==0
+    assert seen==[path]
+    assert training_cycle._run_state(tmp_path)["stage"]=="COMPLETE"
