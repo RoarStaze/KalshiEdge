@@ -125,7 +125,7 @@ def score_frozen_specialist(model: Mapping[str, Any], row: FeatureRow) -> float:
         raise ValueError("shadow requires a causal FeatureRow")
     remaining = row.features.get("seconds_remaining")
     if (type(remaining) not in (int, float) or not math.isfinite(remaining)
-            or abs(remaining - CHECKPOINT_SECONDS) > CHECKPOINT_TOLERANCE_SECONDS):
+            or not (CHECKPOINT_SECONDS - CHECKPOINT_TOLERANCE_SECONDS <= remaining <= CHECKPOINT_SECONDS)):
         raise ValueError("shadow requires the original eight-minute checkpoint")
     if row.checkpoint_ts_ns <= model["frozen_at_ns"]:
         raise ValueError("shadow observation must be later than model freeze")
