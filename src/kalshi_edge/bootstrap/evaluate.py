@@ -734,6 +734,12 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
         experiment.boundaries.lockbox_end_ts_ns,
     )
     is_volatility = any(k.startswith("volatility_challengers/") for k in experiment.input_hashes)
+    is_learning = any(k.startswith(("mistake_pool/", "correct_pool/"))
+                      for k in experiment.input_hashes)
+    is_full_retrain = (
+        not is_volatility and not is_learning
+        and (root / "models" / "default.json").is_file()
+    )
     if is_volatility:
         from .volatility_upgrade import verify_challenger
         verify_challenger(root, experiment)
@@ -742,7 +748,7 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
     except Exception as exc:
         raise EvaluationError("could not materialize the predeclared lockbox") from exc
     report = evaluate_lockbox(experiment, lockbox_rows)
-    if is_volatility or any(key.startswith(("mistake_pool/", "correct_pool/")) for key in experiment.input_hashes):
+    if is_volatility or is_learning or is_full_retrain:
         # Compare the incumbent without fitting it, or touching any other
         # holdout period. This is the SAME one-time evaluation call and data.
         from .live import load_default_bundle
@@ -792,7 +798,33 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
                     gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
                         labels, incumbent_outputs["candidate"],
                     )
+        if is_full_retrain:
+            # Standard (non-mistake) retraining is ACTUALLY promotable. On a
+            # pre-existing live model, require an unused 480s lockbox measured
+            # against the incumbent at identical market/checkpoint instants.
+            horizon_rows = _one_checkpoint_per_market(scored, 480)
+            _require_horizon_sample(horizon_rows, seconds=480, minimum=80)
+            candidate_outputs = _predict_bundle_rows(experiment, horizon_rows)
+            incumbent_outputs = _predict_bundle_rows(incumbent_bundle, horizon_rows)
+            market_outputs = [training._kalshi_prior(row) for row in horizon_rows]
+            labels = [row.label_yes for row in horizon_rows]
+            prefix = "retrain_480_"
+            enriched.update({
+                prefix + "candidate": artifact.metric_snapshot(
+                    probability_metrics(labels, candidate_outputs["candidate"])),
+                prefix + "incumbent": artifact.metric_snapshot(
+                    probability_metrics(labels, incumbent_outputs["candidate"])),
+                prefix + "kalshi": artifact.metric_snapshot(
+                    probability_metrics(labels, market_outputs)),
+            })
+            gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
+                labels, candidate_outputs["candidate"],
+            )
+            gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
+                labels, incumbent_outputs["candidate"],
+            )
         report = report.model_copy(update={
             "metrics": enriched, "decision_metrics": gate_reports,
+            "requires_retrain_480_gate": is_full_retrain,
         })
     return finalize_evaluation(root, experiment_path, report)
