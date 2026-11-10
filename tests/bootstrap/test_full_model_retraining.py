@@ -66,6 +66,8 @@ def test_legacy_ready_takes_precedence_over_full_retrain():
 
 def test_full_retrain_requires_verified_independent_fresh_lockbox(tmp_path,monkeypatch):
     from kalshi_edge.bootstrap import training_cycle
+    (tmp_path/"models").mkdir()
+    (tmp_path/"models"/"default.json").write_text("{}")
     monkeypatch.setattr(training_cycle.training, "_verified_context",
                         lambda root: SimpleNamespace(
                             plan=SimpleNamespace(
