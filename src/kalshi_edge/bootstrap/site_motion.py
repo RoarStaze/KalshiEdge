@@ -51,7 +51,7 @@ body[data-page] .ke-neon-target{
  position:relative;
  --ke-rainbow-panel:linear-gradient(155deg,rgba(3,17,23,.86),rgba(2,11,19,.91) 74%);
  border:2px solid transparent!important;
- border-radius:inherit;
+ /* Preserve the existing card-specific rounded corners. */
  background:
   var(--ke-rainbow-panel) padding-box,
   conic-gradient(
