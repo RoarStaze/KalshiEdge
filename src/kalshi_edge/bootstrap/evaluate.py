@@ -327,9 +327,16 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
                 reasons.append("RETRAIN_480_QUALIFIED_BASELINE_UNAVAILABLE")
             if (
                 candidate_gate.qualified_accuracy is None
-                or (incumbent_gate.qualified_accuracy is not None
-                    and candidate_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
-                    < incumbent_gate.qualified_accuracy)
+                or incumbent_gate.qualified_accuracy is None
+                or candidate_gate.qualified_accuracy
+                   <= incumbent_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
+            ):
+                reasons.append("RETRAIN_480_QUALIFIED_ACCURACY_NOT_IMPROVED")
+            if (
+                candidate_gate.qualified_accuracy is not None
+                and incumbent_gate.qualified_accuracy is not None
+                and candidate_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
+                    < incumbent_gate.qualified_accuracy
             ):
                 reasons.append("RETRAIN_480_QUALIFIED_ACCURACY_DEGRADED")
 
