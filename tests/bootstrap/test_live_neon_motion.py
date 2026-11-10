@@ -1,4 +1,8 @@
-"""The cinematic background stays quiet; only decorative panel outlines orbit."""
+"""Rainbow effects are confined to the OUTER KalshiEdge panels."""
+from __future__ import annotations
+
+import re
+
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
 from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
 from kalshi_edge.bootstrap.round_price_ui import integrate_round_price_hero
@@ -13,40 +17,55 @@ def render(section):
     return render_site_page(template, section)
 
 
-def test_no_noisy_particle_scene_on_any_page():
+# Those are the actual page-level boxed surfaces. All other bordered
+# descendants must retain their existing, non-animated styling.
+OUTER = {
+    ".site-nav",
+    ".forecast",
+    ".context>.manual-trade",
+    ".training-card",
+    ".history-view .card",
+    ".api-card",
+}
+
+
+def test_only_outer_panels_are_selected_for_rainbow_border_on_all_pages():
+    for route in ("trade", "train", "history", "api"):
+        html = render(route)
+        selectors = re.search(r'const boxSelector=\[(.*?)\]\.join\(","\)', html, re.S)
+        assert selectors, "Missing targeted outer-panel selector"
+        found = set(re.findall(r'"([^"]+)"', selectors.group(1)))
+        assert found == OUTER
+        assert 'closest(".ke-neon-target")' in html
+
+
+def test_entire_border_is_rainbow_and_color_animation_not_short_dash():
+    html = render("trade")
+    assert "ke-neon-runner" in html
+    assert "ke-rainbow-gradient" in html
+    assert "stroke-dasharray:none" in html
+    assert "stroke-dasharray:16 84" not in html
+    assert "stroke-dashoffset" not in html
+    assert "@keyframes ke-rainbow-cycle" in html
+    assert "hue-rotate(0deg)" in html
+    assert "hue-rotate(360deg)" in html
+    assert 'setAttribute("viewBox"' in html
+
+
+def test_cinematic_background_keeps_no_extra_particles():
     for route in ("trade", "train", "history", "api"):
         html = render(route)
         assert 'id="ke-live-canvas"' not in html
-        assert 'class="ke-live-scene"' not in html
-        assert "ke-live-grid" not in html
         assert "ke-live-beam" not in html
-        assert "ke-particles" not in html
+        assert "ke-live-grid" not in html
         assert "requestAnimationFrame" not in html
         assert 'url("/assets/kalshiedge-neon-city.webp")' in html
-        assert "filter:blur(" in html
-        assert "prefers-reduced-motion" in html
 
 
-def test_rainbow_runner_traces_real_card_edges_without_heading_overlay():
-    html = render("trade")
-    assert "ke-neon-runner" in html
-    assert "@keyframes ke-rainbow-orbit" in html
-    assert 'setAttribute("viewBox"' in html
-    assert 'setAttribute("pathLength","100")' in html
-    assert "stroke-dashoffset:-100" in html
-    assert "ke-rainbow-gradient" in html
-    assert ".panel-label" not in html.split("const boxSelector=")[1].split(".join")[0]
-    for element in (".site-nav", ".forecast", ".context>.manual-trade",
-                    ".training-card", ".api-card", ".hero-price-surface",
-                    ".hero-clock-panel", ".mt-inputbox", ".mt-pills",
-                    ".training-step", ".history-view .card", ".kpi"):
-        assert element in html
-
-
-def test_order_training_and_history_dom_ids_survive_all_routes():
+def test_order_training_history_and_api_ids_unchanged():
     for route in ("trade", "train", "history", "api"):
         html = render(route)
-        for field in ("manual-submit", "train-now", "history-rows", "api-credentials-form"):
-            assert html.count('id="' + field + '"') == 1
+        for target in ("manual-submit", "train-now", "history-rows", "api-credentials-form"):
+            assert html.count('id="' + target + '"') == 1
         assert html.count('class="site-nav-link') == 4
         assert "pointer-events:none" in html
