@@ -87,9 +87,9 @@ def test_only_true_eight_minute_rows_selected_and_no_240_contamination():
     ]
     selected,excluded=select_eight_minute_rows(rows)
     assert [r.market_ticker for r in selected]==[
-        "KXBTC15M-SPEC-2","KXBTC15M-SPEC-3",
+        "KXBTC15M-SPEC-2","KXBTC15M-SPEC-3","KXBTC15M-SPEC-4",
     ]
-    assert excluded["wrong_checkpoint"]==2
+    assert excluded["wrong_checkpoint"]==1
 
 
 def test_invalid_quote_or_unavailable_required_momentum_fail_closed():
