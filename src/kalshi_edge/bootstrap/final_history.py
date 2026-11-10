@@ -573,7 +573,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             if self.path.startswith("/api/autotrader/"):
                 self._autotrader_post()
                 return
-            if self.path != "/api/training/start":
+            if self.path not in ("/api/training/start",
+                                 "/api/training/pause",
+                                 "/api/training/resume"):
                 self._json(404, {"error": "endpoint not found"})
                 return
             # Loopback bind alone does not stop cross-site browser POSTs.
@@ -603,7 +605,12 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 self._json(400, {"error": "Train Now accepts no overrides"})
                 return
             try:
-                result = training_controller.start()
+                if self.path == "/api/training/pause":
+                    result = training_controller.pause()
+                elif self.path == "/api/training/resume":
+                    result = training_controller.resume()
+                else:
+                    result = training_controller.start()
             except CycleError as exc:
                 self._json(409, {"error": str(exc)})
                 return
@@ -720,6 +727,10 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
 
     from .training_cycle import TrainingController
     controller = TrainingController(root)
+    # Replay only a previously opted-in incomplete training session. The
+    # worker rechecks signed provenance; never replay promotion after an
+    # interrupted model-install transaction.
+    controller.recover()
     worker = threading.Thread(target=resolve_loop, name="kalshi-final-settlement-reader", daemon=True)
     from kalshi_edge.trading.paper import PaperTrader  # lazy: avoid circular import
     paper_trader = PaperTrader(root)
