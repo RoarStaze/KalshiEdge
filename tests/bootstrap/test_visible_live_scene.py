@@ -1,6 +1,10 @@
 """Live cinematic atmosphere and perimeter-tracer regression tests."""
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
+
 from kalshi_edge.bootstrap.api_credentials_ui import integrate_api_credentials
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
 from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
@@ -60,3 +64,47 @@ def test_unobstructed_buttons_and_original_live_data_routes():
         assert html.count('class="site-nav-link') == 4
         assert 'prefers-reduced-motion:reduce' in html
         assert 'hidden' in html
+
+def test_decorative_script_is_valid_javascript():
+    node = shutil.which("node")
+    if node is None:
+        return  # Some developer installations do not include Node.
+    html = page("trade")
+    js = next(chunk for chunk in re.findall(r"<script>(.*?)</script>", html, re.S)
+              if 'const boxSelector' in chunk)
+    result = subprocess.run(
+        [node, "--check"], input=js, capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_real_browser_initializes_overlay_and_motion(tmp_path):
+    chrome = (shutil.which("chromium") or shutil.which("google-chrome")
+              or shutil.which("chromium-browser"))
+    if chrome is None:
+        return  # Optional local smoke test; CI Python/DOM checks still run.
+    html = page("trade")
+    probe = """<script>
+setTimeout(function(){
+ const border=document.querySelector(".forecast .ke-neon-runner");
+ const beam=document.querySelector(".ke-live-beam");
+ const canvas=document.getElementById("ke-live-canvas");
+ document.body.dataset.keVisualProbe=[
+   Boolean(border),
+   Boolean(border&&border.getAnimations().length),
+   Boolean(beam&&beam.getAnimations().length),
+   Boolean(canvas&&canvas.width>0&&canvas.height>0)
+ ].join(",");
+},350);
+</script>"""
+    html = html.replace("</body>", probe+"</body>", 1)
+    path = tmp_path / "kalshiedge-browser-smoke.html"
+    path.write_text(html, encoding="utf-8")
+    result = subprocess.run(
+        [chrome, "--headless", "--no-sandbox", "--disable-gpu",
+         "--disable-dev-shm-usage", "--no-first-run", "--disable-background-networking",
+         "--virtual-time-budget=1000", "--dump-dom", path.as_uri()],
+        capture_output=True, text=True, timeout=25
+    )
+    assert result.returncode == 0, result.stderr[-1200:]
+    assert 'data-ke-visual-probe="true,true,true,true"' in result.stdout
