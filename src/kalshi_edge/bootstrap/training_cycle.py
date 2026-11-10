@@ -963,10 +963,90 @@ class TrainingController:
                     }
             return info
 
+    def _git_sha(self) -> str:
+        try:
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=self.project_root,
+                check=True, capture_output=True, text=True, timeout=10,
+            ).stdout.strip().lower()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise CycleError("cannot verify installed repository Git SHA") from exc
+        if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+            raise CycleError("cannot verify installed repository Git SHA")
+        return sha
+
+    def _launch_existing(self, saved: dict[str, Any], *, resume: bool) -> dict[str, Any]:
+        """One subprocess launch path for explicit training and restart recovery."""
+        mode = saved.get("mode")
+        round_number = saved.get("round_number")
+        run_id = saved.get("run_id")
+        git = saved.get("git_sha")
+        if (mode not in ("mistake", "correct", BASELINE_MODE, FORWARD_MODE)
+                or type(round_number) is not int or round_number < 0
+                or not isinstance(run_id, str) or not isinstance(git, str)
+                or len(git) != 40):
+            raise CycleError("saved training run identity is incomplete")
+        if self._process is not None and self._process.poll() is None:
+            raise CycleError("a training worker is already running")
+        logfile = self.root / "training_runs" / (
+            f"{'resume' if resume else mode}-{int(time.time_ns())}.log"
+        )
+        logfile.parent.mkdir(parents=True, exist_ok=True)
+        self._log_handle = logfile.open("ab")
+        previous_stage = saved.get("resume_stage") or saved.get("stage")
+        try:
+            if resume:
+                _write_worker_state(
+                    self.root, stage="RESUMING", mode=mode,
+                    round_number=round_number, resume_stage=previous_stage,
+                    log_path=str(logfile), run_id=run_id, git_sha=git,
+                    error=None,
+                )
+            else:
+                _write_worker_state(
+                    self.root, stage="STARTING", mode=mode,
+                    round_number=round_number, log_path=str(logfile),
+                    run_id=run_id, git_sha=git,
+                )
+            priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
+            self._process = subprocess.Popen(
+                [
+                    sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
+                    "--worker", "--root", str(self.root), "--mode", mode,
+                    "--round-number", str(round_number), "--git-sha", git,
+                ],
+                cwd=self.project_root,
+                stdin=subprocess.DEVNULL,
+                stdout=self._log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=priority,
+            )
+            _write_worker_state(
+                self.root, stage=("RESUMING" if resume else "STARTING"),
+                mode=mode, round_number=round_number,
+                worker_pid=self._process.pid,
+                log_path=str(logfile), run_id=run_id, git_sha=git,
+                **({"resume_stage": previous_stage} if resume else {}),
+            )
+        except Exception:
+            if self._log_handle is not None:
+                self._log_handle.close()
+                self._log_handle = None
+            raise
+        return {
+            "started": True, "resumed": resume,
+            "mode": mode, "round_number": round_number, "run_id": run_id,
+            "worker_pid": self._process.pid,
+            "log_path": str(logfile),
+        }
+
     def start(self) -> dict[str, Any]:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise CycleError("a training session is already running")
+            prior = _run_state(self.root)
+            if prior is not None and prior.get("stage") == "PAUSED":
+                raise CycleError("training is paused; press Resume, not Train Now")
             info = self._readiness(force=True)
             from .forward_learning_480 import inspect_forward_training_readiness
             forward = inspect_forward_training_readiness(self.root)
@@ -980,74 +1060,113 @@ class TrainingController:
                 raise CycleError(
                     "No eligible training path: historical cycle: "
                     + str(info.get("reason", "unavailable"))
-                    + " | full model: "
-                    + str(baseline.get("reason", "unavailable"))
-                    + " | verified 480s: "
-                    + str(forward.get("reason", "unavailable"))
+                    + " | full model: " + str(baseline.get("reason", "unavailable"))
+                    + " | verified 480s: " + str(forward.get("reason", "unavailable"))
                 )
-            active_round = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
-            active_mode = selected
+            round_number = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
+            saved = {
+                "mode": selected, "round_number": round_number,
+                "run_id": uuid.uuid4().hex, "git_sha": self._git_sha(),
+            }
+            # This explicit new run is authorized only after checking there is
+            # no currently running or manually paused earlier run.
+            training_pause.reset_pause(self.root, run_id=saved["run_id"])
+            return self._launch_existing(saved, resume=False)
 
-            git = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=self.project_root,
-                check=True, capture_output=True, text=True, timeout=10,
-            ).stdout.strip()
-            if len(git) != 40 or any(c not in "0123456789abcdef" for c in git.lower()):
-                raise CycleError("cannot verify current repository Git SHA")
-            logfile = self.root / "training_runs" / (
-                f"{'forward-480' if selected == FORWARD_MODE else 'full-model' if selected == BASELINE_MODE else 'round-'+str(active_round).zfill(4)}-{int(time.time_ns())}.log"
-            )
-            logfile.parent.mkdir(parents=True, exist_ok=True)
-            self._log_handle = logfile.open("ab")
-            _write_worker_state(
-                self.root, stage="STARTING",
-                mode=active_mode, round_number=active_round,
-                log_path=str(logfile),
-            )
-            try:
-                # Yield CPU priority to the latency-critical live forecasting
-                # process when long experiment fitting is active on Windows.
-                priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
-                self._process = subprocess.Popen(
-                    [
-                        sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
-                        "--worker", "--root", str(self.root), "--mode", active_mode,
-                        "--round-number", str(active_round),
-                        "--git-sha", git,
-                    ],
-                    cwd=self.project_root,
-                    stdin=subprocess.DEVNULL,
-                    stdout=self._log_handle,
-                    stderr=subprocess.STDOUT,
-                    creationflags=priority,
+    def pause(self) -> dict[str, Any]:
+        with self._lock:
+            if self._process is None or self._process.poll() is not None:
+                raise CycleError("no active training process to pause")
+            run = _run_state(self.root) or {}
+            if run.get("stage") not in ACTIVE_WORKER_STAGES:
+                raise CycleError("training is not in a pausable stage")
+            run_id = run.get("run_id")
+            if not isinstance(run_id, str):
+                raise CycleError("training session predates pause support; update and restart")
+            training_pause.set_pause(self.root, run_id=run_id, manual=True)
+            return {
+                "pause_requested": True,
+                "message": (
+                    "Pause requested. Dataset work stops after a checkpointed market; "
+                    "model fitting stops at the next safe stage boundary."
+                ),
+            }
+
+    def resume(self) -> dict[str, Any]:
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                raise CycleError("training is still active; wait for PAUSED acknowledgment")
+            saved = _run_state(self.root) or {}
+            if saved.get("stage") != "PAUSED":
+                raise CycleError("training is not paused")
+            if saved.get("git_sha") != self._git_sha():
+                raise CycleError("Git version changed since training paused; cannot safely resume")
+            run_id = saved.get("run_id")
+            if not isinstance(run_id, str):
+                raise CycleError("missing verified training resume identity")
+            training_pause.clear_pause(self.root, run_id=run_id)
+            result = self._launch_existing(saved, resume=True)
+            return {**result, "resumed": True}
+
+    def recover(self) -> bool:
+        """Auto-resume only training interrupted by closing the application."""
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                return False
+            saved = _run_state(self.root)
+            if not saved or saved.get("stage") not in ACTIVE_WORKER_STAGES | {"PAUSED"}:
+                return False
+            run_id = saved.get("run_id")
+            intent = training_pause.read_pause(self.root)
+            if intent and intent.get("run_id") != run_id:
+                raise CycleError("saved pause request belongs to another training run")
+            if intent.get("pause_requested") and intent.get("manual"):
+                if saved.get("stage") != "PAUSED":
+                    _save_paused_state(
+                        self.root, mode=saved["mode"], round_number=saved["round_number"],
+                        reason="manual",
+                    )
+                return False
+            if saved.get("git_sha") != self._git_sha():
+                _save_paused_state(
+                    self.root, mode=saved["mode"], round_number=saved["round_number"],
+                    reason="update_blocked",
                 )
                 _write_worker_state(
-                    self.root, stage="STARTING", mode=active_mode,
-                    round_number=active_round,
-                    worker_pid=self._process.pid,
-                    log_path=str(logfile),
+                    self.root, stage="PAUSED", mode=saved["mode"],
+                    round_number=saved["round_number"],
+                    error="Git version changed since training started; cannot safely auto-resume",
                 )
-            except (OSError, subprocess.SubprocessError):
-                self._log_handle.close()
-                self._log_handle = None
-                raise
-            return {
-                "started": True,
-                "round_number": active_round,
-                "mode": active_mode,
-                "worker_pid": self._process.pid,
-                "log_path": str(logfile),
-            }
+                return False
+            if not isinstance(run_id, str):
+                raise CycleError("old training state has no run ID; cannot safely auto-resume")
+            if intent.get("pause_requested"):
+                training_pause.clear_pause(self.root, run_id=run_id)
+            self._launch_existing(saved, resume=True)
+            return True
 
     def stop(self) -> None:
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
-                self._process.terminate()
+            process = self._process
+            if process is not None and process.poll() is None:
+                run = _run_state(self.root) or {}
+                run_id = run.get("run_id")
+                if isinstance(run_id, str):
+                    intent = training_pause.read_pause(self.root)
+                    if not (intent.get("run_id") == run_id
+                            and intent.get("pause_requested") and intent.get("manual")):
+                        training_pause.set_pause(self.root, run_id=run_id, manual=False)
+                # Cooperative dataset checkpoint is preferred; fit may be a
+                # non-interruptible sklearn operation and must replay on restart.
                 try:
-                    self._process.wait(timeout=8)
+                    process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=5)
+                    process.terminate()
+                    try:
+                        process.wait(timeout=8)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
             self._process = None
             if self._log_handle is not None:
                 self._log_handle.close()
