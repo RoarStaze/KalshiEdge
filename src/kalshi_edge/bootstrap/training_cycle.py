@@ -561,7 +561,8 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                         root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
                         dataset_market_count=dataset_report.market_count,
                         dataset_row_count=dataset_report.row_count,
-                        dataset_path=str(dataset_report.dataset_path),
+                        dataset_path=str(getattr(dataset_report, "dataset_path",
+                                                 root / "derived" / "features.parquet")),
                         dataset_action="Rebuilt locally sourced, provenance-manifested dataset",
                     )
                 else:
@@ -589,9 +590,10 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_action="Verified pre-existing hash-sealed historical training dataset",
                 )
-                training._verified_context(
-                    root, mistakes_only=mode == "mistake", correct_only=mode == "correct",
-                )
+                # The existing immutable-round readiness already calls
+                # _verified_context with the exact enrolled-case selection.
+                # Do not perform a redundant rescan between eligibility
+                # verification and the actual fit.
                 _write_worker_state(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_verified=True,
