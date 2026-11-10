@@ -476,7 +476,9 @@ def _market_progress_reporter(
         nonlocal last_count, last_time, last_phase, resume_skip_active
         if total <= 0 or not 0 <= completed <= total:
             raise ValueError("invalid dataset progress count")
-        if run_id is not None:
+        if run_id is not None and stage != "labels":
+            # Feature-row processing continues to honor every market's
+            # safe pause boundary, including the checkpointed replay loop.
             training_pause.check_pause(root, run_id)
 
         phase = "labels" if stage == "labels" else "markets"
@@ -503,6 +505,12 @@ def _market_progress_reporter(
                 return
         if not first and completed == last_count and not terminal:
             return
+
+        if run_id is not None and stage == "labels":
+            # The preliminary verification pass has no row checkpoint to
+            # protect; checking pause on its bounded progress writes avoids
+            # a redundant disk read for every market JSON file.
+            training_pause.check_pause(root, run_id)
 
         action = (
             "Finalizing dataset: validating leakage and writing artifacts"
