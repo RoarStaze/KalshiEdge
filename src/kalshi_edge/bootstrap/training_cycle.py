@@ -882,8 +882,24 @@ class TrainingController:
             self._cached_at = now
         return dict(self._cached)
 
+    def _pause_flags(self, run: dict[str, Any] | None,
+                     running: bool) -> dict[str, bool]:
+        intent = training_pause.read_pause(self.root)
+        matches = bool(run and intent.get("run_id") == run.get("run_id"))
+        requested = bool(matches and intent.get("pause_requested"))
+        manual = bool(requested and intent.get("manual"))
+        paused = bool(run and run.get("stage") == "PAUSED" and not running)
+        return {
+            "pause_requested": requested,
+            "paused": paused,
+            "can_resume": paused,
+            "auto_resume": bool(run and
+                                run.get("stage") in ACTIVE_WORKER_STAGES | {"PAUSED"}
+                                and not manual),
+        }
+
     def progress(self) -> dict[str, Any]:
-        """Lightweight live state for sub-second polling; no data/model reads."""
+        """Read persisted worker state; never recompute historical/model readiness."""
         with self._lock:
             run = _run_state(self.root)
             process = self._process
@@ -894,7 +910,8 @@ class TrainingController:
                          if process is not None else
                          "Dashboard restarted before this run completed")
                 run = {**run, "stage": "INTERRUPTED", "error": error}
-            return {"running": running, "run": run}
+            return {"running": running, "run": run,
+                    **self._pause_flags(run, running)}
 
     def status(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -961,6 +978,9 @@ class TrainingController:
                         **info["run"], "stage": "INTERRUPTED",
                         "error": "Dashboard restarted before this run completed",
                     }
+            info.update(self._pause_flags(info["run"], info["running"]))
+            if info["paused"]:
+                info["train_available"] = False
             return info
 
     def _git_sha(self) -> str:
