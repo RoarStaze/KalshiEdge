@@ -35,7 +35,7 @@ def test_animated_background_is_local_and_shared_across_routes():
 
 def test_each_visible_panel_family_has_an_orbiting_green_border():
     page = render("trade")
-    assert 'class="ke-border-overlay"' in page
+    assert 'svg.setAttribute("class","ke-border-overlay")' in page
     assert '@keyframes ke-border-travel' in page
     assert 'pathLength' in page
     for selector in (
