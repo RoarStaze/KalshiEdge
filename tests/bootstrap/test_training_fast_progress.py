@@ -175,3 +175,28 @@ def test_ui_labels_two_phases_and_always_reports_counts():
     assert 'market files verified' in PAGE
     assert 'markets checked' in PAGE
     assert 'counting verified market files' in PAGE
+
+
+def test_file_verification_does_not_poll_pause_file_for_every_market(tmp_path, monkeypatch):
+    """The added early counter must not add tens of thousands of disk reads."""
+    clock = [0.]
+    writes, pause_reads = [], []
+    monkeypatch.setattr(training_cycle, "_write_worker_state",
+        lambda root, **kwargs: writes.append(kwargs))
+    monkeypatch.setattr(training_cycle.training_pause, "check_pause",
+        lambda root, run_id: pause_reads.append(run_id))
+    callback = training_cycle._market_progress_reporter(
+        tmp_path, mode="baseline", round_number=0,
+        run_id="same-session", clock=lambda: clock[0],
+    )
+    callback(0, 100, "start", "labels")
+    for completed in range(1, 101):
+        clock[0] += .01
+        callback(completed, 100, "market", "labels")
+    label_writes = sum(x["dataset_progress_phase"] == "labels" for x in writes)
+    assert label_writes >= 3
+    assert len(pause_reads) <= label_writes
+    callback(1, 100, "market", "markets")
+    callback(2, 100, "market", "markets")
+    # Feature loop retains per-market safe-pause behavior.
+    assert len(pause_reads) >= label_writes + 2
