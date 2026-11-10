@@ -667,6 +667,20 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             if path in ("/trade", "/train", "/history", "/api"):
                 content = routed_pages[path[1:]]
                 kind = "text/html; charset=utf-8"
+            elif path == "/assets/kalshiedge-neon-city.webp":
+                # A single allowlisted, optional local image: never expose the
+                # data directory or permit user-specified filesystem paths.
+                asset = root / "assets" / "kalshiedge-neon-city.webp"
+                try:
+                    content = asset.read_bytes()
+                except OSError:
+                    self.send_error(404)
+                    return
+                if (not 12 <= len(content) <= 3_000_000
+                        or content[:4] != b"RIFF" or content[8:12] != b"WEBP"):
+                    self.send_error(415, "Invalid background image")
+                    return
+                kind = "image/webp"
             elif self.path == "/api/history":
                 content = json.dumps(read_final_history(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
@@ -693,9 +707,12 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return
             self.send_response(200)
             self.send_header("Content-Type", kind)
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control",
+                             "public, max-age=3600" if kind == "image/webp" else "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
+            self.send_header("Content-Security-Policy",
+                             "default-src 'none'; style-src 'unsafe-inline'; "
+                             "script-src 'unsafe-inline'; connect-src 'self'; img-src 'self'")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
