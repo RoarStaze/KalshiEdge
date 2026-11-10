@@ -616,6 +616,8 @@ class TrainingController:
                 info.get("reason") if selected is None else
                 "Learning cycle ready for independent lockbox training and promotion evaluation."
             )
+            from .model_identity import current_model_identity
+            info["current_model"] = current_model_identity(self.root)
             info["run"] = _run_state(self.root)
             if self._process is not None:
                 code = self._process.poll()
