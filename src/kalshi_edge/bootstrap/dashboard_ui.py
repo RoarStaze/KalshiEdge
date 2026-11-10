@@ -127,6 +127,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-live-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .training-live-head h3{font-size:19px;margin:5px 0 0}
 .training-worker-bar{height:10px;margin-top:16px}
+.training-dataset-bar{height:7px;margin:8px 0 15px}
 .training-stage-list{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:19px}
 .training-head-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .training-model-identity{display:flex;flex-direction:column;gap:3px;border:1px solid #3e8275;background:#143931;border-radius:12px;padding:12px 17px;min-width:176px}
@@ -270,6 +271,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="training-bar training-worker-bar" role="progressbar" aria-label="Completed training milestones" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-worker-bar"><div id="training-worker-bar-fill"></div></div>
   <div class="training-stage-list" id="training-stage-list" aria-label="Model training milestones"></div>
   <div class="training-forward-note" id="dataset-build-detail">Dataset has not been built in this session yet.</div>
+  <div class="training-bar training-dataset-bar" role="progressbar" aria-label="Dataset markets processed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dataset-build-bar"><div id="dataset-build-bar-fill"></div></div>
   <div class="training-comparison" id="training-comparison" aria-label="Challenger versus current model"></div>
   <div id="training-outcome" class="training-outcome" role="status" aria-live="polite">No training run yet. Training results will appear here and remain after refreshing the page.</div>
   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
@@ -432,8 +434,14 @@ function renderTrainingSession(run,running){
  const hasRun=!!run.stage;
  const completed=Number(run.dataset_markets_completed);
  const total=Number(run.dataset_markets_total);
- const counts=Number.isFinite(completed)&&Number.isFinite(total)&&total>0?
-  " · "+Math.min(completed,total)+" / "+total+" markets checked":"";
+ const validCounts=Number.isFinite(completed)&&Number.isFinite(total)&&total>0;
+ const datasetPct=validCounts?
+  Math.min(100,Math.max(0,100*completed/total)):(run.dataset_verified?100:0);
+ const counts=validCounts?
+  " · "+Math.min(completed,total)+" / "+total+" markets checked ("+
+  datasetPct.toFixed(1)+"%)":"";
+ el("dataset-build-bar-fill").style.width=datasetPct+"%";
+ el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(datasetPct)));
  text("dataset-build-detail",hasRun?
   (run.dataset_verified?"Dataset verified":"Dataset processing")+
   counts+" · "+(run.dataset_action||"Checking official settlement and source integrity"):
