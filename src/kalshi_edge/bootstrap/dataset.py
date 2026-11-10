@@ -537,7 +537,12 @@ def build_dataset(
     excluded: list[str] = []
     provenance: dict[str, str] = {}
     market_payloads: dict[str, dict[str, Any]] = {}
-    for market_path in sorted(market_root.glob("*.json")):
+    market_paths = sorted(market_root.glob("*.json"))
+    # This integrity pass can take time for tens of thousands of markets.
+    # Publish its true file count before reading the first manifest.
+    if progress_callback is not None and market_paths:
+        progress_callback(0, len(market_paths), "Starting market-file verification", "labels")
+    for file_index, market_path in enumerate(market_paths, start=1):
         logical = f"markets/{market_path.name}"
         payload, identity = _read_verified_json(root, "kalshi", logical)
         provenance[identity["path"]] = identity["sha256"]
@@ -546,12 +551,20 @@ def build_dataset(
             label = normalize_market_label(payload)
         except LabelNormalizationError:
             excluded.append(ticker)
+            if progress_callback is not None:
+                progress_callback(file_index, len(market_paths), ticker, "labels")
             continue
         labels.append(label)
         market_payloads[label.ticker] = payload
+        if progress_callback is not None:
+            progress_callback(file_index, len(market_paths), ticker, "labels")
     labels.sort(key=lambda item: (item.open_ts_ns, item.ticker))
     if not labels:
         raise DatasetBuildError("no valid settled KXBTC15M markets are available for dataset build")
+    # A separate market-feature pass follows: reset its counter explicitly,
+    # rather than confusing verification completion with feature completion.
+    if progress_callback is not None:
+        progress_callback(0, len(labels), "Starting market feature processing", "markets")
 
     availability = latest_daily_availability_snapshot(root)
     if availability is not None:

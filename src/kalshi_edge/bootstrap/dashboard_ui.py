@@ -447,9 +447,12 @@ function renderTrainingSession(run,running){
  const validCounts=Number.isFinite(completed)&&Number.isFinite(total)&&total>0;
  const datasetPct=validCounts?
   Math.min(100,Math.max(0,100*completed/total)):(run.dataset_verified?100:0);
+ const checkingFiles=run.dataset_progress_phase==="labels";
  const counts=validCounts?
-  " · "+Math.min(completed,total)+" / "+total+" markets checked ("+
-  datasetPct.toFixed(1)+"%)":"";
+  " · "+Math.min(completed,total)+" / "+total+
+  (checkingFiles?" market files verified (":" markets checked (")+
+  datasetPct.toFixed(1)+"%)":
+  (hasRun&&current==="BUILDING_DATASET"?" · counting verified market files…":"");
  el("dataset-build-bar-fill").style.width=datasetPct+"%";
  el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(datasetPct)));
  text("dataset-build-detail",hasRun?

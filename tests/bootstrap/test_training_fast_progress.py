@@ -132,3 +132,71 @@ def test_train_route_polls_light_state_faster_than_full_readiness():
     assert 'if(progressPollPending||document.hidden' in p
     assert 'document.hidden' in p
     assert '"current_model"' not in p[p.index('async function refreshTrainingProgress()'):p.index('el("train-now").addEventListener')]
+
+
+def test_label_progress_uses_same_bounded_disk_write_throttle(tmp_path, monkeypatch):
+    clock = [0.]
+    writes = []
+    monkeypatch.setattr(training_cycle, "_write_worker_state",
+        lambda root, **kwargs: writes.append((clock[0], kwargs.copy())))
+    callback = training_cycle._market_progress_reporter(
+        tmp_path, mode="baseline", round_number=0, clock=lambda: clock[0],
+        min_markets=3, min_interval_seconds=.25,
+    )
+    callback(0, 100, "reading market files", "labels")
+    for completed in range(1, 100):
+        clock[0] += .06
+        callback(completed, 100, "ticker", "labels")
+    callback(100, 100, "end label scan", "labels")
+    clock[0] += .05
+    callback(0, 85, "begin feature build", "markets")
+    clock[0] += .01
+    callback(1, 85, "ticker", "markets")
+    clock[0] += .30
+    callback(3, 85, "ticker", "markets")
+    assert writes[0][1]["dataset_progress_phase"] == "labels"
+    assert writes[0][1]["dataset_markets_completed"] == 0
+    assert writes[0][1]["dataset_markets_total"] == 100
+    assert writes[-2][1]["dataset_progress_phase"] == "markets"
+    assert writes[-2][1]["dataset_markets_completed"] == 0
+    assert writes[-2][1]["dataset_markets_total"] == 85
+    assert writes[-1][1]["dataset_markets_completed"] == 3
+    assert all(now - previous >= .2499
+               for (previous, a), (now, b) in zip(writes, writes[1:])
+               if a["dataset_progress_phase"] == b["dataset_progress_phase"]
+               and a["dataset_markets_completed"] != a["dataset_markets_total"]
+               and b["dataset_markets_completed"] != b["dataset_markets_total"]
+               and b["dataset_markets_completed"] != 0)
+
+
+def test_ui_labels_two_phases_and_always_reports_counts():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    assert 'run.dataset_progress_phase==="labels"' in PAGE
+    assert 'market files verified' in PAGE
+    assert 'markets checked' in PAGE
+    assert 'counting verified market files' in PAGE
+
+
+def test_file_verification_does_not_poll_pause_file_for_every_market(tmp_path, monkeypatch):
+    """The added early counter must not add tens of thousands of disk reads."""
+    clock = [0.]
+    writes, pause_reads = [], []
+    monkeypatch.setattr(training_cycle, "_write_worker_state",
+        lambda root, **kwargs: writes.append(kwargs))
+    monkeypatch.setattr(training_cycle.training_pause, "check_pause",
+        lambda root, run_id: pause_reads.append(run_id))
+    callback = training_cycle._market_progress_reporter(
+        tmp_path, mode="baseline", round_number=0,
+        run_id="same-session", clock=lambda: clock[0],
+    )
+    callback(0, 100, "start", "labels")
+    for completed in range(1, 101):
+        clock[0] += .01
+        callback(completed, 100, "market", "labels")
+    label_writes = sum(x["dataset_progress_phase"] == "labels" for x in writes)
+    assert label_writes >= 3
+    assert len(pause_reads) <= label_writes
+    callback(1, 100, "market", "markets")
+    callback(2, 100, "market", "markets")
+    # Feature loop retains per-market safe-pause behavior.
+    assert len(pause_reads) >= label_writes + 2

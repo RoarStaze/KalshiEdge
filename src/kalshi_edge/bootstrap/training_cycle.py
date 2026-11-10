@@ -377,7 +377,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
             key: prior[key] for key in (
                 "log_path", "worker_pid", "started_utc", "dataset_path",
                 "dataset_markets_completed", "dataset_markets_total",
-                "dataset_last_market", "dataset_action", "dataset_row_count",
+                "dataset_progress_phase", "dataset_last_market", "dataset_action", "dataset_row_count",
                 "dataset_market_count", "dataset_verified", "experiment_path",
                 "experiment_sha256", "resume_stage", "run_id", "git_sha",
             ) if key in prior
@@ -459,27 +459,43 @@ def _market_progress_reporter(
     min_markets: int = 3, min_interval_seconds: float = 0.25,
     run_id: str | None = None, initial_completed: int = 0,
 ) -> Callable[[int, int, str, str], None]:
-    """Publish real counter updates promptly without thousands of fsync writes.
+    """Stream verified market-file and feature-build counts independently.
 
-    The dataset builder calls this after every processed market. A three-market
-    minimum keeps reports granular; a short monotonic throttle bounds disk
-    writes to ~4/second even when 30,000 markets are skipped extremely fast.
-    Always publish the initial market and terminal/finalization event.
+    Publish the first count of each phase immediately, followed by every
+    three items and at most four disk updates per second. Keep the fast
+    worker-only endpoint independent of expensive training readiness checks.
     """
     if min_markets < 1 or min_interval_seconds < 0:
         raise ValueError("invalid market progress throttle")
-    last_count, last_time = (initial_completed if initial_completed > 0 else -1), float("-inf")
+    last_count = initial_completed if initial_completed > 0 else -1
+    last_time = float("-inf")
+    last_phase = "markets"
+    resume_skip_active = initial_completed > 0
 
     def report(completed: int, total: int, ticker: str, stage: str) -> None:
-        nonlocal last_count, last_time
+        nonlocal last_count, last_time, last_phase, resume_skip_active
         if total <= 0 or not 0 <= completed <= total:
             raise ValueError("invalid dataset progress count")
-        if run_id is not None:
-            # Called immediately AFTER a market is checkpointed on disk.
+        if run_id is not None and stage != "labels":
+            # Feature-row processing continues to honor every market's
+            # safe pause boundary, including the checkpointed replay loop.
             training_pause.check_pause(root, run_id)
-        if completed <= initial_completed and stage == "markets":
-            return
-        terminal = completed == total or stage != "markets"
+
+        phase = "labels" if stage == "labels" else "markets"
+        if phase == "labels":
+            # Replayed checkpoints are counted as verified again during a
+            # new scan. Old feature cursors cannot suppress these updates.
+            resume_skip_active = False
+        if phase == "markets" and stage == "markets" and resume_skip_active:
+            if completed <= initial_completed:
+                return
+
+        phase_changed = phase != last_phase
+        if phase_changed:
+            last_count = -1
+            last_time = float("-inf")
+
+        terminal = completed == total or stage not in ("labels", "markets")
         now = clock()
         first = last_count < 0
         if not first and not terminal:
@@ -487,18 +503,33 @@ def _market_progress_reporter(
                 return
             if now - last_time < min_interval_seconds:
                 return
-        if (not first and completed == last_count and not terminal):
+        if not first and completed == last_count and not terminal:
             return
+
+        if run_id is not None and stage == "labels":
+            # The preliminary verification pass has no row checkpoint to
+            # protect; checking pause on its bounded progress writes avoids
+            # a redundant disk read for every market JSON file.
+            training_pause.check_pause(root, run_id)
+
+        action = (
+            "Finalizing dataset: validating leakage and writing artifacts"
+            if stage not in ("labels", "markets") else
+            "Verifying market files against official source manifests"
+            if phase_changed and phase == "labels" else
+            "Building verified historical market feature rows"
+            if phase_changed and phase == "markets" else None
+        )
         _write_worker_state(
             root, stage="BUILDING_DATASET", mode=mode,
             round_number=round_number,
+            dataset_progress_phase=phase,
             dataset_markets_completed=completed,
             dataset_markets_total=total,
             dataset_last_market=ticker,
-            **({"dataset_action": "Finalizing dataset: validating leakage and writing artifacts"}
-               if stage != "markets" else {}),
+            **({"dataset_action": action} if action is not None else {}),
         )
-        last_count, last_time = completed, now
+        last_count, last_time, last_phase = completed, now, phase
 
     return report
 
