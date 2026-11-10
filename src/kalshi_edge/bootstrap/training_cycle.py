@@ -36,21 +36,24 @@ class CycleError(RuntimeError):
 
 WORKER_STAGE_PROGRESS = {
     "STARTING": 0,
-    "VERIFYING": 8,
-    "SPLITTING": 21,
-    "FITTING": 40,
-    "TRAINING": 25,
-    "SCORING": 60,
-    "EVALUATING": 70,
-    "COMPARING": 78,
-    "PROMOTION_GATE": 92,
+    "BUILDING_DATASET": 8,
+    "VERIFYING_DATASET": 20,
+    "VERIFYING": 20,
+    "SPLITTING": 30,
+    "FITTING": 48,
+    "TRAINING": 48,
+    "SCORING": 67,
+    "EVALUATING": 67,
+    "COMPARING": 83,
+    "PROMOTION_GATE": 94,
     "COMPLETE": 100,
 }
 FORWARD_MODE = "forward_480"
 BASELINE_MODE = "baseline"
 MIN_RETRAIN_LOCKBOX_MARKETS = 80
 ACTIVE_WORKER_STAGES = frozenset({
-    "STARTING", "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
+    "STARTING", "BUILDING_DATASET", "VERIFYING_DATASET",
+    "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
     "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
 })
 
@@ -371,7 +374,10 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     if same_run and stage != "STARTING":
         retained = {
             key: prior[key] for key in (
-                "log_path", "worker_pid", "started_utc"
+                "log_path", "worker_pid", "started_utc", "dataset_path",
+                "dataset_markets_completed", "dataset_markets_total",
+                "dataset_last_market", "dataset_action", "dataset_row_count",
+                "dataset_market_count", "dataset_verified",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
@@ -453,11 +459,18 @@ def run_forward_training_worker(root: Path) -> int:
     mode, round_number = FORWARD_MODE, 0
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
-            _write_worker_state(root, stage="VERIFYING", mode=mode,
-                                round_number=round_number)
-            ready = forward_learning_480.inspect_forward_training_readiness(root)
-            if not ready.get("ready"):
-                raise CycleError(ready.get("reason") or "Verified 480s cohort not ready")
+            _write_worker_state(root, stage="BUILDING_DATASET", mode=mode,
+                                round_number=round_number,
+                                dataset_action="Building point-in-time forward 480s snapshot dataset")
+            dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
+            _write_worker_state(
+                root, stage="VERIFYING_DATASET", mode=mode,
+                round_number=round_number, dataset_path=str(dataset_path),
+                dataset_market_count=ready["eligible_480_markets"],
+                dataset_row_count=ready["eligible_480_markets"],
+                dataset_verified=True,
+                dataset_action="Rechecked frozen dataset SHA-256 and official settlements",
+            )
 
             def progress(stage: str) -> None:
                 if stage not in ("VERIFYING", "SPLITTING", "FITTING", "SCORING",
@@ -467,7 +480,7 @@ def run_forward_training_worker(root: Path) -> int:
                                     round_number=round_number)
 
             result = forward_learning_480.evaluate_verified_forward_candidate(
-                root, progress=progress,
+                root, progress=progress, dataset_path=dataset_path,
             )
             _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
                                 round_number=round_number)
@@ -518,9 +531,73 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 if (not eligibility["ready"] or eligibility["mode"] != mode
                         or eligibility["round_number"] != round_number):
                     raise CycleError("learning eligibility/cycle changed since Train Now; refusing to run")
+            settings = BootstrapSettings(bootstrap_dir=root)
+            if mode == BASELINE_MODE:
+                from . import dataset
+                market_root = root / "raw" / "kalshi" / "markets"
+                _write_worker_state(
+                    root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
+                    dataset_action="Rebuilding verified historical market dataset",
+                )
+                if market_root.exists():
+                    report_tick = {"completed": -1}
+                    def on_build_progress(completed: int, total: int, ticker: str, stage: str) -> None:
+                        if completed != report_tick["completed"] and (
+                            total <= 50 or completed == total or
+                            completed % max(1, total//50) == 0
+                        ):
+                            report_tick["completed"] = completed
+                            _write_worker_state(
+                                root, stage="BUILDING_DATASET", mode=mode,
+                                round_number=round_number,
+                                dataset_markets_completed=completed,
+                                dataset_markets_total=total,
+                                dataset_last_market=ticker,
+                            )
+                    dataset_report = dataset.build_dataset(
+                        root, settings, progress_callback=on_build_progress,
+                    )
+                    _write_worker_state(
+                        root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
+                        dataset_market_count=dataset_report.market_count,
+                        dataset_row_count=dataset_report.row_count,
+                        dataset_path=str(dataset_report.dataset_path),
+                        dataset_action="Rebuilt locally sourced, provenance-manifested dataset",
+                    )
+                else:
+                    _write_worker_state(
+                        root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
+                        dataset_action="Reused existing SHA-verified dataset: raw rebuild source missing",
+                    )
+                _write_worker_state(
+                    root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
+                )
+                # Re-read full provenance, all source hashes, chronological
+                # data plan and class labels AFTER dataset generation.
+                context = training._verified_context(root)
+                _write_worker_state(
+                    root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
+                    dataset_verified=True,
+                    dataset_action="Dataset manifest, provenance, and source hashes passed",
+                )
+                refreshed = inspect_baseline_training_readiness(root)
+                if not refreshed["ready"]:
+                    raise CycleError("Rebuilt dataset failed independent evaluation readiness: "
+                                     + refreshed["reason"])
+            else:
+                _write_worker_state(
+                    root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
+                    dataset_action="Verified pre-existing hash-sealed historical training dataset",
+                )
+                training._verified_context(
+                    root, mistakes_only=mode == "mistake", correct_only=mode == "correct",
+                )
+                _write_worker_state(
+                    root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
+                    dataset_verified=True,
+                )
             _write_worker_state(root, stage="SPLITTING", mode=mode, round_number=round_number)
             _write_worker_state(root, stage="TRAINING", mode=mode, round_number=round_number)
-            settings = BootstrapSettings(bootstrap_dir=root)
             experiment = train_experiment(
                 root, settings, git_sha=git_sha,
                 mistakes_only=mode == "mistake",
