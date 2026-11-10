@@ -30,7 +30,8 @@ def test_cinematic_background_applies_to_all_pages_and_keeps_center_readable():
         assert f'url("{BACKGROUND_URL}")' in html
         assert 'body::before' in html
         assert 'pointer-events:none' in html
-        assert 'background-attachment:fixed' not in html or True  # no API effect
+        assert "background-size:cover,cover,cover" in html
+        assert "background-attachment:fixed" not in html
         assert 'prefers-reduced-motion' in html
         assert 'id="train-now"' in html
         assert 'id="manual-submit"' in html
