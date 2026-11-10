@@ -717,7 +717,7 @@ def _lockbox_rejection_reasons(codes: tuple[str, ...],
 _MISSING_BINANCE_DAY = re.compile(
     r"(?:required Binance history is missing for |"
     r"Binance normalized history is missing for verified raw archive )"
-    r"(\\d{4}-\\d{2}-\\d{2})\\Z"
+    r"(\d{4}-\d{2}-\d{2})\Z"
 )
 MAX_TRAIN_BINANCE_DAY_REPAIRS = 32
 
