@@ -94,7 +94,7 @@ def test_full_retrain_uses_compatible_existing_training_and_actual_promotion(tmp
         calls.append(("fit",mistakes_only,correct_only))
         return SimpleNamespace(experiment_bundle_sha256="a"*64,
                                experiment_path=tmp_path/"experiment.json")
-    def fake_evaluate(root,path):
+    def fake_evaluate(root,path,*,progress=None):
         calls.append(("lockbox",path))
         return SimpleNamespace(
             decision=SimpleNamespace(promoted=True,reason_codes=()),
