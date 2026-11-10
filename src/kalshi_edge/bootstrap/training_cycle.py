@@ -17,7 +17,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import artifact, training
 from .correct_learning import verified_correct_pool
@@ -400,6 +400,50 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     })
 
 
+def _market_progress_reporter(
+    root: Path, *, mode: str, round_number: int,
+    clock: Callable[[], float] = time.monotonic,
+    min_markets: int = 3, min_interval_seconds: float = 0.25,
+) -> Callable[[int, int, str, str], None]:
+    """Publish real counter updates promptly without thousands of fsync writes.
+
+    The dataset builder calls this after every processed market. A three-market
+    minimum keeps reports granular; a short monotonic throttle bounds disk
+    writes to ~4/second even when 30,000 markets are skipped extremely fast.
+    Always publish the initial market and terminal/finalization event.
+    """
+    if min_markets < 1 or min_interval_seconds < 0:
+        raise ValueError("invalid market progress throttle")
+    last_count, last_time = -1, float("-inf")
+
+    def report(completed: int, total: int, ticker: str, stage: str) -> None:
+        nonlocal last_count, last_time
+        if total <= 0 or not 0 <= completed <= total:
+            raise ValueError("invalid dataset progress count")
+        terminal = completed == total or stage != "markets"
+        now = clock()
+        first = last_count < 0
+        if not first and not terminal:
+            if completed - last_count < min_markets:
+                return
+            if now - last_time < min_interval_seconds:
+                return
+        if (not first and completed == last_count and not terminal):
+            return
+        _write_worker_state(
+            root, stage="BUILDING_DATASET", mode=mode,
+            round_number=round_number,
+            dataset_markets_completed=completed,
+            dataset_markets_total=total,
+            dataset_last_market=ticker,
+            **({"dataset_action": "Finalizing dataset: validating leakage and writing artifacts"}
+               if stage != "markets" else {}),
+        )
+        last_count, last_time = completed, now
+
+    return report
+
+
 def _forward_failure_reasons(report: dict[str, Any]) -> list[str]:
     """Explain failing acceptance criteria with actual matched-market numbers."""
     status = report.get("status")
@@ -606,20 +650,9 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                     dataset_action="Rebuilding verified historical market dataset",
                 )
                 if market_root.exists():
-                    report_tick = {"completed": -1}
-                    def on_build_progress(completed: int, total: int, ticker: str, stage: str) -> None:
-                        if completed != report_tick["completed"] and (
-                            total <= 50 or completed == total or
-                            completed % max(1, total//50) == 0
-                        ):
-                            report_tick["completed"] = completed
-                            _write_worker_state(
-                                root, stage="BUILDING_DATASET", mode=mode,
-                                round_number=round_number,
-                                dataset_markets_completed=completed,
-                                dataset_markets_total=total,
-                                dataset_last_market=ticker,
-                            )
+                    on_build_progress = _market_progress_reporter(
+                        root, mode=mode, round_number=round_number,
+                    )
                     dataset_report = dataset.build_dataset(
                         root, settings, progress_callback=on_build_progress,
                     )
@@ -740,6 +773,20 @@ class TrainingController:
             self._cached = inspect_training_readiness(self.root)
             self._cached_at = now
         return dict(self._cached)
+
+    def progress(self) -> dict[str, Any]:
+        """Lightweight live state for sub-second polling; no data/model reads."""
+        with self._lock:
+            run = _run_state(self.root)
+            process = self._process
+            running = process is not None and process.poll() is None
+            if (not running and run is not None
+                    and run.get("stage") in ACTIVE_WORKER_STAGES):
+                error = ("worker exited before recording completion"
+                         if process is not None else
+                         "Dashboard restarted before this run completed")
+                run = {**run, "stage": "INTERRUPTED", "error": error}
+            return {"running": running, "run": run}
 
     def status(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:

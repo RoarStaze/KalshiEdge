@@ -76,9 +76,12 @@ def test_training_ui_displays_initial_values_and_refresh_failure_explicitly():
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
     from kalshi_edge.bootstrap.api_credentials_ui import integrate_api_credentials
     html=render_site_page(integrate_api_credentials(integrate_manual_trade(integrate_round_price_hero(PAGE))),"train")
-    assert 'id="training-cases">0' in html
-    assert 'id="training-outcomes">0' in html
-    assert 'id="training-lockbox">0' in html
+    assert 'id="training-cases"' not in html
+    assert 'id="training-outcomes"' not in html
+    assert 'Legacy four-round learning cycle' not in html
+    assert 'id="dataset-build-detail"' in html
+    assert 'id="training-worker-progress"' in html
     assert "Training readiness unavailable" in html
-    assert "info.progress_percent" in html
+    assert "run.progress_percent" in html
     assert "refreshTraining()" in html
+    assert 'setInterval(refreshTrainingProgress,750)' in html

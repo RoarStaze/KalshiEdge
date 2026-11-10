@@ -666,9 +666,13 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             elif self.path == "/api/live":
                 content = json.dumps(read_live_dashboard(root), separators=(",", ":"), allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
-            elif self.path == "/api/training":
+            elif self.path in ("/api/training", "/api/training/progress"):
                 try:
-                    data = training_controller.status()
+                    # Fast progress never recalculates model readiness, dataset
+                    # hashes, settlement joins or trading account state.
+                    data = (training_controller.progress()
+                            if self.path == "/api/training/progress"
+                            else training_controller.status())
                 except CycleError as exc:
                     self._json(503, {"error": str(exc)})
                     return
