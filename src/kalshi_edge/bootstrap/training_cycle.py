@@ -34,6 +34,30 @@ class CycleError(RuntimeError):
     """Training cycle cannot safely continue."""
 
 
+WORKER_STAGE_PROGRESS = {
+    "STARTING": 0,
+    "VERIFYING": 8,
+    "SPLITTING": 21,
+    "FITTING": 40,
+    "TRAINING": 25,
+    "SCORING": 60,
+    "EVALUATING": 70,
+    "COMPARING": 78,
+    "PROMOTION_GATE": 92,
+    "COMPLETE": 100,
+}
+FORWARD_MODE = "forward_480"
+
+
+def _select_training_mode(legacy: dict, forward: dict) -> str | None:
+    """One Train Now action chooses an actually eligible training pipeline."""
+    if legacy.get("ready"):
+        return legacy.get("mode") if legacy.get("mode") in ("mistake", "correct") else None
+    return FORWARD_MODE if forward.get("ready") else None
+
+
+
+
 def _atomic_state(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -278,22 +302,139 @@ def inspect_training_readiness(root: Path) -> dict[str, Any]:
         return result
 
 
-def _write_worker_state(root: Path, *, stage: str, mode: str, round_number: int, **values) -> None:
+def _write_worker_state(root: Path, *, stage: str, mode: str,
+                        round_number: int, **values) -> None:
     prior = _run_state(root)
+    same_run = (prior is not None and prior.get("round_number") == round_number
+                and prior.get("mode") == mode)
     retained = {}
-    if prior is not None and prior.get("round_number") == round_number:
+    if same_run:
         retained = {
-            key: prior[key] for key in ("log_path", "worker_pid")
-            if key in prior
+            key: prior[key] for key in (
+                "log_path", "worker_pid", "started_utc"
+            ) if key in prior
         }
+    now = datetime.now(timezone.utc).isoformat()
+    percent = WORKER_STAGE_PROGRESS.get(
+        stage, int(prior.get("progress_percent", 0)) if same_run else 0
+    )
+    events = list(prior.get("events", [])) if same_run else []
+    if not events or events[-1].get("stage") != stage:
+        events.append({"stage": stage, "at_utc": now, "progress_percent": percent})
+    retained.setdefault("started_utc", now)
     _atomic_state(_state_path(root), {
         **retained,
         "stage": stage,
         "mode": mode,
         "round_number": round_number,
-        "updated_utc": datetime.now(timezone.utc).isoformat(),
+        "progress_percent": percent,
+        "events": events[-32:],
+        "updated_utc": now,
         **values,
     })
+
+
+def _forward_failure_reasons(report: dict[str, Any]) -> list[str]:
+    """Explain failing acceptance criteria with actual matched-market numbers."""
+    status = report.get("status")
+    if status == "INSUFFICIENT_PAIRED_VALIDATION":
+        return [report.get("reason") or "Not enough same-market validation comparisons"]
+    if status not in ("VALIDATION_JOINT_GAIN", "NO_VALIDATED_JOINT_GAIN"):
+        return [report.get("reason") or f"Forward training unavailable: {status}"]
+
+    if status == "VALIDATION_JOINT_GAIN":
+        return [
+            "Retrospective joint improvement is NOT live promotion approval.",
+            "A new, independent prospective cohort after the model is frozen, "
+            "with matching live feature compatibility and exchange cost evidence, "
+            "is required before activation.",
+        ]
+
+    candidate = report.get("candidate_69_gate") or {}
+    incumbent = report.get("incumbent_69_gate") or {}
+    n = report.get("matched_validation_markets") or candidate.get("settled_markets") or 0
+    cq, iq = candidate.get("qualified") or 0, incumbent.get("qualified") or 0
+    ca, ia = candidate.get("qualified_accuracy"), incumbent.get("qualified_accuracy")
+    def pct(value: Any) -> str:
+        return f"{100 * value:.1f}%" if isinstance(value, (int, float)) else "unavailable"
+
+    reasons = []
+    if cq <= iq:
+        reasons.append(
+            f"Coverage failed: candidate {cq}/{n} ({pct(candidate.get('coverage'))}) "
+            f"vs current model {iq}/{n} ({pct(incumbent.get('coverage'))}); "
+            f"{iq-cq} fewer qualifying predictions."
+        )
+    if ca is None or (ia is not None and ca < ia):
+        reasons.append(f"Accuracy failed: candidate {pct(ca)} vs current model {pct(ia)}.")
+    cm = report.get("candidate_probability_metrics") or {}
+    im = report.get("incumbent_probability_metrics") or {}
+    for metric, label in (("brier", "Brier score"), ("log_loss", "Log loss")):
+        candidate_value, incumbent_value = cm.get(metric), im.get(metric)
+        if (isinstance(candidate_value, (int, float))
+                and isinstance(incumbent_value, (int, float))
+                and candidate_value > incumbent_value):
+            reasons.append(
+                f"{label} worsened: candidate {candidate_value:.4f}, "
+                f"current model {incumbent_value:.4f} (lower is better)."
+            )
+    return reasons or [
+        "Candidate did not pass the complete accuracy, coverage and proper-score "
+        "gates on the same later settled markets."
+    ]
+
+
+def run_forward_training_worker(root: Path) -> int:
+    """Persistent offline 480s training. A research score is never a live PASS."""
+    from ..launcher import SingleStarter
+    from . import forward_learning_480
+
+    root = root.resolve()
+    mode, round_number = FORWARD_MODE, 0
+    with SingleStarter(root / "training_runs" / "worker.lock"):
+        try:
+            _write_worker_state(root, stage="VERIFYING", mode=mode,
+                                round_number=round_number)
+            ready = forward_learning_480.inspect_forward_training_readiness(root)
+            if not ready.get("ready"):
+                raise CycleError(ready.get("reason") or "Verified 480s cohort not ready")
+
+            def progress(stage: str) -> None:
+                if stage not in ("VERIFYING", "SPLITTING", "FITTING", "SCORING",
+                                 "COMPARING"):
+                    raise CycleError(f"unexpected forward training stage: {stage}")
+                _write_worker_state(root, stage=stage, mode=mode,
+                                    round_number=round_number)
+
+            result = forward_learning_480.evaluate_verified_forward_candidate(
+                root, progress=progress,
+            )
+            _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
+                                round_number=round_number)
+            decision = (
+                "NOT_DEPLOYABLE" if result.get("status") == "VALIDATION_JOINT_GAIN"
+                else "VALIDATION_FAILED" if result.get("status") == "NO_VALIDATED_JOINT_GAIN"
+                else "INSUFFICIENT_EVIDENCE"
+            )
+            reasons = _forward_failure_reasons(result)
+            # Save the actual measured report for refresh/restart review.
+            report_name = f"forward-480-{int(time.time_ns())}-{uuid.uuid4().hex[:10]}.json"
+            report_path = root / "training_runs" / "reports" / report_name
+            _atomic_state(report_path, result)
+            _write_worker_state(
+                root, stage="COMPLETE", mode=mode, round_number=round_number,
+                decision=decision, promoted=False, reasons=reasons,
+                results=result, report_path=str(report_path),
+            )
+            return 0 if decision in ("VALIDATION_FAILED", "NOT_DEPLOYABLE") else 2
+        except Exception as exc:
+            LOG.exception("Verified 480s training failed")
+            _write_worker_state(
+                root, stage="FAILED", mode=mode, round_number=round_number,
+                decision="ERROR", promoted=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return 2
 
 
 def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: str) -> int:
@@ -325,6 +466,12 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 root, stage="COMPLETE", mode=mode, round_number=round_number,
                 experiment_sha256=experiment.experiment_bundle_sha256,
                 promoted=evaluation.decision.promoted,
+                decision=("PROMOTED" if evaluation.decision.promoted else "VALIDATION_FAILED"),
+                reasons=list(evaluation.decision.reason_codes) or (
+                    ["Passed all independent lockbox and incumbent checks; "
+                     "hash-sealed model promoted. Restart to activate."]
+                    if evaluation.decision.promoted
+                    else ["Independent lockbox validation did not authorize promotion."]),
                 reason_codes=list(evaluation.decision.reason_codes),
                 evaluation_report=str(evaluation.report_path),
             )
