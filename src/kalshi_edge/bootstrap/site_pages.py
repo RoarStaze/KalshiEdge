@@ -251,8 +251,8 @@ def render_site_page(page: str, section: str) -> str:
     if any(page.count(value) != 1 for value in checks):
         raise ValueError("Dashboard structure changed: cannot safely route pages")
     if section == "train":
-        base_helpers = ('function saveTrainingSnapshot(info){}\\n'
-                        'function restoreTrainingSnapshot(){return false;}\\n')
+        base_helpers = ('function saveTrainingSnapshot(info){}\n'
+                        'function restoreTrainingSnapshot(){return false;}\n')
         if page.count(base_helpers) != 1:
             raise ValueError("Train cache hook missing from dashboard")
         page = page.replace(base_helpers, TRAIN_STATUS_SESSION_HELPERS, 1)
