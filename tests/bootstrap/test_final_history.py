@@ -222,8 +222,10 @@ def test_localhost_dashboard_and_json_api(tmp_path: Path) -> None:
             base = f"http://127.0.0.1:{server.server_address[1]}"
             page = client.get(base + "/history")
             assert page.status_code == 200
-            assert "Final forecast history" in page.text
-            assert "correct + incorrect" in page.text
+            assert "Every call. On the record." not in page.text
+            assert "<h2>Final forecast history</h2>" not in page.text
+            assert 'id="history-status"' in page.text
+            assert 'id="history-rows"' in page.text
             api = client.get(base + "/api/history")
             assert api.status_code == 200
             data = api.json()
