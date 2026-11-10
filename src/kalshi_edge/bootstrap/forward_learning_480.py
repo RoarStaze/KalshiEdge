@@ -17,7 +17,7 @@ import json
 import math
 from pathlib import Path
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .forward_feature_evidence_480 import _joined
 from .frozen_specialist_480 import fit_frozen_specialist, score_frozen_specialist
@@ -145,6 +145,7 @@ def evaluate_forward_candidate(
     rows: Sequence[FeatureRow],
     incumbent_by_ticker: Mapping[str, Mapping[str, Any]],
     *, frozen_at_ns: int,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Fit once on earlier labels, evaluate only later verified market labels.
 
@@ -168,6 +169,8 @@ def evaluate_forward_candidate(
     if not readiness["ready"]:
         result["reason"] = readiness["reason"]
         return result
+    if progress is not None:
+        progress("SPLITTING")
     train, valid = partition_forward_training(rows)
     result.update(training_markets=len(train), validation_markets=len(valid),
                   training_last_checkpoint_ns=train[-1].checkpoint_ts_ns,
@@ -182,11 +185,15 @@ def evaluate_forward_candidate(
     digest = hashlib.sha256(json.dumps(
         training_data, sort_keys=True, separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")).hexdigest()
+    if progress is not None:
+        progress("FITTING")
     model = fit_frozen_specialist(
         train, dataset_sha256=digest,
         frozen_at_ns=train[-1].checkpoint_ts_ns + 1,
     )
     # score_frozen_specialist refuses timestamps at/before fit boundary.
+    if progress is not None:
+        progress("SCORING")
     paired = []
     for row in valid:
         prior = incumbent_by_ticker.get(row.market_ticker)
@@ -209,6 +216,8 @@ def evaluate_forward_candidate(
             "settlements, eligible features and saved incumbent probabilities"
         )
         return result
+    if progress is not None:
+        progress("COMPARING")
     labels = [x[0] for x in paired]
     candidate = [x[1] for x in paired]
     incumbent = [x[2] for x in paired]
@@ -246,9 +255,13 @@ def evaluate_forward_candidate(
     return result
 
 
-def evaluate_verified_forward_candidate(root: Path) -> dict[str, Any]:
+def evaluate_verified_forward_candidate(
+    root: Path, *, progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """Read only local, independently verified 480s labels and saved incumbent calls."""
     root = Path(root).resolve()
+    if progress is not None:
+        progress("VERIFYING")
     rows, _audit = _joined(root)
     finals = {
         x.market_ticker: {
@@ -256,7 +269,9 @@ def evaluate_verified_forward_candidate(root: Path) -> dict[str, Any]:
             "forecast": x.forecast, "coin_flip_assessment": x.coin_flip_assessment,
         } for x in _forecasts(root) if x.checkpoint_seconds == 480
     }
-    return evaluate_forward_candidate(rows, finals, frozen_at_ns=time.time_ns())
+    return evaluate_forward_candidate(
+        rows, finals, frozen_at_ns=time.time_ns(), progress=progress,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
