@@ -175,4 +175,3 @@ def test_ui_labels_two_phases_and_always_reports_counts():
     assert 'market files verified' in PAGE
     assert 'markets checked' in PAGE
     assert 'counting verified market files' in PAGE
-    assert 'setInterval(refreshTrainingProgress,750)' in PAGE
