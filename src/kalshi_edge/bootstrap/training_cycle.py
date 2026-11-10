@@ -561,10 +561,35 @@ def run_forward_training_worker(root: Path) -> int:
     mode, round_number = FORWARD_MODE, 0
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
+            previous = _run_state(root) or {}
+            saved = previous.get("dataset_path")
+            can_reuse = bool(
+                previous.get("resume_stage") in (
+                    "VERIFYING_DATASET", "SPLITTING", "VERIFYING",
+                    "FITTING", "SCORING", "COMPARING", "PROMOTION_GATE",
+                ) and previous.get("dataset_verified") and isinstance(saved, str)
+            )
             _pause_boundary(root, stage="BUILDING_DATASET", mode=mode,
                             round_number=round_number,
-                            dataset_action="Building point-in-time forward 480s snapshot dataset")
-            dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
+                            dataset_action=(
+                                "Reusing the same sealed 480s dataset"
+                                if can_reuse else
+                                "Building point-in-time forward 480s snapshot dataset"
+                            ))
+            if can_reuse:
+                dataset_path = Path(saved).resolve()
+                try:
+                    dataset_path.relative_to(root / "training_runs" / "datasets")
+                except ValueError as exc:
+                    raise CycleError("sealed forward dataset path escapes training storage") from exc
+                # SHA-256, original incumbent calls and settled labels all
+                # must match the previously frozen dataset.
+                rows, _incumbents = forward_learning_480.load_verified_forward_dataset(dataset_path)
+                ready = forward_learning_480.assess_forward_training_readiness(rows)
+                if not ready["ready"]:
+                    raise CycleError("previously sealed 480s evidence is no longer eligible")
+            else:
+                dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
             _pause_boundary(
                 root, stage="VERIFYING_DATASET", mode=mode,
                 round_number=round_number, dataset_path=str(dataset_path),
