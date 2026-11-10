@@ -48,20 +48,20 @@ body[data-page] .site-nav{
  pointer-events:none!important;background:transparent!important;
  border:0!important;box-shadow:none!important;
 }
-.ke-neon-rail{
- fill:none;stroke-opacity:.33;stroke-width:1.5;
- vector-effect:non-scaling-stroke;
-}
 .ke-neon-runner{
- fill:none;stroke-opacity:1;stroke-width:3.1;stroke-linecap:round;
- stroke-dasharray:16 84;stroke-dashoffset:0;
+ fill:none;stroke-opacity:1;stroke-width:2.7;
+ /* A continuous 100% perimeter, not the previous short dash segment. */
+ stroke-dasharray:none;
  vector-effect:non-scaling-stroke;
- filter:drop-shadow(0 0 3px rgba(80,255,220,.85))
-        drop-shadow(0 0 6px rgba(180,76,255,.55));
- animation:ke-rainbow-orbit 3.7s linear infinite;
+ animation:ke-rainbow-cycle 5s linear infinite;
 }
-@keyframes ke-rainbow-orbit{
- to{stroke-dashoffset:-100}
+@keyframes ke-rainbow-cycle{
+ from{filter:hue-rotate(0deg)
+   drop-shadow(0 0 3px rgba(80,255,220,.82))
+   drop-shadow(0 0 7px rgba(180,76,255,.48))}
+ to{filter:hue-rotate(360deg)
+   drop-shadow(0 0 3px rgba(80,255,220,.82))
+   drop-shadow(0 0 7px rgba(180,76,255,.48))}
 }
 .ke-neon-target>.ke-border-overlay,
 .ke-neon-target>.ke-border-overlay *{
@@ -70,14 +70,12 @@ body[data-page] .site-nav{
 /* Accessible reduced-motion users keep a soft colorful frame, not a runner. */
 @media(prefers-reduced-motion:reduce){
  body::before{animation:none!important;transform:scale(1.09);will-change:auto}
- /* The user explicitly opted into the orbiting border. Keep that visual
-    cue moving slowly even when the OS suppresses other ambient motion. */
+ /* Keep the user-requested full-border color cycle, but slow its
+    transitions when reduced-motion is enabled. No moving dash exists. */
  .ke-neon-target>.ke-border-overlay .ke-neon-runner{
-  animation:ke-rainbow-orbit 5.4s linear infinite!important;
-  stroke-dasharray:16 84;stroke-opacity:.85;stroke-width:2.3;
-  filter:none;
+  animation:ke-rainbow-cycle 9s linear infinite!important;
+  stroke-dasharray:none;stroke-opacity:.84;stroke-width:2.2;
  }
- .ke-neon-rail{stroke-opacity:.2}
 }
 """
 
@@ -87,15 +85,11 @@ MOTION_MARKUP = ""
 MOTION_SCRIPT = r"""<script>
 (function(){
  "use strict";
- // Select actual framed surfaces rather than all generic .card descendants;
- // in particular the "THIS ROUND'S FORECAST" label is never decorated.
+ // Only decorate the OUTER panels. No price boxes, labels, inputs,
+ // inner training blocks, notices, or buy/sell controls get a rainbow.
  const boxSelector=[
   ".site-nav",".forecast",".context>.manual-trade",
-  ".hero-price-surface",".hero-clock-panel",".lock-banner",".record-note",
-  ".mt-pills",".mt-inputbox",".mt-auto-record",".mt-auto-performance",
-  ".mt-auto-history",".mt-holding",".mt-sell-holding",".mt-confirm",
-  ".training-card",".training-step",".training-count",".training-pill",
-  ".history-view .card",".kpi",".history-section",".api-card",".api-status"
+  ".training-card",".history-view .card",".api-card"
  ].join(",");
  const namespace="http://www.w3.org/2000/svg";
  const done=new WeakSet();
@@ -134,6 +128,8 @@ MOTION_SCRIPT = r"""<script>
  }
  function decorate(node){
   if(!(node instanceof HTMLElement)||done.has(node))return;
+  // Never nest a rainbow outline inside an already outlined panel.
+  if(node.parentElement?.closest(".ke-neon-target"))return;
   done.add(node);
   node.classList.add("ke-neon-target");
   const svg=make("svg");
@@ -159,14 +155,11 @@ MOTION_SCRIPT = r"""<script>
   }
   defs.appendChild(gradient);
   svg.appendChild(defs);
-  for(const name of ["ke-neon-rail","ke-neon-runner"]){
-   const shape=make("rect");
-   shape.setAttribute("class",name);
-   shape.setAttribute("stroke","url(#"+id+")");
-   if(name==="ke-neon-runner")
-    shape.style.animationDelay=(-.29*(sequence%9))+"s";
-   svg.appendChild(shape);
-  }
+  const border=make("rect");
+  border.setAttribute("class","ke-neon-runner");
+  border.setAttribute("stroke","url(#"+id+")");
+  border.style.animationDelay=(-.41*(sequence%9))+"s";
+  svg.appendChild(border);
   node.appendChild(svg);
   sync(node);
   if(resizeObserver)resizeObserver.observe(node);

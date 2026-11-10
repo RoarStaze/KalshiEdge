@@ -25,10 +25,10 @@ def test_all_routes_clean_background_with_same_rainbow_border_system():
         assert "ke-live-beam" not in html
         assert "ke-live-grid" not in html
         assert "ke-particle" not in html
-        assert "ke-rainbow-orbit" in html
+        assert "ke-rainbow-cycle" in html
         assert "ResizeObserver" in html
         assert "MutationObserver" in html
-        assert "stroke-dasharray" in html
+        assert "stroke-dasharray:none" in html
         assert 'url("/assets/kalshiedge-neon-city.webp")' in html
 
 
@@ -58,18 +58,23 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
  const widthOk=!!view&&Math.abs(view.width-node.getBoundingClientRect().width)<3;
  const heightOk=!!view&&Math.abs(view.height-node.getBoundingClientRect().height)<3;
  const boxOk=!!rect&&rect.getBoundingClientRect().width>node.clientWidth-8;
- const labelOk=!document.querySelector(".panel-label > .ke-border-overlay");
+ const labelOk=!document.querySelector(".panel-label > .ke-border-overlay") &&
+  !document.querySelector(".forecast .hero-price-surface > .ke-border-overlay") &&
+  !document.querySelector(".forecast .hero-clock-panel > .ke-border-overlay") &&
+  !document.querySelector(".forecast .lock-banner > .ke-border-overlay") &&
+  !document.querySelector(".manual-trade .mt-inputbox > .ke-border-overlay");
  const colorsOk=(svg?.querySelectorAll("linearGradient stop").length||0)>=4;
+ const completeOk=!!rect && getComputedStyle(rect).strokeDasharray==="none";
  // --dump-dom snapshots can occur before the first CSS animation frame.
  // Verify the browser actually applies a nonzero-duration orbit animation;
  // a separate browser timing check verifies the stroke moves over time.
  const css=rect?getComputedStyle(rect):null;
  document.body.dataset.rainbowDebug=[css?.animationName,css?.animationDuration,matchMedia("(prefers-reduced-motion:reduce)").matches].join("|");
  const moving=!!css &&
-  css.animationName.split(",").map(x=>x.trim()).includes("ke-rainbow-orbit") &&
+  css.animationName.split(",").map(x=>x.trim()).includes("ke-rainbow-cycle") &&
   parseFloat(css.animationDuration)>0;
  document.body.dataset.rainbowProbe=[
-  widthOk,heightOk,boxOk,labelOk,colorsOk,moving
+  widthOk,heightOk,boxOk,labelOk,colorsOk,completeOk,moving
  ].join(",");
 })();
 </script>"""
@@ -85,4 +90,4 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
     import re
     match=re.search(r'data-rainbow-probe="([^"]+)"',p.stdout)
     assert match is not None, "Browser probe did not execute: " + p.stderr[-1200:]
-    assert match.group(1)=="true,true,true,true,true,true", (match.group(1), p.stdout[p.stdout.find("data-rainbow-debug="):][:120])
+    assert match.group(1)=="true,true,true,true,true,true,true", (match.group(1), p.stdout[p.stdout.find("data-rainbow-debug="):][:120])
