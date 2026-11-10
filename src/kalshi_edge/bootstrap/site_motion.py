@@ -70,9 +70,12 @@ body[data-page] .site-nav{
 /* Accessible reduced-motion users keep a soft colorful frame, not a runner. */
 @media(prefers-reduced-motion:reduce){
  body::before{animation:none!important;transform:scale(1.09);will-change:auto}
- .ke-neon-runner{
-  animation:none!important;stroke-dasharray:100 0;
-  stroke-opacity:.6;stroke-width:1.8;filter:none;
+ /* The user explicitly opted into the orbiting border. Keep that visual
+    cue moving slowly even when the OS suppresses other ambient motion. */
+ .ke-neon-target>.ke-border-overlay .ke-neon-runner{
+  animation:ke-rainbow-orbit 5.4s linear infinite!important;
+  stroke-dasharray:16 84;stroke-opacity:.85;stroke-width:2.3;
+  filter:none;
  }
  .ke-neon-rail{stroke-opacity:.2}
 }
