@@ -553,6 +553,10 @@ function renderModelIdentity(){
   text("installed-model-number","Model #"+n+" installed · loaded model hash differs");
  }
 }
+// Only routed /train installs session status persistence; no browser storage
+// is used on API credential and trading pages.
+function saveTrainingSnapshot(info){}
+function restoreTrainingSnapshot(){return false;}
 function renderTraining(info){
  trainingStatus=info;
  renderModelIdentity();
@@ -624,8 +628,17 @@ async function refreshTraining(){
  try{
   const response=await fetch("/api/training",{cache:"no-store"});
   if(!response.ok)throw Error("HTTP "+response.status);
-  renderTraining(await response.json());
+  const info=await response.json();
+  renderTraining(info);
+  saveTrainingSnapshot(info);
  }catch(err){
+  if(trainingStatus){
+   // Keep completed stages, progress, model identity and the latest verdict.
+   el("train-now").disabled=true;
+   text("train-feedback","Connection interrupted · showing last verified training status; "+
+    "retrying soon. "+err.message);
+   return;
+  }
   text("training-headline","Training readiness unavailable");
   text("train-status-pill","CONNECTION ERROR");
   text("training-reason","Cannot load training readiness: "+err.message);
