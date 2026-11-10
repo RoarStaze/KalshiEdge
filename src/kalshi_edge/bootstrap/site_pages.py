@@ -7,6 +7,40 @@ No AutoTrader controls or credential inputs are injected into any route.
 from __future__ import annotations
 
 
+# Only /train receives these helpers. API credential pages must never
+# include browser storage writes, even for unrelated non-secret progress data.
+TRAIN_STATUS_SESSION_HELPERS = r"""// Navigation uses real page URLs; preserve the last rendered training
+// status across page loads in this tab. Restore for display only, then verify.
+const TRAIN_STATUS_CACHE_KEY="kalshiedge.train.status.v1";
+function saveTrainingSnapshot(info){
+ try{
+  if(!info||typeof info!=="object"||Array.isArray(info))return;
+  sessionStorage.setItem(TRAIN_STATUS_CACHE_KEY,JSON.stringify({
+   savedAt:Date.now(),status:info,
+  }));
+ }catch(err){/* Storage can be disabled; normal server polling still works. */}
+}
+function restoreTrainingSnapshot(){
+ try{
+  const raw=sessionStorage.getItem(TRAIN_STATUS_CACHE_KEY);
+  if(!raw)return false;
+  const snapshot=JSON.parse(raw);
+  if(!snapshot||typeof snapshot!=="object"||
+     !Number.isFinite(snapshot.savedAt)||
+     snapshot.savedAt>Date.now()+60000||
+     Date.now()-snapshot.savedAt>12*60*60*1000||
+     !snapshot.status||typeof snapshot.status!=="object"||
+     Array.isArray(snapshot.status))return false;
+  renderTraining(snapshot.status);
+  // Cached readiness cannot authorize a new training session.
+  el("train-now").disabled=true;
+  text("train-feedback","Last known training progress · syncing with the active worker…");
+  return true;
+ }catch(err){return false;}
+}
+"""
+
+
 STYLE = r"""/* KalshiEdge's routed, minimal three-page experience. */
 :root{
  --bg:#080e13;--panel:#11191f;--panel2:#172128;--line:#273640;
@@ -216,6 +250,12 @@ def render_site_page(page: str, section: str) -> str:
     )
     if any(page.count(value) != 1 for value in checks):
         raise ValueError("Dashboard structure changed: cannot safely route pages")
+    if section == "train":
+        base_helpers = ('function saveTrainingSnapshot(info){}\\n'
+                        'function restoreTrainingSnapshot(){return false;}\\n')
+        if page.count(base_helpers) != 1:
+            raise ValueError("Train cache hook missing from dashboard")
+        page = page.replace(base_helpers, TRAIN_STATUS_SESSION_HELPERS, 1)
     page = page.replace('</style>', STYLE + '\n</style>', 1)
     page = page.replace('<body>', f'<body data-page="{section}">', 1)
     page = page.replace('<header>', '<header class="site-header">', 1)
