@@ -123,6 +123,12 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-launch p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
 .training-launch .train-button{min-width:190px;padding:13px 22px;background:#66cdb2;border-radius:10px;color:#10201d;border:none;box-shadow:0 6px 22px rgba(78,196,158,.12)}
 .training-launch .train-button:disabled{background:#2f4855;color:#81929d;box-shadow:none}
+.training-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.training-actions button{border-radius:9px;padding:13px 17px;font-size:12px;font-weight:750;cursor:pointer;transition:background .2s,border-color .2s}
+.train-pause-button{background:#3f3425;border:1px solid #b68c4b;color:#f2cf95}
+.train-resume-button{background:#1c493f;border:1px solid #4ab799;color:#b0f4db}
+.training-actions button:disabled{opacity:.42;cursor:not-allowed}
+.training-outcome.paused{background:#322f25;border-color:#8c7b4f;color:#f6e5bb}
 .training-live-panel{background:linear-gradient(180deg,#132029,#111b23);border:1px solid #2c4350;border-radius:14px;margin-top:20px;padding:23px 24px}
 .training-live-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .training-live-head h3{font-size:19px;margin:5px 0 0}
@@ -149,7 +155,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-outcome.pass{background:#14342c;border-color:#2a8970;color:#c2f3dd}
 .training-outcome.fail{background:#352529;border-color:#96545a;color:#f6c3c6}
 .training-outcome.pending{background:#353024;border-color:#9d844c;color:#f0ddac}
-@media(max-width:800px){.training-stage-list{grid-template-columns:repeat(3,minmax(0,1fr))}.training-launch .train-button{width:100%}}
+@media(max-width:800px){.training-stage-list{grid-template-columns:repeat(3,minmax(0,1fr))}.training-launch .train-button{width:100%}.training-actions{width:100%}.training-actions button{flex:1}}
 @media(max-width:460px){.training-stage-list{grid-template-columns:repeat(2,minmax(0,1fr))}.training-comparison{grid-template-columns:1fr}}
 
 .training-forward{margin-top:20px;padding:18px 20px;border:1px solid #31534d;background:#14231f;border-radius:12px}
@@ -260,7 +266,11 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
     <h3 id="training-headline">Checking training readiness</h3>
     <p id="training-description">Training will use the eligible verified dataset, never simulated examples.</p>
    </div>
-   <button class="train-button" type="button" disabled id="train-now">Train Now</button>
+   <div class="training-actions">
+    <button class="train-button" type="button" disabled id="train-now">Train Now</button>
+    <button class="train-pause-button" type="button" disabled id="train-pause">Pause</button>
+    <button class="train-resume-button" type="button" disabled id="train-resume">Resume</button>
+   </div>
   </div>
  </div>
  <div class="training-live-panel" aria-label="Training session and validation results">
@@ -479,6 +489,11 @@ function renderTrainingSession(run,running){
   outcome.classList.add("fail");
   outcome.textContent="TRAINING FAILED — Existing model unchanged.\n"+
    (run.error||reasons.join("\n")||"Worker interrupted; inspect training log.");
+ }else if(current==="PAUSED"){
+  outcome.classList.add("paused");
+  outcome.textContent="TRAINING PAUSED · Saved checkpoint: "+
+   String(run.resume_stage||"last verified stage").replaceAll("_"," ")+
+   "\nPress Resume to continue this same training run. Completed dataset markets are preserved. An unfinished model fitting stage may need to rerun.";
  }else if(!done){
   outcome.textContent="IN PROGRESS · "+
    (current.replaceAll("_"," ")||"Starting")+
@@ -533,6 +548,21 @@ function renderModelIdentity(){
 // is used on API credential and trading pages.
 function saveTrainingSnapshot(info){}
 function restoreTrainingSnapshot(){return false;}
+function updateTrainingPauseControls(info){
+ const run=info.run||{};
+ const running=!!info.running;
+ const requested=!!info.pause_requested;
+ const paused=!!info.paused||(!running&&run.stage==="PAUSED");
+ el("train-pause").disabled=!running||requested||run.stage==="PAUSED";
+ el("train-pause").textContent=requested?"Pausing…":"Pause";
+ el("train-resume").disabled=!paused||running;
+ el("train-resume").textContent="Resume";
+ el("train-now").disabled=paused||requested||running||!info.train_available;
+ const pill=el("train-status-pill");
+ if(requested&&running){pill.textContent="PAUSE_REQUESTED";}
+ else if(paused){pill.textContent="PAUSED";}
+ else if(run.stage==="RESUMING"&&running){pill.textContent="AUTO-RESUMING";}
+}
 function renderTraining(info){
  trainingStatus=info;
  renderModelIdentity();
@@ -545,7 +575,9 @@ function renderTraining(info){
   (info.ready?info.mode:baseline.ready?"baseline":prospective.ready?"forward_480":""));
  const phase=String(run.stage||"");
  const pill=el("train-status-pill");
- pill.textContent=running?"TRAINING RUNNING":ready?"READY TO TRAIN":
+ pill.textContent=info.pause_requested&&running?"PAUSE_REQUESTED":
+  info.paused||(!running&&run.stage==="PAUSED")?"PAUSED":
+  running?"TRAINING RUNNING":ready?"READY TO TRAIN":
   info.status==="BLOCKED"?"DATA BLOCKED":"COLLECTING DATA";
  pill.className="training-pill"+(running||ready?"":" waiting");
  const n=Math.max(0,Number(prospective.eligible_480_markets)||0);
@@ -558,7 +590,9 @@ function renderTraining(info){
  text("forward-480-reason",prospective.reason||"Waiting for verified forward 480s features.");
  text("baseline-retrain-ready",(baseline.ready?"Full model ready: ":"Full model: ")+
   (baseline.reason||"Checking historical dataset and fresh independent lockbox"));
- text("training-headline",running?"Training and evaluating…":
+ text("training-headline",run.stage==="PAUSED"?"Training paused":
+  info.pause_requested?"Pausing after the next safe checkpoint…":
+  running?"Training and evaluating…":
   mode==="forward_480"?"Ready to train the 480-second research challenger":
   mode==="baseline"?"Ready to train and evaluate a full model":
   ready?"Ready for verified legacy training":"Waiting for verified training evidence");
@@ -573,8 +607,13 @@ function renderTraining(info){
  const button=el("train-now");
  button.disabled=!ready||running||phase==="STARTING";
  button.textContent=running?"Training…":"Train Now";
+ updateTrainingPauseControls(info);
  renderTrainingSession(run,running);
- if(running){
+ if(info.pause_requested&&running){
+  text("train-feedback","Pause requested · waiting for the current market or atomic model stage.");
+ }else if(info.paused||(!running&&run.stage==="PAUSED")){
+  text("train-feedback","Paused at "+String(run.resume_stage||"saved checkpoint").replaceAll("_"," ")+" · Resume continues the same session.");
+ }else if(running){
   text("train-feedback","Worker active · "+String(run.mode||mode).replaceAll("_"," ")+
    " · "+(run.updated_utc||"awaiting first milestone"));
  }else if(run.stage==="COMPLETE"){
@@ -629,13 +668,18 @@ async function refreshTrainingProgress(){
   // A late GET must never move the same in-progress dataset back.
   if(next.started_utc===previous.started_utc&&newer&&older&&newer<older)return;
   const running=payload.running===true;
-  if(newer===older&&next.stage===previous.stage&&running===trainingStatus.running)return;
-  trainingStatus={...trainingStatus,run:next,running};
+  if(newer===older&&next.stage===previous.stage&&running===trainingStatus.running
+     &&payload.pause_requested===trainingStatus.pause_requested
+     &&payload.paused===trainingStatus.paused)return;
+  trainingStatus={...trainingStatus,...payload,run:next,running};
   renderTrainingSession(next,running);
+  updateTrainingPauseControls(trainingStatus);
   saveTrainingSnapshot(trainingStatus);
   if(running){
-   text("train-status-pill","TRAINING RUNNING");
-   text("training-headline","Training and evaluating…");
+   text("train-status-pill",trainingStatus.pause_requested?"PAUSE_REQUESTED":
+    next.stage==="RESUMING"?"AUTO-RESUMING":"TRAINING RUNNING");
+   text("training-headline",trainingStatus.pause_requested?
+    "Pausing after the next safe checkpoint…":"Training and evaluating…");
    text("train-feedback","Worker active · "+String(next.stage||"STARTING").replaceAll("_"," ")+
     " · "+(next.updated_utc||"checking latest state"));
    el("train-now").disabled=true;
@@ -649,6 +693,29 @@ async function refreshTrainingProgress(){
   progressPollPending=false;
  }
 }
+async function trainingControl(action){
+ const button=el(action==="pause"?"train-pause":"train-resume");
+ button.disabled=true;
+ text("train-feedback",action==="pause"?
+  "Requesting a safe pause after the current market or model stage…":
+  "Resuming saved training session…");
+ try{
+  const response=await fetch("/api/training/"+action,{
+   method:"POST",headers:{"Content-Type":"application/json",
+    "X-KalshiEdge-Action":"train"},body:"{}",cache:"no-store",
+  });
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error||"HTTP "+response.status);
+  text("train-feedback",action==="pause"?
+   "Pause requested · waiting for the worker's safe checkpoint.":
+   "Saved session resumed. Verified dataset checkpoints and fitted artifacts will be reused.");
+ }catch(err){
+  text("train-feedback","Could not "+action+" training: "+err.message);
+ }
+ await refreshTraining();
+}
+el("train-pause").addEventListener("click",()=>trainingControl("pause"));
+el("train-resume").addEventListener("click",()=>trainingControl("resume"));
 el("train-now").addEventListener("click",async()=>{
  if(!(trainingStatus?.train_available??(trainingStatus?.ready||
      trainingStatus?.baseline_retrain?.ready||trainingStatus?.forward_480?.ready))||
