@@ -170,7 +170,7 @@ def test_manual_forward_evaluation_api_is_same_origin_and_cannot_override_traini
             assert client.post(endpoint, json={"promote": True}, headers=headers).status_code == 400
             response = client.post(endpoint, json={}, headers=headers)
             assert response.status_code == 409
-            assert "verified" in response.json()["error"].lower() or "need" in response.json()["error"].lower()
+            assert "settlement" in response.json()["error"].lower()
     finally:
         server.shutdown()
         server.server_close()
