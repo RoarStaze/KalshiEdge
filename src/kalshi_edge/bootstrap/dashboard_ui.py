@@ -126,6 +126,14 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-count b{display:block;font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
 .training-count span{display:block;color:var(--muted);font-size:10px;line-height:1.4;margin-top:5px}
 .training-action{border-left:1px solid var(--line);padding-left:23px}
+.training-forward{margin-top:20px;padding:18px 20px;border:1px solid #31534d;background:#14231f;border-radius:12px}
+.training-forward-head{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}
+.training-forward-title{font-size:14px;font-weight:700;color:#92e2c8}
+.training-forward-numbers{font-size:12px;color:var(--muted);margin-top:10px}
+.training-forward-note{font-size:12px;color:var(--muted);line-height:1.6;margin:10px 0}
+.training-forward-result{font-size:12px;line-height:1.6;margin-top:10px}
+.training-forward button{margin-top:12px;padding:11px 16px;border-radius:8px;border:1px solid #5bc6a6;background:#216651;color:#fff;font-weight:700;cursor:pointer}
+.training-forward button:disabled{opacity:.45;cursor:not-allowed}
 .training-action h3{font-size:14px;margin:0 0 9px}
 .training-action p{font-size:12px;color:var(--muted);line-height:1.65;margin:0 0 16px}
 .train-button{width:100%;padding:14px 12px;border:0;border-radius:9px;background:linear-gradient(130deg,#7ae2ca,#50bfd4);color:#092632;font-weight:800;font-size:13px;cursor:pointer}
@@ -225,6 +233,16 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <button class="train-button" type="button" disabled id="train-now">Train Now</button>
    <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
   </div>
+ </div>
+ <div class="training-forward" aria-label="Prospective eight-minute predictor training">
+   <div class="training-forward-head">
+     <div class="training-forward-title">Prospective 480s model · verified forward features</div>
+     <strong id="forward-480-progress" class="training-big-percent">0%</strong>
+   </div>
+   <div id="forward-480-eligible" class="training-forward-numbers">Checking 0 / 120 settled, causal feature snapshots</div>
+   <div id="forward-480-reason" class="training-forward-note">Live eight-minute snapshots and official outcomes are checked independently of historical backfill.</div>
+   <button id="forward-480-evaluate" type="button" disabled>Evaluate 480s challenger</button>
+   <div id="forward-480-result" class="training-forward-result" role="status" aria-live="polite">Research-only model fit and later chronological validation; no live promotion or order changes.</div>
  </div>
 </section>
 <section aria-label="Final Forecast history">
@@ -363,6 +381,18 @@ function renderTraining(info){
  text("training-outcomes",(Number(info.outcome_classes)||0)+" / 2");
  text("training-lockbox",(Number(info.new_evaluation_markets)||0)+" / "+info.target_new_markets);
  text("training-reason",info.reason);
+ const prospective=info.forward_480||{};
+ const forwardN=Math.max(0,Number(prospective.eligible_480_markets)||0);
+ const forwardTarget=Math.max(1,Number(prospective.required_markets)||120);
+ const forwardPct=Math.max(0,Math.min(100,Number(prospective.progress_percent)||0));
+ text("forward-480-progress",forwardPct+"%");
+ text("forward-480-eligible",forwardN+" / "+forwardTarget+
+   " verified, causal 480s markets · "+String(prospective.verified_outcome_classes||0)+
+   " / 2 official outcome classes");
+ text("forward-480-reason",prospective.reason||
+   "Waiting for verified forward training evidence");
+ el("forward-480-evaluate").disabled=!prospective.ready||running;
+
  for(let i=1;i<=4;i++){
    const stepEl=el("train-step-"+i);
    stepEl.className="training-step "+(i===step?"active":i<step?"completed":"");
@@ -393,8 +423,39 @@ async function refreshTraining(){
    el("training-bar-fill").style.width="0%";
    el("training-bar").setAttribute("aria-valuenow","0");
    el("train-now").disabled=true;
+   el("forward-480-evaluate").disabled=true;
+   text("forward-480-eligible","Forward training status unavailable");
+   text("forward-480-progress","—");
+   text("forward-480-reason","Could not load verified 480s evidence.");
  }
 }
+el("forward-480-evaluate").addEventListener("click",async()=>{
+ if(!trainingStatus?.forward_480?.ready)return;
+ if(!confirm("Fit one fixed 480s candidate on earlier verified markets, and compare with the unchanged model on later settled markets? This does not promote a model, place trades or change risk limits."))return;
+ const button=el("forward-480-evaluate");
+ button.disabled=true;
+ text("forward-480-result","Training offline candidate and comparing later verified markets…");
+ try{
+  const response=await fetch("/api/training/forward480/evaluate",{
+   method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"train"},
+   body:"{}",cache:"no-store",
+  });
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error||result.reason||"HTTP "+response.status);
+  const candidate=result.candidate_69_gate||{};
+  const incumbent=result.incumbent_69_gate||{};
+  const fmt=(v)=>typeof v==="number"?(100*v).toFixed(1)+"%":"unavailable";
+  text("forward-480-result","Candidate: "+
+    String(candidate.qualified||0)+" qualifying, "+fmt(candidate.qualified_accuracy)+
+    " accuracy, "+fmt(candidate.coverage)+" coverage · Incumbent: "+
+    String(incumbent.qualified||0)+" qualifying, "+fmt(incumbent.qualified_accuracy)+
+    " accuracy, "+fmt(incumbent.coverage)+" coverage · "+String(result.status)+
+    ". Live model unchanged. Prospective validation remains required.");
+ }catch(err){
+  text("forward-480-result","Forward candidate evaluation unavailable: "+err.message);
+ }
+ await refreshTraining();
+});
 el("train-now").addEventListener("click",async()=>{
  if(!trainingStatus?.ready||trainingStatus.running)return;
  if(!confirm("Start round "+trainingStatus.round_number+" ("+trainingStatus.mode_label+")? This can run for hours. After fitting, the fresh untouched lockbox will be evaluated exactly once and a model may be promoted only if it passes the benchmark and incumbent checks."))return;

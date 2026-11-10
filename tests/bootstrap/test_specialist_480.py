@@ -87,9 +87,9 @@ def test_only_true_eight_minute_rows_selected_and_no_240_contamination():
     ]
     selected,excluded=select_eight_minute_rows(rows)
     assert [r.market_ticker for r in selected]==[
-        "KXBTC15M-SPEC-2","KXBTC15M-SPEC-3",
+        "KXBTC15M-SPEC-2","KXBTC15M-SPEC-3","KXBTC15M-SPEC-4",
     ]
-    assert excluded["wrong_checkpoint"]==2
+    assert excluded["wrong_checkpoint"]==1
 
 
 def test_invalid_quote_or_unavailable_required_momentum_fail_closed():
@@ -159,3 +159,15 @@ def test_original_kalshi_midpoint_benchmark_uses_identical_validation_rows():
     result=evaluate_eight_minute_specialist(train,valid)
     assert result["candidate"]["markets"]==result["kalshi_midpoint"]["markets"]==40
     assert result["fit_last_ns"] < result["eval_first_ns"]
+
+
+def test_authoritative_480s_gate_accepts_up_to_two_seconds_late_but_never_before_lock():
+    # The immutable FinalForecastGate allows a 2s post-checkpoint lock.
+    rows = [
+        make_row(1300, seconds=478.1),
+        make_row(1301, seconds=477.9),
+        make_row(1302, seconds=480.1),
+    ]
+    selected, reasons = select_eight_minute_rows(rows)
+    assert [r.market_ticker for r in selected] == ["KXBTC15M-SPEC-1300"]
+    assert reasons["wrong_checkpoint"] == 2

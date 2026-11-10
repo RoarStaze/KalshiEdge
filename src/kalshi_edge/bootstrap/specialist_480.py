@@ -19,7 +19,7 @@ from .paired_gate_480 import MIN_CONFIDENCE, summarize_gate_overlap
 from .types import FeatureRow
 
 CHECKPOINT_SECONDS = 480
-CHECKPOINT_TOLERANCE_SECONDS = 1.0
+CHECKPOINT_TOLERANCE_SECONDS = 2.0
 MIN_TRAIN_MARKETS = 80
 MIN_VALIDATION_MARKETS = 20
 FEATURES = (
@@ -89,7 +89,7 @@ def select_eight_minute_rows(
             continue
         remaining = row.features.get("seconds_remaining")
         if (not _finite_number(remaining)
-                or abs(remaining - CHECKPOINT_SECONDS) > CHECKPOINT_TOLERANCE_SECONDS):
+                or not (CHECKPOINT_SECONDS - CHECKPOINT_TOLERANCE_SECONDS <= remaining <= CHECKPOINT_SECONDS)):
             reasons["wrong_checkpoint"] += 1
             continue
         counts[row.market_ticker] += 1

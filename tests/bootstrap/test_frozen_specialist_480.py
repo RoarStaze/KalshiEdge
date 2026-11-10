@@ -164,3 +164,14 @@ def test_corrupted_frozen_model_structure_cannot_score():
     spec["coefficients"][0] = float("nan")
     with pytest.raises(ValueError):
         score_frozen_specialist(spec, make_row(110))
+
+
+def test_frozen_shadow_scores_immutable_480s_locks_up_to_two_seconds_late():
+    frozen = _frozen()
+    late_but_valid = make_row(120, feature_overrides={"seconds_remaining": 478.1})
+    score = score_frozen_specialist(frozen, late_but_valid)
+    assert 0 <= score <= 1
+    with pytest.raises(ValueError):
+        score_frozen_specialist(frozen, make_row(121, feature_overrides={
+            "seconds_remaining": 480.1,
+        }))
