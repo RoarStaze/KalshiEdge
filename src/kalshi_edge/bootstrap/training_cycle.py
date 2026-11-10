@@ -226,9 +226,26 @@ def inspect_training_readiness(root: Path) -> dict[str, Any]:
             )
             return result
         if len(cases) < TARGET_CASE_MARKETS:
-            result["reason"] = (
-                f"{len(cases)}/{TARGET_CASE_MARKETS} eligible {mode} markets with rebuilt causal features."
-            )
+            # New historical parquet rows do not retroactively create a
+            # point-in-time final forecast or an officially settled mistake.
+            if not cases:
+                result["reason"] = (
+                    f"0/{TARGET_CASE_MARKETS} eligible {mode} cases despite "
+                    f"{len(fresh)} fresh historical feature markets. "
+                    f"{result['total_enrolled']} verified settled cases enrolled overall; "
+                    "none match the permitted development feature window. "
+                    "Historical backfill alone cannot recreate 480s forecasts. "
+                    "Review verified official settlements, mistake enrollment and "
+                    "causal features; the separate prospective 480s trainer uses "
+                    "immutable forward snapshots as they accumulate."
+                )
+            else:
+                result["reason"] = (
+                    f"{len(cases)}/{TARGET_CASE_MARKETS} eligible {mode} "
+                    "officially settled cases with matching causal development features; "
+                    f"{result['total_enrolled']} enrolled overall. "
+                    "Additional historical market rows alone do not raise this count."
+                )
             return result
         if result["outcome_classes"] < 2:
             result["reason"] = "Selected examples must contain both ABOVE and BELOW settlement outcomes."
@@ -331,6 +348,8 @@ class TrainingController:
         self._process: subprocess.Popen | None = None
         self._cached: dict[str, Any] | None = None
         self._cached_at = 0.0
+        self._forward_cached: dict[str, Any] | None = None
+        self._forward_at = 0.0
         self._log_handle = None
 
     def _readiness(self, *, force: bool = False) -> dict[str, Any]:
@@ -343,6 +362,23 @@ class TrainingController:
     def status(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
             info = self._readiness(force=force)
+            now = time.monotonic()
+            if (force or self._forward_cached is None
+                    or now - self._forward_at > CACHE_SECONDS):
+                try:
+                    from .forward_learning_480 import inspect_forward_training_readiness
+                    self._forward_cached = inspect_forward_training_readiness(self.root)
+                except Exception as exc:
+                    LOG.warning("Forward 480s training evidence unavailable: %s", exc)
+                    self._forward_cached = {
+                        "status": "EVIDENCE_UNAVAILABLE", "ready": False,
+                        "eligible_480_markets": 0, "required_markets": 120,
+                        "progress_percent": 0,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                        "live_model_changed": False,
+                    }
+                self._forward_at = now
+            info["forward_480"] = dict(self._forward_cached)
             info["run"] = _run_state(self.root)
             if self._process is not None:
                 code = self._process.poll()
