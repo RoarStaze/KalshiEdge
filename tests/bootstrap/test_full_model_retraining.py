@@ -87,6 +87,8 @@ def test_full_retrain_uses_compatible_existing_training_and_actual_promotion(tmp
     from kalshi_edge.bootstrap import training_cycle
     monkeypatch.setattr(training_cycle,"inspect_baseline_training_readiness",
                         lambda root:{"ready":True})
+    monkeypatch.setattr(training_cycle.training,"_verified_context",
+                        lambda root: SimpleNamespace())
     calls=[]
     def fake_train(root,settings,*,git_sha,mistakes_only=False,correct_only=False):
         calls.append(("fit",mistakes_only,correct_only))
