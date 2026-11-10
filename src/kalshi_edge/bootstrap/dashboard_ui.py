@@ -137,7 +137,12 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-live-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .training-live-head h3{font-size:19px;margin:5px 0 0}
 .training-worker-bar{height:10px;margin-top:16px}
-.training-stage-list{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:19px}
+.training-stage-list{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:19px}
+.training-head-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.training-model-identity{display:flex;flex-direction:column;gap:3px;border:1px solid #3e8275;background:#143931;border-radius:12px;padding:12px 17px;min-width:176px}
+.training-model-identity span{font-size:10px;color:#93bfc0;letter-spacing:1.3px;font-weight:800}
+.training-model-identity strong{font-size:25px;font-weight:750;color:#87efd0;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.training-model-identity small{font-size:10px;color:#afd0c6;line-height:1.5}
 .training-stage{background:#172730;border:1px solid #304754;border-radius:9px;padding:12px 10px;min-height:70px;transition:background .25s,border-color .25s}
 .training-stage .step-id{display:block;font-size:9px;letter-spacing:1px;color:#8da8aa}
 .training-stage .step-name{font-size:12px;font-weight:700;margin-top:9px}
@@ -245,7 +250,14 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <h2>Train. Verify. Improve.</h2>
    <p class="subtitle">One training control. Every stage recorded. Only validated, compatible models can be activated.</p>
   </div>
-  <span class="training-pill waiting" id="train-status-pill">CHECKING DATA</span>
+  <div class="training-head-controls">
+   <div class="training-model-identity">
+    <span>RUNNING MODEL</span>
+    <strong id="active-model-number">—</strong>
+    <small id="installed-model-number">Checking promoted model identity…</small>
+   </div>
+   <span class="training-pill waiting" id="train-status-pill">CHECKING DATA</span>
+  </div>
  </div>
  <div class="training-forward" aria-label="Prospective eight-minute predictor training">
   <div class="training-forward-head">
@@ -256,6 +268,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   </div>
   <div class="training-bar" aria-label="Evidence readiness"><div id="forward-480-bar-fill"></div></div>
   <p id="forward-480-reason" class="training-forward-note">Checking independent, settled model evidence.</p>
+  <div id="baseline-retrain-ready" class="training-forward-note">Checking full-model retraining readiness…</div>
   <div class="training-launch">
    <div>
     <h3 id="training-headline">Checking training readiness</h3>
@@ -271,6 +284,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   </div>
   <div class="training-bar training-worker-bar" role="progressbar" aria-label="Completed training milestones" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-worker-bar"><div id="training-worker-bar-fill"></div></div>
   <div class="training-stage-list" id="training-stage-list" aria-label="Model training milestones"></div>
+  <div class="training-forward-note" id="dataset-build-detail">Dataset has not been built in this session yet.</div>
   <div class="training-comparison" id="training-comparison" aria-label="Challenger versus current model"></div>
   <div id="training-outcome" class="training-outcome" role="status" aria-live="polite">No training run yet. Training results will appear here and remain after refreshing the page.</div>
   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
@@ -364,6 +378,7 @@ function renderLive(data){
  text("detail-model",f?.model_version||p?.model_version);
  text("detail-probability",pct(locked?f.directional_probability:p?.predicted_side==="ABOVE"?p.p_yes:p?.predicted_side==="BELOW"?p.p_no:null));
  text("detail-hash",f?.model_hash||p?.model_hash||"—");
+ renderModelIdentity();
  text("detail-status",locked?"IMMUTABLE":p?.status||"WAITING");
  text("detail-reason",locked?f.reason||"OK":p?.reason||"—");
  text("detail-coinflip-risk",locked?(f.coin_flip_assessment||"UNAVAILABLE"):"AWAITING LOCK");
@@ -415,7 +430,8 @@ catch(err){text("history-status","Could not refresh: "+err.message)}}
 el("filter")?.addEventListener("change",()=>{if(history)renderHistory(history)});
 let trainingStatus=null;
 const trainingStages=[
- ["VERIFYING","Verify evidence"],
+ ["BUILDING_DATASET","Create dataset"],
+ ["VERIFYING_DATASET","Audit dataset"],
  ["SPLITTING","Split markets"],
  ["FITTING","Fit model"],
  ["SCORING","Score holdout"],
@@ -428,7 +444,8 @@ function renderTrainingSession(run,running){
  const current=String(run.stage||"");
  const done=current==="COMPLETE";
  const failed=current==="FAILED"||current==="INTERRUPTED";
- const mapped=x=>x==="TRAINING"?"FITTING":x==="EVALUATING"?"SCORING":x;
+ const mapped=x=>x==="TRAINING"?"FITTING":x==="EVALUATING"?"SCORING":
+  x==="VERIFYING"?"VERIFYING_DATASET":x;
  const doneStages=events.map(e=>mapped(String(e.stage||"")));
  const currentMapped=mapped(current);
  const list=el("training-stage-list");
@@ -445,6 +462,14 @@ function renderTrainingSession(run,running){
   stageDiv.append(number,name);list.append(stageDiv);
  }
  const hasRun=!!run.stage;
+ const completed=Number(run.dataset_markets_completed);
+ const total=Number(run.dataset_markets_total);
+ const counts=Number.isFinite(completed)&&Number.isFinite(total)&&total>0?
+  " · "+Math.min(completed,total)+" / "+total+" markets checked":"";
+ text("dataset-build-detail",hasRun?
+  (run.dataset_verified?"Dataset verified":"Dataset processing")+
+  counts+" · "+(run.dataset_action||"Checking official settlement and source integrity"):
+  "Dataset creation begins when you press Train Now; it uses only verified source data.");
  const pct=hasRun?Math.max(0,Math.min(100,Number(run.progress_percent)||0)):0;
  text("training-worker-progress",hasRun?pct+"%":"—");
  el("training-worker-bar-fill").style.width=pct+"%";
@@ -504,13 +529,40 @@ function renderTrainingSession(run,running){
   " · Promotion status: "+(run.promoted===true?"PROMOTED":"NOT PROMOTED"):
   "Stages update from the local training worker; no fictitious completion estimate.");
 }
+function renderModelIdentity(){
+ const identity=trainingStatus?.current_model||{};
+ const n=identity.model_number;
+ const hash=identity.promoted_hash;
+ const loadedHash=live?.latest_prediction?.model_hash||live?.final_forecast?.model_hash;
+ if(!Number.isInteger(n)||!hash){
+  text("active-model-number","UNAVAILABLE");
+  text("installed-model-number","No verified promoted model pointer");
+  return;
+ }
+ if(!loadedHash){
+  text("active-model-number","MODEL #"+n);
+  text("installed-model-number","Installed · waiting for live-process confirmation");
+ }else if(loadedHash===hash){
+  text("active-model-number","MODEL #"+n);
+  text("installed-model-number","Running and installed · hash matched");
+ }else if(loadedHash===identity.previous_model_hash&&Number.isInteger(identity.previous_model_number)){
+  text("active-model-number","MODEL #"+identity.previous_model_number);
+  text("installed-model-number","Model #"+n+" installed · Restart to activate");
+ }else{
+  text("active-model-number","MODEL ?");
+  text("installed-model-number","Model #"+n+" installed · loaded model hash differs");
+ }
+}
 function renderTraining(info){
  trainingStatus=info;
+ renderModelIdentity();
  const run=info.run||{};
  const running=!!info.running;
  const prospective=info.forward_480||{};
- const ready=!!(info.train_available ?? (info.ready||prospective.ready));
- const mode=String(info.selected_mode||(info.ready?info.mode:prospective.ready?"forward_480":""));
+ const baseline=info.baseline_retrain||{};
+ const ready=!!(info.train_available ?? (info.ready||prospective.ready||baseline.ready));
+ const mode=String(info.selected_mode||
+  (info.ready?info.mode:baseline.ready?"baseline":prospective.ready?"forward_480":""));
  const phase=String(run.stage||"");
  const pill=el("train-status-pill");
  pill.textContent=running?"TRAINING RUNNING":ready?"READY TO TRAIN":
@@ -533,18 +585,23 @@ function renderTraining(info){
  text("forward-480-eligible",n+" / "+target+" verified markets · "+
   String(prospective.verified_outcome_classes||0)+" / 2 settled outcome classes");
  text("forward-480-reason",prospective.reason||"Waiting for verified forward 480s features.");
+ text("baseline-retrain-ready",(baseline.ready?"Full model ready: ":"Full model: ")+
+  (baseline.reason||"Checking historical dataset and fresh independent lockbox"));
  const step=Math.max(1,Math.min(4,Number(info.cycle_position)||1));
  for(let i=1;i<=4;i++){
   const x=el("train-step-"+i);
   x.className="training-step "+(i===step?"active":i<step?"completed":"");
  }
  text("training-headline",running?"Training and evaluating…":
-  mode==="forward_480"?"Ready to train the 480-second model":
+  mode==="forward_480"?"Ready to train the 480-second research challenger":
+  mode==="baseline"?"Ready to train and evaluate a full model":
   ready?"Ready for verified legacy training":"Waiting for verified training evidence");
  text("training-description",running?
   "The worker is fitting and evaluating with real checkpoint data. Live predictions and trading remain unchanged until an authorized, compatible model is promoted.":
   mode==="forward_480"?
-  "Use Train Now to fit on earlier settled 480-second snapshots and test against the current model on later markets. Deployment requires independent prospective validation.":
+  "Train on a newly sealed 480s snapshot dataset, test on later independent markets, and report whether accuracy and coverage improved. Research specialists cannot yet replace the full live pipeline.":
+  mode==="baseline"?
+  "Build and audit the dataset; fit a compatible new predictor; score a fresh lockbox; compare against the running model at eight minutes; promote only if all gates pass.":
   ready?"Use Train Now to fit and independently evaluate the legacy cycle. A passing compatible model is promoted for the next restart.":
   "Neither training path currently has all of its verified prerequisites.");
  const button=el("train-now");
@@ -584,11 +641,16 @@ async function refreshTraining(){
  }
 }
 el("train-now").addEventListener("click",async()=>{
- if(!(trainingStatus?.train_available??(trainingStatus?.ready||trainingStatus?.forward_480?.ready))||
+ if(!(trainingStatus?.train_available??(trainingStatus?.ready||
+     trainingStatus?.baseline_retrain?.ready||trainingStatus?.forward_480?.ready))||
     trainingStatus?.running)return;
- const mode=String(trainingStatus?.selected_mode||(trainingStatus?.ready?trainingStatus?.mode:"forward_480"));
+ const mode=String(trainingStatus?.selected_mode||
+  (trainingStatus?.ready?trainingStatus?.mode:
+   trainingStatus?.baseline_retrain?.ready?"baseline":"forward_480"));
  const prompt=mode==="forward_480"?
-  "Start verified 480-second training? This fits one candidate, evaluates later settled markets, and reports exactly why it passed or failed. Research candidates cannot replace live trading without prospective validation.":
+  "Start verified 480-second training? This creates and audits an immutable dataset, trains a model, compares it against the current model on later markets, and reports exact pass/fail reasons. Research specialists cannot replace the full live pipeline without prospective validation.":
+  mode==="baseline"?
+  "Start full-model training? KalshiEdge will build and audit the dataset, train a compatible predictor, and compare it against the current model on independent eight-minute lockbox markets. Only one that improves accuracy and coverage with stable probability quality can be promoted; restart is required.":
   "Start the verified "+String(trainingStatus?.mode_label||"historical")+" cycle? Only independently passing, compatible models can be promoted for the next restart.";
  if(!confirm(prompt))return;
  const button=el("train-now");
