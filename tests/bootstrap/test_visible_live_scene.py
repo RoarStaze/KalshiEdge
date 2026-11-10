@@ -26,9 +26,9 @@ def test_all_routes_clean_background_with_same_rainbow_border_system():
         assert "ke-live-grid" not in html
         assert "ke-particle" not in html
         assert "ke-rainbow-cycle" in html
-        assert "ResizeObserver" in html
+        assert "conic-gradient(from var(--ke-rainbow-angle)" in html
         assert "MutationObserver" in html
-        assert "stroke-dasharray:none" in html
+        assert "border:2px solid transparent!important" in html
         assert 'url("/assets/kalshiedge-neon-city.webp")' in html
 
 
@@ -52,27 +52,26 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
     probe="""<script>
 (function(){
  const node=document.querySelector(".forecast");
- const svg=node?.querySelector(":scope > svg.ke-border-overlay");
- const rect=svg?.querySelector("rect.ke-neon-runner");
- const view=svg?.viewBox.baseVal;
- const widthOk=!!view&&Math.abs(view.width-node.getBoundingClientRect().width)<3;
- const heightOk=!!view&&Math.abs(view.height-node.getBoundingClientRect().height)<3;
- const boxOk=!!rect&&rect.getBoundingClientRect().width>node.clientWidth-8;
- const labelOk=!document.querySelector(".panel-label > .ke-border-overlay") &&
-  !document.querySelector(".forecast .hero-price-surface > .ke-border-overlay") &&
-  !document.querySelector(".forecast .hero-clock-panel > .ke-border-overlay") &&
-  !document.querySelector(".forecast .lock-banner > .ke-border-overlay") &&
-  !document.querySelector(".manual-trade .mt-inputbox > .ke-border-overlay");
- const colorsOk=(svg?.querySelectorAll("linearGradient stop").length||0)>=4;
- const completeOk=!!rect && getComputedStyle(rect).strokeDasharray==="none";
- // --dump-dom snapshots can occur before the first CSS animation frame.
- // Verify the browser actually applies a nonzero-duration orbit animation;
- // a separate browser timing check verifies the stroke moves over time.
- const css=rect?getComputedStyle(rect):null;
- document.body.dataset.rainbowDebug=[css?.animationName,css?.animationDuration,matchMedia("(prefers-reduced-motion:reduce)").matches].join("|");
- const moving=!!css &&
-  css.animationName.split(",").map(x=>x.trim()).includes("ke-rainbow-cycle") &&
-  parseFloat(css.animationDuration)>0;
+ const nav=document.querySelector(".site-nav");
+ const buy=document.querySelector(".context>.manual-trade");
+ const css=getComputedStyle(node);
+ const widthOk=parseFloat(css.borderLeftWidth)>=2 &&
+  parseFloat(css.borderRightWidth)>=2;
+ const heightOk=parseFloat(css.borderTopWidth)>=2 &&
+  parseFloat(css.borderBottomWidth)>=2;
+ const boxOk=css.backgroundImage.includes("conic-gradient") &&
+  css.backgroundClip.includes("padding-box") &&
+  css.backgroundClip.includes("border-box");
+ const labelOk=!document.querySelector(".panel-label.ke-neon-target") &&
+  !document.querySelector(".forecast .hero-price-surface.ke-neon-target") &&
+  !document.querySelector(".manual-trade .mt-inputbox.ke-neon-target");
+ const colorsOk=css.backgroundImage.includes("rgb") &&
+  !!nav?.classList.contains("ke-neon-target") &&
+  !!buy?.classList.contains("ke-neon-target");
+ const completeOk=!!node.classList.contains("ke-neon-target") &&
+  !document.querySelector(".ke-border-overlay");
+ const moving=css.animationName.split(",").map(x=>x.trim())
+  .includes("ke-rainbow-cycle") && parseFloat(css.animationDuration)>0;
  document.body.dataset.rainbowProbe=[
   widthOk,heightOk,boxOk,labelOk,colorsOk,completeOk,moving
  ].join(",");

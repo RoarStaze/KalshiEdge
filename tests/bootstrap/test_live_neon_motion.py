@@ -39,17 +39,16 @@ def test_only_outer_panels_are_selected_for_rainbow_border_on_all_pages():
         assert 'closest(".ke-neon-target")' in html
 
 
-def test_entire_border_is_rainbow_and_color_animation_not_short_dash():
+def test_full_color_cycle_is_drawn_on_card_border_box_not_inner_svg():
     html = render("trade")
-    assert "ke-neon-runner" in html
-    assert "ke-rainbow-gradient" in html
-    assert "stroke-dasharray:none" in html
-    assert "stroke-dasharray:16 84" not in html
-    assert "stroke-dashoffset" not in html
+    assert "@property --ke-rainbow-angle" in html
+    assert "conic-gradient(from var(--ke-rainbow-angle)" in html
+    assert "padding-box" in html and "border-box" in html
+    assert "border:2px solid transparent!important" in html
     assert "@keyframes ke-rainbow-cycle" in html
-    assert "hue-rotate(0deg)" in html
-    assert "hue-rotate(360deg)" in html
-    assert 'setAttribute("viewBox"' in html
+    assert "--ke-rainbow-angle:360deg" in html
+    assert "ke-border-overlay" not in html
+    assert "createElementNS" not in html
 
 
 def test_cinematic_background_keeps_no_extra_particles():
@@ -69,3 +68,19 @@ def test_order_training_history_and_api_ids_unchanged():
             assert html.count('id="' + target + '"') == 1
         assert html.count('class="site-nav-link') == 4
         assert "pointer-events:none" in html
+
+
+def test_rainbow_is_the_real_outer_card_border_not_padding_box_overlay():
+    html = render("trade")
+    assert ".ke-neon-target" in html
+    assert "conic-gradient(from var(--ke-rainbow-angle)" in html
+    assert "border:2px solid transparent!important" in html
+    assert "ke-border-overlay" not in html
+
+
+def test_outer_nav_and_trade_panels_keep_full_color_cycling_outline():
+    for route in ("trade", "train", "history", "api"):
+        html = render(route)
+        assert "border-box" in html
+        assert "ke-rainbow-cycle" in html
+        assert 'if(node.parentElement?.closest(".ke-neon-target"))return;' in html
