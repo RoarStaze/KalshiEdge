@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -737,7 +737,10 @@ def _latest_experiment_path(root: Path) -> Path:
     return path
 
 
-def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> BootstrapEvaluationRun:
+def run_lockbox_evaluation(
+    root: Path, bundle_path: Path | None = None, *,
+    progress: Callable[[str], None] | None = None,
+) -> BootstrapEvaluationRun:
     """Materialize the lockbox only after confirming the experiment has not been evaluated."""
     root = root.resolve()
     experiment_path = _latest_experiment_path(root) if bundle_path is None else bundle_path.resolve()
@@ -766,8 +769,12 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
         lockbox_rows = training.load_lockbox_rows(root, experiment.boundaries, experiment=experiment)
     except Exception as exc:
         raise EvaluationError("could not materialize the predeclared lockbox") from exc
+    if progress is not None:
+        progress("SCORING")
     report = evaluate_lockbox(experiment, lockbox_rows)
     if is_volatility or is_learning or is_full_retrain:
+        if progress is not None:
+            progress("COMPARING")
         # Compare the incumbent without fitting it, or touching any other
         # holdout period. This is the SAME one-time evaluation call and data.
         from .live import load_default_bundle
@@ -846,4 +853,6 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
             "metrics": enriched, "decision_metrics": gate_reports,
             "requires_retrain_480_gate": is_full_retrain,
         })
+    if progress is not None:
+        progress("PROMOTION_GATE")
     return finalize_evaluation(root, experiment_path, report)
