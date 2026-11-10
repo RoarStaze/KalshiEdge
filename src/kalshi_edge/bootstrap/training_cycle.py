@@ -55,6 +55,7 @@ ACTIVE_WORKER_STAGES = frozenset({
     "STARTING", "BUILDING_DATASET", "VERIFYING_DATASET",
     "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
     "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
+    "PAUSING", "PAUSED",
 })
 
 
@@ -150,6 +151,59 @@ def _run_state(root: Path) -> dict[str, Any] | None:
         return payload
     except (OSError, ValueError) as exc:
         raise CycleError("training run-state corrupted; manual inspection required") from exc
+
+
+def _pause_path(root: Path) -> Path:
+    return root / "training_runs" / "pause.json"
+
+
+def _pause_request(root: Path) -> dict[str, Any] | None:
+    path = _pause_path(root)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CycleError("training pause control corrupted; inspect before continuing") from exc
+    if not isinstance(payload, dict):
+        raise CycleError("training pause control invalid")
+    return payload
+
+
+def _set_pause_request(root: Path, run_id: str, requested: bool) -> None:
+    """Atomically signal only the currently tracked worker session."""
+    state = _run_state(root)
+    if not state or not isinstance(run_id, str) or state.get("run_id") != run_id:
+        raise CycleError("training session changed; refusing stale pause request")
+    _atomic_state(_pause_path(root), {"run_id": run_id, "pause_requested": bool(requested)})
+
+
+def _pause_barrier(root: Path, *, stage: str, mode: str, round_number: int) -> None:
+    """Cooperative, low-CPU pause only at a durable safe boundary.
+
+    Dataset checkpoints are appended before on-market callbacks. Model-fit
+    optimizer state cannot be recovered at sub-iteration resolution.
+    """
+    state = _run_state(root)
+    if state is None:
+        return
+    run_id = state.get("run_id")
+    request = _pause_request(root)
+    if not request or request.get("run_id") != run_id or not request.get("pause_requested"):
+        return
+    progress = state.get("progress_percent", 0)
+    _write_worker_state(root, stage="PAUSED", mode=mode,
+                        round_number=round_number, resume_stage=stage,
+                        progress_percent=progress,
+                        dataset_action=state.get("dataset_action", "Paused at a safe checkpoint"))
+    while True:
+        time.sleep(0.12)
+        request = _pause_request(root)
+        if request and request.get("run_id") == run_id and request.get("pause_requested"):
+            continue
+        _write_worker_state(root, stage=stage, mode=mode,
+                            round_number=round_number)
+        return
 
 
 def _completed_learning_rounds(root: Path) -> list[dict[str, Any]]:
@@ -378,6 +432,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "dataset_markets_completed", "dataset_markets_total",
                 "dataset_last_market", "dataset_action", "dataset_row_count",
                 "dataset_market_count", "dataset_verified",
+                "run_id", "git_sha", "auto_resume", "resume_stage",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
@@ -388,6 +443,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     if not events or events[-1].get("stage") != stage:
         events.append({"stage": stage, "at_utc": now, "progress_percent": percent})
     retained.setdefault("started_utc", now)
+    retained.setdefault("run_id", uuid.uuid4().hex)
     _atomic_state(_state_path(root), {
         **retained,
         "stage": stage,
@@ -418,6 +474,8 @@ def _market_progress_reporter(
 
     def report(completed: int, total: int, ticker: str, stage: str) -> None:
         nonlocal last_count, last_time
+        _pause_barrier(root, stage="BUILDING_DATASET",
+                       mode=mode, round_number=round_number)
         if total <= 0 or not 0 <= completed <= total:
             raise ValueError("invalid dataset progress count")
         terminal = completed == total or stage != "markets"
