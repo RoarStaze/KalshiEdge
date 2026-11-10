@@ -126,3 +126,18 @@ def test_old_sync_forward_evaluate_endpoint_is_deprecated(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_forward_worker_interruption_is_detected_after_dashboard_restart(tmp_path,monkeypatch):
+    training_cycle._write_worker_state(
+        tmp_path,stage="FITTING",mode="forward_480",round_number=0,
+    )
+    controller=training_cycle.TrainingController(tmp_path,project_root=tmp_path)
+    monkeypatch.setattr(controller,"_readiness",lambda force=False:{"ready":False})
+    monkeypatch.setattr(training_cycle, "_run_state",
+                        lambda root: {"stage":"FITTING", "mode":"forward_480",
+                                      "progress_percent":40, "round_number":0})
+    status=controller.status()
+    assert status["running"] is False
+    assert status["run"]["stage"]=="INTERRUPTED"
+    assert "restarted" in status["run"]["error"].lower()
