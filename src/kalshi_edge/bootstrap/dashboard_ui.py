@@ -700,7 +700,8 @@ async function trainingControl(action){
   "Requesting a safe pause after the current market or model stage…":
   "Resuming saved training session…");
  try{
-  const response=await fetch("/api/training/"+action,{
+  const endpoint=action==="pause"?"/api/training/pause":"/api/training/resume";
+  const response=await fetch(endpoint,{
    method:"POST",headers:{"Content-Type":"application/json",
     "X-KalshiEdge-Action":"train"},body:"{}",cache:"no-store",
   });
