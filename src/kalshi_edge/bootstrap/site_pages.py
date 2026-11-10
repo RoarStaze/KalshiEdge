@@ -36,7 +36,9 @@ function restoreTrainingSnapshot(){
   renderTraining(snapshot.status);
   // Cached readiness cannot authorize a new training session.
   el("train-now").disabled=true;
-  text("train-feedback","Last known training progress · syncing with the active worker…");
+  text("train-feedback",snapshot.status.run?.stage==="FAILED"?
+   "Previous training failed · saved data preserved · checking latest worker status…":
+   "Last known training progress · checking the active worker…");
   return true;
  }catch(err){return false;}
 }
