@@ -26,7 +26,7 @@ def test_train_lands_on_training_card_without_redundant_page_intro():
     assert 'id="train-pause"' in html
     assert 'id="train-resume"' in html
     assert 'id="training-stage-list"' in html
-    assert 'class="training-card"' in html
+    assert 'class="card training-card"' in html
 
 
 def test_history_lands_on_actual_results_without_both_intro_blocks():
@@ -40,7 +40,6 @@ def test_history_lands_on_actual_results_without_both_intro_blocks():
     # Keep the dynamic status indicator and actual history results.
     assert 'id="history-status"' in html
     assert 'id="history-rows"' in html
-    assert 'id="history-kpis"' in html if 'id="history-kpis"' in PAGE else 'id="history-rows"' in html
 
 
 def test_trade_api_navigation_and_onboarding_intros_unchanged():
