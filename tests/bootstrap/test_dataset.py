@@ -276,3 +276,23 @@ def test_dataset_checkpoint_is_reused_only_when_input_hashes_match(tmp_path: Pat
     source.write_text('{"stable":false}', encoding="utf-8")
     assert _load_dataset_checkpoints(tmp_path, settings) == {}
     assert not (tmp_path / "checkpoints" / "dataset-build.jsonl").exists()
+
+
+def test_market_verification_count_streams_before_feature_build(tmp_path: Path) -> None:
+    """Immediately count market-file verification, then actual feature progress."""
+    root=tmp_path/"data/bootstrap"
+    _seed(root)
+    _seed_second_market_without_candles(root)
+    events: list[tuple[int,int,str]]=[]
+    report=build_dataset(
+        root,BootstrapSettings(bootstrap_dir=root),
+        progress_callback=lambda completed,total,ticker,phase:
+            events.append((completed,total,phase)),
+    )
+    assert report.market_count==1
+    assert events[0]==(0,2,"labels")
+    assert (1,2,"labels") in events and (2,2,"labels") in events
+    feature_events=[event for event in events if event[2]=="markets"]
+    assert feature_events[0]==(0,2,"markets")
+    assert feature_events[-1]==(2,2,"markets")
+    assert events.index((2,2,"labels"))<events.index((0,2,"markets"))
