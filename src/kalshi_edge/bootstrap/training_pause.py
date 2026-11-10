@@ -72,6 +72,16 @@ def clear_pause(root: Path, *, run_id: str) -> dict[str, Any]:
     return result
 
 
+
+def reset_pause(root: Path, *, run_id: str) -> dict[str, Any]:
+    """Initialize explicit new run, only after controller checked no active worker."""
+    if not isinstance(run_id, str) or not 1 <= len(run_id) <= 100:
+        raise PauseControlError("invalid training run identity")
+    result = {"run_id": run_id, "pause_requested": False, "manual": False}
+    _save(root, result)
+    return result
+
+
 def check_pause(root: Path, run_id: str) -> None:
     value = read_pause(root)
     if value.get("run_id") == run_id and value.get("pause_requested") is True:
