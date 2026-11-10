@@ -695,7 +695,9 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
 
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
-            _write_worker_state(root, stage="VERIFYING", mode=mode, round_number=round_number)
+            resume_state = _run_state(root) or {}
+            saved_experiment = _resume_experiment_path(root, resume_state)
+            _pause_boundary(root, stage="VERIFYING", mode=mode, round_number=round_number)
             if mode == BASELINE_MODE:
                 eligibility = inspect_baseline_training_readiness(root)
                 if round_number != 0 or not eligibility["ready"]:
@@ -710,18 +712,36 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
             if mode == BASELINE_MODE:
                 from . import dataset
                 market_root = root / "raw" / "kalshi" / "markets"
-                _write_worker_state(
-                    root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
-                    dataset_action="Rebuilding verified historical market dataset",
+                verified_existing=bool(
+                    resume_state.get("dataset_verified")
+                    and resume_state.get("resume_stage") in (
+                        "SPLITTING","TRAINING","FITTING","EVALUATING",
+                        "SCORING","COMPARING","PROMOTION_GATE",
+                    )
+                    and (root / "derived" / "features.parquet").is_file()
                 )
-                if market_root.exists():
+                _pause_boundary(
+                    root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
+                    dataset_action=(
+                        "Reusing authenticated completed dataset checkpoint"
+                        if verified_existing else "Rebuilding verified historical market dataset"
+                    ),
+                )
+                if verified_existing:
+                    pass  # _verified_context below revalidates saved hashes.
+                elif market_root.exists():
                     on_build_progress = _market_progress_reporter(
                         root, mode=mode, round_number=round_number,
+                        run_id=(_run_state(root) or {}).get("run_id"),
+                        initial_completed=int(resume_state.get("dataset_markets_completed") or 0)
+                        if resume_state.get("resume_stage") in (
+                            "BUILDING_DATASET","VERIFYING_DATASET",
+                        ) else 0,
                     )
                     dataset_report = dataset.build_dataset(
                         root, settings, progress_callback=on_build_progress,
                     )
-                    _write_worker_state(
+                    _pause_boundary(
                         root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
                         dataset_market_count=dataset_report.market_count,
                         dataset_row_count=dataset_report.row_count,
@@ -730,17 +750,17 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                         dataset_action="Rebuilt locally sourced, provenance-manifested dataset",
                     )
                 else:
-                    _write_worker_state(
+                    _pause_boundary(
                         root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
                         dataset_action="Reused existing SHA-verified dataset: raw rebuild source missing",
                     )
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                 )
                 # Re-read full provenance, all source hashes, chronological
                 # data plan and class labels AFTER dataset generation.
                 context = training._verified_context(root)
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_verified=True,
                     dataset_action="Dataset manifest, provenance, and source hashes passed",
@@ -750,7 +770,7 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                     raise CycleError("Rebuilt dataset failed independent evaluation readiness: "
                                      + refreshed["reason"])
             else:
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_action="Verified pre-existing hash-sealed historical training dataset",
                 )
@@ -758,21 +778,37 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 # _verified_context with the exact enrolled-case selection.
                 # Do not perform a redundant rescan between eligibility
                 # verification and the actual fit.
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_verified=True,
                 )
-            _write_worker_state(root, stage="SPLITTING", mode=mode, round_number=round_number)
-            _write_worker_state(root, stage="TRAINING", mode=mode, round_number=round_number)
-            experiment = train_experiment(
-                root, settings, git_sha=git_sha,
-                mistakes_only=mode == "mistake",
-                correct_only=mode == "correct",
-            )
-            _write_worker_state(
-                root, stage="EVALUATING", mode=mode, round_number=round_number,
-                experiment_sha256=experiment.experiment_bundle_sha256,
-            )
+            _pause_boundary(root, stage="SPLITTING", mode=mode, round_number=round_number)
+            if saved_experiment is not None:
+                bundle = artifact.load_model_bundle(saved_experiment)
+                if bundle.stage != "experiment":
+                    raise CycleError("resume artifact is not a verified fitted experiment")
+                from types import SimpleNamespace
+                experiment = SimpleNamespace(
+                    experiment_path=saved_experiment,
+                    experiment_bundle_sha256=bundle.bundle_sha256,
+                )
+                _pause_boundary(
+                    root, stage="EVALUATING", mode=mode, round_number=round_number,
+                    experiment_path=str(saved_experiment),
+                    experiment_sha256=bundle.bundle_sha256,
+                )
+            else:
+                _pause_boundary(root, stage="TRAINING", mode=mode, round_number=round_number)
+                experiment = train_experiment(
+                    root, settings, git_sha=git_sha,
+                    mistakes_only=mode == "mistake",
+                    correct_only=mode == "correct",
+                )
+                _pause_boundary(
+                    root, stage="EVALUATING", mode=mode, round_number=round_number,
+                    experiment_path=str(experiment.experiment_path),
+                    experiment_sha256=experiment.experiment_bundle_sha256,
+                )
             def report_progress(stage: str) -> None:
                 if stage not in {"SCORING", "COMPARING", "PROMOTION_GATE"}:
                     raise CycleError(f"invalid full-model evaluation milestone: {stage}")
@@ -805,6 +841,13 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 results=comparison,
                 reason_codes=list(evaluation.decision.reason_codes),
                 evaluation_report=str(evaluation.report_path),
+            )
+            return 0
+        except training_pause.TrainingPaused:
+            intent = training_pause.read_pause(root)
+            _save_paused_state(
+                root, mode=mode, round_number=round_number,
+                reason="manual" if intent.get("manual") else "shutdown",
             )
             return 0
         except Exception as exc:
