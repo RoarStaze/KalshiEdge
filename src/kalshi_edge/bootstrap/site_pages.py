@@ -320,10 +320,30 @@ def render_site_page(page: str, section: str) -> str:
     label = "API" if section == "api" else section.title()
     page = page.replace('<title>KalshiEdge — Live Forecast &amp; History</title>',
                         f'<title>KalshiEdge · {label}</title>', 1)
-    # The user wants an uncluttered trading workspace with the two cards only.
-    # Leave the underlying renderers mounted; the visible intro is removed.
-    if section == "trade":
+    # Show the real controls/results immediately; these top-of-page marketing
+    # intros duplicate information already supplied by the navigation and cards.
+    # API onboarding retains its distinct heading and explanation.
+    if section in ("trade", "train", "history"):
         page = page.replace(new_intro, "", 1)
+    if section == "history":
+        # Preserve the live history-status element, which the JS updates,
+        # while removing the second redundant title/description block.
+        redundant_history_heading = (
+            '<div class="history-header"><div><div class="eyebrow">'
+            'VERIFIED PERFORMANCE</div><h2>Final forecast history</h2>'
+            '<p class="subtitle">Official Kalshi settlements only · '
+            'Accuracy = correct ÷ (correct + incorrect)</p></div>'
+            '<span id="history-status" class="subtitle">Loading history…</span></div>'
+        )
+        if page.count(redundant_history_heading) != 1:
+            raise ValueError("History header structure changed: refusing partial removal")
+        page = page.replace(
+            redundant_history_heading,
+            '<div class="history-header">'
+            '<span id="history-status" class="subtitle">Loading history…</span>'
+            '</div>',
+            1,
+        )
     # Only one route is active. The links use real URLs, not in-page fake tabs.
     active = f'<a class="site-nav-link" href="/{section}">{label}</a>'
     page = page.replace(active,
