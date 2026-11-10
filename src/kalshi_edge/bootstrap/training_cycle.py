@@ -47,6 +47,8 @@ WORKER_STAGE_PROGRESS = {
     "COMPLETE": 100,
 }
 FORWARD_MODE = "forward_480"
+BASELINE_MODE = "baseline"
+MIN_RETRAIN_LOCKBOX_MARKETS = 80
 ACTIVE_WORKER_STAGES = frozenset({
     "STARTING", "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
     "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
@@ -54,11 +56,64 @@ ACTIVE_WORKER_STAGES = frozenset({
 
 
 
-def _select_training_mode(legacy: dict, forward: dict) -> str | None:
-    """One Train Now action chooses an actually eligible training pipeline."""
+def _select_training_mode(
+    legacy: dict, forward: dict, baseline: dict | None = None,
+) -> str | None:
+    """Prefer existing deployable training before a research-only challenger."""
     if legacy.get("ready"):
         return legacy.get("mode") if legacy.get("mode") in ("mistake", "correct") else None
+    if baseline is not None and baseline.get("ready"):
+        return BASELINE_MODE
     return FORWARD_MODE if forward.get("ready") else None
+
+
+def inspect_baseline_training_readiness(root: Path) -> dict[str, Any]:
+    """Require signed source data and unused later 480s lockbox opportunity.
+
+    The standard pipeline fits a complete, compatible bootstrap-hybrid model.
+    It can be promoted only via the independent evaluation + strict 480s gates.
+    """
+    result: dict[str, Any] = {
+        "mode": BASELINE_MODE, "ready": False,
+        "status": "UNAVAILABLE", "fresh_evaluation_markets": 0,
+        "required_fresh_markets": MIN_RETRAIN_LOCKBOX_MARKETS,
+        "reason": "Verified full-model retraining inputs unavailable",
+        "live_model_changed": False,
+    }
+    root = root.resolve()
+    if not (root / "models" / "default.json").is_file():
+        result["reason"] = "A promoted current model is required for same-market improvement comparison."
+        return result
+    try:
+        context = training._verified_context(root)
+    except Exception as exc:
+        result["reason"] = f"Verified historical dataset not ready: {type(exc).__name__}: {exc}"
+        return result
+    plan = context.plan
+    count = len(plan.lockbox_groups)
+    result["fresh_evaluation_markets"] = count
+    if count < MIN_RETRAIN_LOCKBOX_MARKETS:
+        result["reason"] = (
+            f"Only {count}/{MIN_RETRAIN_LOCKBOX_MARKETS} unused fresh whole markets "
+            "available for independent 480s lockbox. Keep collecting/rebuilding verified data."
+        )
+        return result
+    if len(plan.development_groups) < 80 or len(plan.calibration_groups) < 20:
+        result["reason"] = (
+            "Verified dataset needs at least 80 historical development and "
+            "20 calibration market groups before full-model training."
+        )
+        return result
+    result.update(
+        ready=True, status="READY_FOR_FULL_MODEL_TRAINING",
+        reason=(
+            f"{count} unused verified lockbox markets available. "
+            "Train full model, compare current and candidate at the 480s checkpoint, "
+            "and promote only if both accuracy and coverage improve with stable scores."
+        ),
+    )
+    return result
+
 
 
 
@@ -452,9 +507,18 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
 
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
-            eligibility = inspect_training_readiness(root)
-            if not eligibility["ready"] or eligibility["mode"] != mode or eligibility["round_number"] != round_number:
-                raise CycleError("training eligibility/cycle changed since Train Now; refusing to run")
+            _write_worker_state(root, stage="VERIFYING", mode=mode, round_number=round_number)
+            if mode == BASELINE_MODE:
+                eligibility = inspect_baseline_training_readiness(root)
+                if round_number != 0 or not eligibility["ready"]:
+                    raise CycleError("full-model retraining evidence changed since Train Now: "
+                                     + eligibility.get("reason", "not ready"))
+            else:
+                eligibility = inspect_training_readiness(root)
+                if (not eligibility["ready"] or eligibility["mode"] != mode
+                        or eligibility["round_number"] != round_number):
+                    raise CycleError("learning eligibility/cycle changed since Train Now; refusing to run")
+            _write_worker_state(root, stage="SPLITTING", mode=mode, round_number=round_number)
             _write_worker_state(root, stage="TRAINING", mode=mode, round_number=round_number)
             settings = BootstrapSettings(bootstrap_dir=root)
             experiment = train_experiment(
@@ -467,6 +531,8 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 experiment_sha256=experiment.experiment_bundle_sha256,
             )
             evaluation = run_lockbox_evaluation(root, experiment.experiment_path)
+            _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
+                                round_number=round_number)
             _write_worker_state(
                 root, stage="COMPLETE", mode=mode, round_number=round_number,
                 experiment_sha256=experiment.experiment_bundle_sha256,
@@ -657,7 +723,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Internal supervised KalshiEdge learning-cycle worker")
     parser.add_argument("--worker", action="store_true", required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("mistake", "correct", FORWARD_MODE), required=True)
+    parser.add_argument("--mode", choices=("mistake", "correct", BASELINE_MODE, FORWARD_MODE), required=True)
     parser.add_argument("--round-number", type=int, required=True)
     parser.add_argument("--git-sha", required=True)
     args = parser.parse_args()
