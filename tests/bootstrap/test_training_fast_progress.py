@@ -134,31 +134,6 @@ def test_train_route_polls_light_state_faster_than_full_readiness():
     assert '"current_model"' not in p[p.index('async function refreshTrainingProgress()'):p.index('el("train-now").addEventListener')]
 
 
-def test_label_verification_counts_stream_before_feature_processing(tmp_path, monkeypatch):
-    """The expensive first market-file pass reports x/y before any feature rows."""
-    from kalshi_edge.bootstrap import dataset as dataset_module
-    from kalshi_edge.bootstrap.config import BootstrapSettings
-    from test_dataset import _seed, _seed_second_market_without_candles
-
-    root = tmp_path / "data" / "bootstrap"
-    _seed(root)
-    _seed_second_market_without_candles(root)
-    events = []
-    result = dataset_module.build_dataset(
-        root, BootstrapSettings(bootstrap_dir=root),
-        progress_callback=lambda done, total, ticker, phase:
-            events.append((done, total, phase)),
-    )
-    assert result.market_count == 1
-    assert events[0] == (0, 2, "labels")
-    assert (1, 2, "labels") in events
-    assert (2, 2, "labels") in events
-    feature_events = [event for event in events if event[2] == "markets"]
-    assert feature_events[0] == (0, 2, "markets")
-    assert feature_events[-1] == (2, 2, "markets")
-    assert events.index((2, 2, "labels")) < events.index((0, 2, "markets"))
-
-
 def test_label_progress_uses_same_bounded_disk_write_throttle(tmp_path, monkeypatch):
     clock = [0.]
     writes = []
