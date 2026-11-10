@@ -37,7 +37,7 @@ def test_forward_worker_persists_real_stages_and_validation_failure(tmp_path,mon
     monkeypatch.setattr(forward_learning_480,"inspect_forward_training_readiness",
                         lambda root:{"ready":True,"reason":"ready"})
     calls=[]
-    def fake_eval(root, *, progress=None):
+    def fake_eval(root, *, progress=None, dataset_path=None):
         assert progress is not None
         for stage in ("SPLITTING","FITTING","SCORING","COMPARING"):
             progress(stage)
@@ -54,6 +54,9 @@ def test_forward_worker_persists_real_stages_and_validation_failure(tmp_path,mon
             "candidate_probability_metrics":{"brier":0.2,"log_loss":0.5},
             "incumbent_probability_metrics":{"brier":0.1,"log_loss":0.4},
         }
+    monkeypatch.setattr(forward_learning_480,"create_verified_forward_dataset",
+                        lambda root:(tmp_path/"frozen.json",
+                                     {"ready":True,"eligible_480_markets":120}))
     monkeypatch.setattr(forward_learning_480,"evaluate_verified_forward_candidate",fake_eval)
     status=training_cycle.run_forward_training_worker(tmp_path)
     assert status==0
@@ -70,8 +73,11 @@ def test_forward_worker_persists_real_stages_and_validation_failure(tmp_path,mon
 def test_favorable_research_validation_is_never_misreported_as_promoted(tmp_path,monkeypatch):
     monkeypatch.setattr(forward_learning_480,"inspect_forward_training_readiness",
                         lambda root:{"ready":True})
+    monkeypatch.setattr(forward_learning_480,"create_verified_forward_dataset",
+                        lambda root:(tmp_path/"frozen.json",
+                                     {"ready":True,"eligible_480_markets":120}))
     monkeypatch.setattr(forward_learning_480,"evaluate_verified_forward_candidate",
-                        lambda root,*,progress=None:{"status":"VALIDATION_JOINT_GAIN",
+                        lambda root,*,progress=None,dataset_path=None:{"status":"VALIDATION_JOINT_GAIN",
                             "candidate_69_gate":{"qualified":65,"qualified_accuracy":0.95},
                             "incumbent_69_gate":{"qualified":42,"qualified_accuracy":0.92}})
     assert training_cycle.run_forward_training_worker(tmp_path)==0
@@ -85,8 +91,11 @@ def test_favorable_research_validation_is_never_misreported_as_promoted(tmp_path
 def test_forward_worker_fails_with_diagnostic_not_progress_100(tmp_path,monkeypatch):
     monkeypatch.setattr(forward_learning_480,"inspect_forward_training_readiness",
                         lambda root:{"ready":True})
-    def fail(root,*,progress=None):
+    def fail(root,*,progress=None,dataset_path=None):
         raise ValueError("Causal checkpoint feature hash mismatch")
+    monkeypatch.setattr(forward_learning_480,"create_verified_forward_dataset",
+                        lambda root:(tmp_path/"frozen.json",
+                                     {"ready":True,"eligible_480_markets":120}))
     monkeypatch.setattr(forward_learning_480,"evaluate_verified_forward_candidate",fail)
     assert training_cycle.run_forward_training_worker(tmp_path)==2
     state=training_cycle._run_state(tmp_path)
