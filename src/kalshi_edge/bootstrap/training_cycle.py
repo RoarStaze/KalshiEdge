@@ -944,60 +944,193 @@ class TrainingController:
             ).stdout.strip()
             if len(git) != 40 or any(c not in "0123456789abcdef" for c in git.lower()):
                 raise CycleError("cannot verify current repository Git SHA")
-            logfile = self.root / "training_runs" / (
-                f"{'forward-480' if selected == FORWARD_MODE else 'full-model' if selected == BASELINE_MODE else 'round-'+str(active_round).zfill(4)}-{int(time.time_ns())}.log"
-            )
-            logfile.parent.mkdir(parents=True, exist_ok=True)
-            self._log_handle = logfile.open("ab")
-            _write_worker_state(
-                self.root, stage="STARTING",
+            return self._launch(
                 mode=active_mode, round_number=active_round,
-                log_path=str(logfile),
+                git_sha=git, resuming=False,
             )
-            try:
-                # Yield CPU priority to the latency-critical live forecasting
-                # process when long experiment fitting is active on Windows.
-                priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
-                self._process = subprocess.Popen(
-                    [
-                        sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
-                        "--worker", "--root", str(self.root), "--mode", active_mode,
-                        "--round-number", str(active_round),
-                        "--git-sha", git,
-                    ],
-                    cwd=self.project_root,
-                    stdin=subprocess.DEVNULL,
-                    stdout=self._log_handle,
-                    stderr=subprocess.STDOUT,
-                    creationflags=priority,
-                )
+
+    def _launch(self, *, mode: str, round_number: int,
+                git_sha: str, resuming: bool) -> dict[str, Any]:
+        """Spawn exactly one worker using a persisted, verified training plan."""
+        if mode not in (FORWARD_MODE, BASELINE_MODE, "mistake", "correct"):
+            raise CycleError("invalid stored training mode")
+        if not isinstance(round_number, int) or round_number < 0:
+            raise CycleError("invalid stored training round")
+        if not isinstance(git_sha, str) or len(git_sha) != 40 or any(
+            char not in "0123456789abcdef" for char in git_sha.lower()
+        ):
+            raise CycleError("invalid stored Git provenance")
+        prior = _run_state(self.root) if resuming else None
+        if resuming and (
+            not prior or not prior.get("auto_resume")
+            or prior.get("mode") != mode or prior.get("round_number") != round_number
+        ):
+            raise CycleError("no matching verified resumable worker state")
+        logfile = self.root / "training_runs" / (
+            f"{'forward-480' if mode == FORWARD_MODE else 'full-model' if mode == BASELINE_MODE else 'round-'+str(round_number).zfill(4)}-{int(time.time_ns())}.log"
+        )
+        logfile.parent.mkdir(parents=True, exist_ok=True)
+        self._log_handle = logfile.open("ab")
+        try:
+            if resuming:
+                # Preserve run identity, dataset count, completed checkpoints,
+                # and the last known stage through the process relaunch.
+                _set_pause_request(self.root, prior["run_id"], False)
                 _write_worker_state(
-                    self.root, stage="STARTING", mode=active_mode,
-                    round_number=active_round,
-                    worker_pid=self._process.pid,
+                    self.root, stage=prior.get("resume_stage") or (
+                        prior["stage"] if prior["stage"] in WORKER_STAGE_PROGRESS
+                        else "VERIFYING"
+                    ),
+                    mode=mode, round_number=round_number,
+                    dataset_action="Recovering training from verified checkpoint",
+                )
+            else:
+                _write_worker_state(
+                    self.root, stage="STARTING", mode=mode, round_number=round_number,
+                    git_sha=git_sha, auto_resume=True,
+                )
+            priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
+            self._process = subprocess.Popen(
+                [
+                    sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
+                    "--worker", "--root", str(self.root), "--mode", mode,
+                    "--round-number", str(round_number), "--git-sha", git_sha,
+                ],
+                cwd=self.project_root, stdin=subprocess.DEVNULL,
+                stdout=self._log_handle, stderr=subprocess.STDOUT,
+                creationflags=priority,
+            )
+            # Never reset run ID on a resume.
+            if not resuming:
+                state = _run_state(self.root)
+                _write_worker_state(
+                    self.root, stage="STARTING", mode=mode, round_number=round_number,
+                    worker_pid=self._process.pid, log_path=str(logfile),
+                    git_sha=git_sha, auto_resume=True,
+                )
+                _set_pause_request(self.root, _run_state(self.root)["run_id"], False)
+            else:
+                current = _run_state(self.root)
+                _write_worker_state(
+                    self.root, stage=current["stage"], mode=mode,
+                    round_number=round_number, worker_pid=self._process.pid,
                     log_path=str(logfile),
                 )
-            except (OSError, subprocess.SubprocessError):
-                self._log_handle.close()
-                self._log_handle = None
-                raise
-            return {
-                "started": True,
-                "round_number": active_round,
-                "mode": active_mode,
-                "worker_pid": self._process.pid,
-                "log_path": str(logfile),
-            }
+        except (OSError, subprocess.SubprocessError, CycleError):
+            self._log_handle.close()
+            self._log_handle = None
+            raise
+        return {
+            "started": True, "resumed": resuming,
+            "round_number": round_number, "mode": mode,
+            "worker_pid": self._process.pid, "log_path": str(logfile),
+        }
 
-    def stop(self) -> None:
+    def pause(self) -> dict[str, Any]:
+        with self._lock:
+            state = _run_state(self.root)
+            if (not state or state.get("stage") in ("COMPLETE", "FAILED",
+                                                 "RECOVERY_BLOCKED")):
+                raise CycleError("no active training session to pause")
+            if self._process is None or self._process.poll() is not None:
+                raise CycleError("training worker not running; recovery on startup may be available")
+            _set_pause_request(self.root, state["run_id"], True)
+            return {"pause_requested": True, "stage": "PAUSING",
+                    "run_id": state["run_id"]}
+
+    def resume(self) -> dict[str, Any]:
+        with self._lock:
+            state = _run_state(self.root)
+            if not state or state.get("stage") in ("COMPLETE", "FAILED",
+                                                "RECOVERY_BLOCKED"):
+                raise CycleError("no paused or recoverable training session")
+            if self._process is not None and self._process.poll() is None:
+                request = _pause_request(self.root)
+                if not request or request.get("run_id") != state.get("run_id") or not request.get("pause_requested"):
+                    raise CycleError("training is already running")
+                _set_pause_request(self.root, state["run_id"], False)
+                return {"pause_requested": False, "resumed": True}
+            plan = self._recover_plan(state)
+            return self._launch(**plan, resuming=True) | {"pause_requested": False}
+
+    @staticmethod
+    def _recover_plan(state: dict[str, Any]) -> dict[str, Any]:
+        if (not state.get("auto_resume")
+            or state.get("mode") not in (FORWARD_MODE, BASELINE_MODE,
+                                        "mistake", "correct")
+            or state.get("stage") in ("COMPLETE", "FAILED", "RECOVERY_BLOCKED")
+            or state.get("resume_stage") == "PROMOTION_GATE"
+            or state.get("stage") == "PROMOTION_GATE"):
+            raise CycleError("session cannot safely resume automatically")
+        return {
+            "mode": state["mode"], "round_number": state["round_number"],
+            "git_sha": state["git_sha"],
+        }
+
+    def recover(self) -> bool:
+        """Automatically continue a previously started session on app relaunch."""
         with self._lock:
             if self._process is not None and self._process.poll() is None:
-                self._process.terminate()
+                return False
+            state = _run_state(self.root)
+            if not state or not state.get("auto_resume") or state.get("stage") in (
+                "COMPLETE", "FAILED", "RECOVERY_BLOCKED"
+            ):
+                return False
+            if (state.get("stage") == "PROMOTION_GATE"
+                or state.get("resume_stage") == "PROMOTION_GATE"):
+                _write_worker_state(
+                    self.root, stage="RECOVERY_BLOCKED",
+                    mode=state["mode"], round_number=state["round_number"],
+                    error="Last run stopped at promotion gate; inspect model/version before replay",
+                )
+                return False
+            try:
+                plan = self._recover_plan(state)
+                self._launch(**plan, resuming=True)
+            except Exception as exc:
+                LOG.exception("Training auto-recovery blocked")
+                _write_worker_state(
+                    self.root, stage="RECOVERY_BLOCKED",
+                    mode=state["mode"], round_number=state["round_number"],
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                return False
+            return True
+
+    def stop(self) -> None:
+        """Shutdown: preserve recovery intent and stop worker, never abandon data."""
+        with self._lock:
+            process = self._process
+            state = _run_state(self.root)
+            if process is not None and process.poll() is None:
+                if (state and state.get("stage") in ACTIVE_WORKER_STAGES
+                    and state.get("auto_resume")):
+                    _set_pause_request(self.root, state["run_id"], True)
+                    # Wait briefly for a cooperative checkpoint; no unbounded
+                    # shutdown wait during an expensive model-fit operation.
+                    deadline = time.monotonic() + 2.5
+                    while time.monotonic() < deadline:
+                        current = _run_state(self.root)
+                        if current and current.get("stage") == "PAUSED":
+                            break
+                        time.sleep(0.1)
+                process.terminate()
                 try:
-                    self._process.wait(timeout=8)
+                    process.wait(timeout=8)
                 except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=5)
+                    process.kill()
+                    process.wait(timeout=5)
+                current = _run_state(self.root)
+                if current and current.get("stage") in ACTIVE_WORKER_STAGES:
+                    stage = current.get("resume_stage") or current["stage"]
+                    _write_worker_state(
+                        self.root, stage="PAUSED",
+                        mode=current["mode"], round_number=current["round_number"],
+                        resume_stage=stage,
+                        dataset_action=("App closed; saved checkpoints will be "
+                                        "reused when KalshiEdge reopens"),
+                    )
             self._process = None
             if self._log_handle is not None:
                 self._log_handle.close()
