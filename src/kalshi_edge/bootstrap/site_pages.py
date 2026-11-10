@@ -49,10 +49,46 @@ STYLE = r"""/* KalshiEdge's routed, minimal three-page experience. */
  color-scheme:dark;
 }
 html{scroll-behavior:smooth}
-body{background:radial-gradient(880px 460px at 22% -17%,#15332b77,transparent 70%),
- radial-gradient(800px 500px at 110% 10%,#10253666,transparent 65%),var(--bg);
- background-attachment:fixed}
-.shell{max-width:1510px;margin:auto;padding:0 30px 64px}
+/* Local panoramic artwork. The dashboard remains legible without the
+   optional image: the last gradient is its native offline fallback. */
+body{background:#020c10;position:relative;isolation:isolate}
+body::before{
+ content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+ background-image:
+  linear-gradient(180deg,rgba(0,7,11,.03) 0%,rgba(0,8,12,.12) 55%,rgba(0,8,12,.45) 100%),
+  url("/assets/kalshiedge-neon-city.webp"),
+  radial-gradient(ellipse at 50% 15%,#073f3b 0%,#061d26 54%,#020910 100%);
+ background-repeat:no-repeat;
+ background-position:center center,center center,center center;
+ background-size:cover,cover,cover;
+}
+body::after{
+ content:"";position:fixed;inset:0;z-index:0;pointer-events:none;
+ background:linear-gradient(90deg,rgba(0,7,11,.08),rgba(0,10,14,.18) 25%,
+  rgba(0,11,15,.24) 50%,rgba(0,10,14,.18) 75%,rgba(0,7,11,.08));
+}
+.shell{max-width:1510px;margin:auto;padding:0 30px 64px;position:relative;z-index:1}
+/* Dark translucent market panels over the cyan/gold artwork. No full-screen blur. */
+.site-nav{background:rgba(3,16,19,.91)!important;border-color:#1f756b75!important;
+ box-shadow:0 8px 32px #000b,0 0 20px #20caa51b!important}
+body[data-page="trade"] .forecast,
+body[data-page="trade"] .context>.manual-trade{
+ background:linear-gradient(155deg,rgba(2,27,30,.94),rgba(0,13,18,.96) 72%)!important;
+ border-color:rgba(39,220,183,.43)!important;
+ box-shadow:0 0 24px rgba(12,217,182,.14),0 24px 55px rgba(0,0,0,.6)!important;
+}
+body[data-page="trade"] .forecast .hero-price-surface{background:rgba(3,23,27,.89)}
+body[data-page="train"] .training-card,
+body[data-page="history"] .card,
+body[data-page="api"] .card{
+ background:linear-gradient(150deg,rgba(5,23,28,.94),rgba(5,16,22,.97))!important;
+ border-color:rgba(37,164,139,.37)!important;
+ box-shadow:0 20px 55px #0009,0 0 19px #0cd8ac10!important;
+}
+@media(max-width:700px){
+ body::before{background-position:center center,center center,center center}
+ body::after{background:rgba(0,9,13,.34)}
+}
 .site-header{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
  gap:22px;align-items:center;padding:22px 0;border-bottom:1px solid #ffffff18}
 .identity{width:max-content;text-decoration:none;color:inherit}
