@@ -28,7 +28,8 @@ def test_forward_training_snapshot_is_hash_sealed_and_reusable(tmp_path,monkeypa
         rows.append(FeatureRow(
             market_ticker=f"KXBTC15M-SEALED-{i}",split_group_id=f"KXBTC15M-SEALED-{i}",
             checkpoint_ts_ns=ts,label_yes=y,features=features,
-            source_max_ts_ns={"binance":ts-1_000_000_000},
+            source_max_ts_ns={"binance":ts-1_000_000_000,
+                              "kalshi_candles":ts-2_000_000_000},
         ))
     monkeypatch.setattr(forward_learning_480,"_joined",
                         lambda root:(rows,{"settled_480s":120}))
