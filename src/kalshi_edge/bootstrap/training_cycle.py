@@ -55,7 +55,7 @@ ACTIVE_WORKER_STAGES = frozenset({
     "STARTING", "BUILDING_DATASET", "VERIFYING_DATASET",
     "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
     "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
-    "PAUSING", "PAUSED",
+    "PAUSING",
 })
 
 
@@ -552,6 +552,13 @@ def _forward_failure_reasons(report: dict[str, Any]) -> list[str]:
     ]
 
 
+def _worker_stage(root: Path, *, stage: str, mode: str,
+                  round_number: int, **values) -> None:
+    _write_worker_state(root, stage=stage, mode=mode,
+                        round_number=round_number, **values)
+    _pause_barrier(root, stage=stage, mode=mode, round_number=round_number)
+
+
 def run_forward_training_worker(root: Path) -> int:
     """Persistent offline 480s training. A research score is never a live PASS."""
     from ..launcher import SingleStarter
@@ -564,6 +571,7 @@ def run_forward_training_worker(root: Path) -> int:
             _write_worker_state(root, stage="BUILDING_DATASET", mode=mode,
                                 round_number=round_number,
                                 dataset_action="Building point-in-time forward 480s snapshot dataset")
+            _pause_barrier(root, stage="BUILDING_DATASET", mode=mode, round_number=round_number)
             dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
             _write_worker_state(
                 root, stage="VERIFYING_DATASET", mode=mode,
@@ -578,13 +586,13 @@ def run_forward_training_worker(root: Path) -> int:
                 if stage not in ("VERIFYING", "SPLITTING", "FITTING", "SCORING",
                                  "COMPARING"):
                     raise CycleError(f"unexpected forward training stage: {stage}")
-                _write_worker_state(root, stage=stage, mode=mode,
-                                    round_number=round_number)
+                _worker_stage(root, stage=stage, mode=mode,
+                              round_number=round_number)
 
             result = forward_learning_480.evaluate_verified_forward_candidate(
                 root, progress=progress, dataset_path=dataset_path,
             )
-            _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
+            _worker_stage(root, stage="PROMOTION_GATE", mode=mode,
                                 round_number=round_number)
             decision = (
                 "NOT_DEPLOYABLE" if result.get("status") == "VALIDATION_JOINT_GAIN"
@@ -755,8 +763,8 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_verified=True,
                 )
-            _write_worker_state(root, stage="SPLITTING", mode=mode, round_number=round_number)
-            _write_worker_state(root, stage="TRAINING", mode=mode, round_number=round_number)
+            _worker_stage(root, stage="SPLITTING", mode=mode, round_number=round_number)
+            _worker_stage(root, stage="TRAINING", mode=mode, round_number=round_number)
             experiment = train_experiment(
                 root, settings, git_sha=git_sha,
                 mistakes_only=mode == "mistake",
@@ -769,8 +777,8 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
             def report_progress(stage: str) -> None:
                 if stage not in {"SCORING", "COMPARING", "PROMOTION_GATE"}:
                     raise CycleError(f"invalid full-model evaluation milestone: {stage}")
-                _write_worker_state(root, stage=stage, mode=mode,
-                                    round_number=round_number)
+                _worker_stage(root, stage=stage, mode=mode,
+                              round_number=round_number)
 
             evaluation = run_lockbox_evaluation(
                 root, experiment.experiment_path, progress=report_progress,
@@ -844,7 +852,10 @@ class TrainingController:
                          if process is not None else
                          "Dashboard restarted before this run completed")
                 run = {**run, "stage": "INTERRUPTED", "error": error}
-            return {"running": running, "run": run}
+            request = _pause_request(self.root)
+            pending = bool(run and request and request.get("run_id") == run.get("run_id")
+                           and request.get("pause_requested"))
+            return {"running": running, "run": run, "pause_requested": pending}
 
     def status(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -886,6 +897,11 @@ class TrainingController:
             from .model_identity import current_model_identity
             info["current_model"] = current_model_identity(self.root)
             info["run"] = _run_state(self.root)
+            req = _pause_request(self.root)
+            info["pause_requested"] = bool(
+                info["run"] and req and req.get("run_id") == info["run"].get("run_id")
+                and req.get("pause_requested")
+            )
             if self._process is not None:
                 code = self._process.poll()
                 info["running"] = code is None
