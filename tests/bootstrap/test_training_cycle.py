@@ -96,7 +96,7 @@ def test_training_worker_persists_complete_state_even_if_model_not_promoted(tmp_
             experiment_bundle_sha256="f" * 64,
             experiment_path=root / "models" / "experiments" / ("f" * 64 + ".json"),
         )
-    def fake_evaluate(root, path):
+    def fake_evaluate(root, path, *, progress=None):
         calls.append(("eval", path.name))
         return SimpleNamespace(
             decision=SimpleNamespace(promoted=False, reason_codes=("INCUMBENT_MODEL_NOT_BEATEN",)),
