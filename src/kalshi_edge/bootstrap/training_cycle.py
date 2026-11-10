@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import artifact, training
+from . import artifact, training, training_pause
 from .correct_learning import verified_correct_pool
 from .mistake_learning import verified_mistake_pool
 
@@ -54,7 +54,7 @@ MIN_RETRAIN_LOCKBOX_MARKETS = 80
 ACTIVE_WORKER_STAGES = frozenset({
     "STARTING", "BUILDING_DATASET", "VERIFYING_DATASET",
     "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
-    "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
+    "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE", "RESUMING",
 })
 
 
@@ -377,7 +377,8 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "log_path", "worker_pid", "started_utc", "dataset_path",
                 "dataset_markets_completed", "dataset_markets_total",
                 "dataset_last_market", "dataset_action", "dataset_row_count",
-                "dataset_market_count", "dataset_verified",
+                "dataset_market_count", "dataset_verified", "experiment_path",
+                "experiment_sha256", "resume_stage", "run_id", "git_sha",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
@@ -400,10 +401,60 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     })
 
 
+def _save_paused_state(root: Path, *, mode: str, round_number: int,
+                       reason: str = "manual") -> None:
+    """Write acknowledged PAUSED only after the last safe checkpoint."""
+    prior = _run_state(root) or {}
+    checkpoint = prior.get("stage", "VERIFYING")
+    if checkpoint in ("PAUSED", "RESUMING"):
+        checkpoint = prior.get("resume_stage") or "VERIFYING"
+    _write_worker_state(
+        root, stage="PAUSED", mode=mode, round_number=round_number,
+        resume_stage=checkpoint, pause_reason=reason,
+        error=None,
+    )
+
+
+def _pause_boundary(root: Path, *, mode: str, round_number: int,
+                    stage: str, **kwargs: Any) -> None:
+    """Complete and save the stage transition before checking pause intent."""
+    _write_worker_state(root, stage=stage, mode=mode,
+                        round_number=round_number, **kwargs)
+    current = _run_state(root) or {}
+    training_pause.check_pause(root, current.get("run_id", ""))
+
+
+def _resume_experiment_path(root: Path, saved: dict[str, Any]) -> Path | None:
+    if saved.get("mode") not in (BASELINE_MODE, "mistake", "correct"):
+        return None
+    if saved.get("resume_stage") not in (
+        "EVALUATING", "SCORING", "COMPARING", "PROMOTION_GATE",
+    ):
+        return None
+    name = saved.get("experiment_path")
+    if not isinstance(name, str):
+        return None
+    root = root.resolve()
+    path = Path(name).resolve()
+    try:
+        path.relative_to(root / "models" / "experiments")
+    except ValueError:
+        raise CycleError("resume experiment path is outside authenticated model storage")
+    if path.suffix != ".json" or not path.exists():
+        raise CycleError("saved experiment artifact is unavailable; cannot safely resume")
+    if (root / "reports" / f"evaluation-{path.stem}.json").exists():
+        raise CycleError(
+            "evaluation already recorded for this candidate; refusing to replay "
+            "the one-time promotion/lockbox evaluation"
+        )
+    return path
+
+
 def _market_progress_reporter(
     root: Path, *, mode: str, round_number: int,
     clock: Callable[[], float] = time.monotonic,
     min_markets: int = 3, min_interval_seconds: float = 0.25,
+    run_id: str | None = None, initial_completed: int = 0,
 ) -> Callable[[int, int, str, str], None]:
     """Publish real counter updates promptly without thousands of fsync writes.
 
@@ -414,12 +465,17 @@ def _market_progress_reporter(
     """
     if min_markets < 1 or min_interval_seconds < 0:
         raise ValueError("invalid market progress throttle")
-    last_count, last_time = -1, float("-inf")
+    last_count, last_time = (initial_completed if initial_completed > 0 else -1), float("-inf")
 
     def report(completed: int, total: int, ticker: str, stage: str) -> None:
         nonlocal last_count, last_time
         if total <= 0 or not 0 <= completed <= total:
             raise ValueError("invalid dataset progress count")
+        if run_id is not None:
+            # Called immediately AFTER a market is checkpointed on disk.
+            training_pause.check_pause(root, run_id)
+        if completed <= initial_completed and stage == "markets":
+            return
         terminal = completed == total or stage != "markets"
         now = clock()
         first = last_count < 0
