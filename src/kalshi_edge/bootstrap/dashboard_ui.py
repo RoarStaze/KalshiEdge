@@ -123,6 +123,12 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-launch p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
 .training-launch .train-button{min-width:190px;padding:13px 22px;background:#66cdb2;border-radius:10px;color:#10201d;border:none;box-shadow:0 6px 22px rgba(78,196,158,.12)}
 .training-launch .train-button:disabled{background:#2f4855;color:#81929d;box-shadow:none}
+.training-controls{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.training-control-pause,.training-control-resume{border-radius:10px;padding:13px 18px;font-weight:700;border:1px solid #698b8b;background:#1c3439;color:#d2eee6;cursor:pointer}
+.training-control-resume{background:#276e53;border-color:#5ab78f;color:#fff}
+.training-control-pause:disabled,.training-control-resume:disabled{opacity:.38;cursor:not-allowed}
+@media(max-width:520px){.training-controls{width:100%}.training-controls button{flex:1}}
+
 .training-live-panel{background:linear-gradient(180deg,#132029,#111b23);border:1px solid #2c4350;border-radius:14px;margin-top:20px;padding:23px 24px}
 .training-live-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .training-live-head h3{font-size:19px;margin:5px 0 0}
@@ -260,7 +266,11 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
     <h3 id="training-headline">Checking training readiness</h3>
     <p id="training-description">Training will use the eligible verified dataset, never simulated examples.</p>
    </div>
-   <button class="train-button" type="button" disabled id="train-now">Train Now</button>
+   <div class="training-controls">
+     <button class="train-button" type="button" disabled id="train-now">Train Now</button>
+     <button class="train-control-pause" type="button" disabled id="train-pause"><span aria-hidden="true">Ⅱ</span> Pause</button>
+     <button class="train-control-resume" type="button" disabled id="train-resume">Resume</button>
+    </div>
   </div>
  </div>
  <div class="training-live-panel" aria-label="Training session and validation results">
@@ -413,7 +423,8 @@ function renderTrainingSession(run,running){
  const events=Array.isArray(run.events)?run.events:[];
  const current=String(run.stage||"");
  const done=current==="COMPLETE";
- const failed=current==="FAILED"||current==="INTERRUPTED";
+ const failed=current==="FAILED"||current==="INTERRUPTED"||current==="RECOVERY_BLOCKED";
+ const paused=current==="PAUSED";
  const mapped=x=>x==="TRAINING"?"FITTING":x==="EVALUATING"?"SCORING":
   x==="VERIFYING"?"VERIFYING_DATASET":x;
  const doneStages=events.map(e=>mapped(String(e.stage||"")));
@@ -479,6 +490,11 @@ function renderTrainingSession(run,running){
   outcome.classList.add("fail");
   outcome.textContent="TRAINING FAILED — Existing model unchanged.\n"+
    (run.error||reasons.join("\n")||"Worker interrupted; inspect training log.");
+ }else if(paused){
+  outcome.classList.add("pending");
+  outcome.textContent="PAUSED · Saved dataset checkpoints are preserved.\n"+
+   "Resume continues this worker, or reopens from the last durable checkpoint after restarting KalshiEdge. "+
+   "An unfinished model-fit operation may restart at the fitting stage.";
  }else if(!done){
   outcome.textContent="IN PROGRESS · "+
    (current.replaceAll("_"," ")||"Starting")+
@@ -545,7 +561,8 @@ function renderTraining(info){
   (info.ready?info.mode:baseline.ready?"baseline":prospective.ready?"forward_480":""));
  const phase=String(run.stage||"");
  const pill=el("train-status-pill");
- pill.textContent=running?"TRAINING RUNNING":ready?"READY TO TRAIN":
+ pill.textContent=phase==="PAUSED"?"PAUSED":info.pause_requested?"PAUSING":
+  running?"TRAINING RUNNING":ready?"READY TO TRAIN":
   info.status==="BLOCKED"?"DATA BLOCKED":"COLLECTING DATA";
  pill.className="training-pill"+(running||ready?"":" waiting");
  const n=Math.max(0,Number(prospective.eligible_480_markets)||0);
@@ -573,8 +590,19 @@ function renderTraining(info){
  const button=el("train-now");
  button.disabled=!ready||running||phase==="STARTING";
  button.textContent=running?"Training…":"Train Now";
+ const pauseBtn=el("train-pause"),resumeBtn=el("train-resume");
+ pauseBtn.disabled=!running||!!info.pause_requested||phase==="PAUSED"||
+  phase==="PROMOTION_GATE";
+ resumeBtn.disabled=!(info.pause_requested||phase==="PAUSED"||
+  (phase==="INTERRUPTED"&&run.auto_resume));
+ if(phase==="RECOVERY_BLOCKED")resumeBtn.disabled=true;
  renderTrainingSession(run,running);
- if(running){
+ if(phase==="PAUSED"){
+  text("train-feedback","Training paused at "+String(run.resume_stage||"last checkpoint")+
+   " · saved progress is preserved.");
+ }else if(info.pause_requested){
+  text("train-feedback","Pause requested · finishing current operation before pausing.");
+ }else if(running){
   text("train-feedback","Worker active · "+String(run.mode||mode).replaceAll("_"," ")+
    " · "+(run.updated_utc||"awaiting first milestone"));
  }else if(run.stage==="COMPLETE"){
@@ -597,6 +625,8 @@ async function refreshTraining(){
   if(trainingStatus){
    // Keep completed stages, progress, model identity and the latest verdict.
    el("train-now").disabled=true;
+   el("train-pause").disabled=true;
+   el("train-resume").disabled=true;
    text("train-feedback","Connection interrupted · showing last verified training status; "+
     "retrying soon. "+err.message);
    return;
@@ -604,6 +634,8 @@ async function refreshTraining(){
   text("training-headline","Training readiness unavailable");
   text("train-status-pill","CONNECTION ERROR");
   el("train-now").disabled=true;
+  el("train-pause").disabled=true;
+  el("train-resume").disabled=true;
   text("forward-480-eligible","Forward training status unavailable");
   text("forward-480-progress","—");
   text("forward-480-reason","Cannot load verified prospective evidence.");
@@ -629,13 +661,20 @@ async function refreshTrainingProgress(){
   // A late GET must never move the same in-progress dataset back.
   if(next.started_utc===previous.started_utc&&newer&&older&&newer<older)return;
   const running=payload.running===true;
-  if(newer===older&&next.stage===previous.stage&&running===trainingStatus.running)return;
-  trainingStatus={...trainingStatus,run:next,running};
+  const requested=payload.pause_requested===true;
+  if(newer===older&&next.stage===previous.stage&&running===trainingStatus.running&&
+     requested===(trainingStatus.pause_requested===true))return;
+  trainingStatus={...trainingStatus,run:next,running,pause_requested:requested};
   renderTrainingSession(next,running);
+  el("train-pause").disabled=!running||requested||next.stage==="PAUSED"||
+   next.stage==="PROMOTION_GATE";
+  el("train-resume").disabled=!(requested||next.stage==="PAUSED");
   saveTrainingSnapshot(trainingStatus);
   if(running){
-   text("train-status-pill","TRAINING RUNNING");
-   text("training-headline","Training and evaluating…");
+   text("train-status-pill",next.stage==="PAUSED"?"PAUSED":
+    requested?"PAUSING":"TRAINING RUNNING");
+   text("training-headline",next.stage==="PAUSED"?"Training paused":
+    requested?"Pausing at next checkpoint…":"Training and evaluating…");
    text("train-feedback","Worker active · "+String(next.stage||"STARTING").replaceAll("_"," ")+
     " · "+(next.updated_utc||"checking latest state"));
    el("train-now").disabled=true;
@@ -649,6 +688,26 @@ async function refreshTrainingProgress(){
   progressPollPending=false;
  }
 }
+async function sendTrainingControl(action){
+ const button=el(action==="pause"?"train-pause":"train-resume");
+ button.disabled=true;
+ text("train-feedback",action==="pause"?"Requesting pause at safe checkpoint…":
+  "Resuming from saved training checkpoint…");
+ try{
+  const response=await fetch("/api/training/"+action,{
+   method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"train"},
+   body:"{}",cache:"no-store",
+  });
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error||"HTTP "+response.status);
+  await refreshTraining();
+ }catch(err){
+  text("train-feedback","Training "+action+" failed: "+err.message);
+  await refreshTraining();
+ }
+}
+el("train-pause").addEventListener("click",()=>sendTrainingControl("pause"));
+el("train-resume").addEventListener("click",()=>sendTrainingControl("resume"));
 el("train-now").addEventListener("click",async()=>{
  if(!(trainingStatus?.train_available??(trainingStatus?.ready||
      trainingStatus?.baseline_retrain?.ready||trainingStatus?.forward_480?.ready))||
