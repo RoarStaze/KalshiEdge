@@ -20,13 +20,13 @@ def render(section):
 def test_animated_background_is_local_and_shared_across_routes():
     for section in ("trade", "train", "history", "api"):
         page = render(section)
-        assert 'class="ke-atmosphere"' in page
+        assert 'class="ke-live-scene"' in page
         assert 'aria-hidden="true"' in page
-        assert 'class="ke-energy-grid"' in page
-        assert 'class="ke-particles"' in page
-        assert 'class="ke-market-trace"' in page
-        assert 'ke-background-drift' in page
-        assert 'ke-particle-drift' in page
+        assert 'class="ke-live-grid"' in page
+        assert 'id="ke-live-canvas"' in page
+        assert 'class="ke-live-beam"' in page
+        assert 'ke-image-breathe' in page
+        assert 'ke-beam-sweep' in page
         assert 'url("/assets/kalshiedge-neon-city.webp")' in page
         assert 'pointer-events:none' in page
         assert 'prefers-reduced-motion:reduce' in page
@@ -35,9 +35,9 @@ def test_animated_background_is_local_and_shared_across_routes():
 
 def test_each_visible_panel_family_has_an_orbiting_green_border():
     page = render("trade")
-    assert '@property --ke-trace-angle' in page
-    assert '@keyframes ke-border-orbit' in page
-    assert 'mask-composite:exclude' in page
+    assert 'class="ke-border-overlay"' in page
+    assert '@keyframes ke-border-travel' in page
+    assert 'pathLength' in page
     for selector in (
         '.site-nav', '.card', '.manual-trade',
         '.training-step', '.training-count', '.kpi',
@@ -46,14 +46,14 @@ def test_each_visible_panel_family_has_an_orbiting_green_border():
         '.mt-auto-record', '.mt-inputbox',
     ):
         assert selector in page
-    assert 'animation:ke-border-orbit' in page
+    assert 'animation:ke-border-travel' in page
     assert 'animation:none!important' in page
 
 
 def test_animation_does_not_change_trading_or_training_interface():
     for section in ("trade", "train", "history", "api"):
         page = render(section)
-        assert page.count('class="ke-atmosphere"') == 1
+        assert page.count('class="ke-live-scene"') == 1
         assert page.count('id="manual-submit"') == 1
         assert page.count('id="train-now"') == 1
         assert page.count('id="history-rows"') == 1
