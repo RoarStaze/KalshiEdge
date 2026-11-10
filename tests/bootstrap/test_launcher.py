@@ -151,3 +151,30 @@ def test_launcher_parser_supports_only_explicit_start(monkeypatch):
     assert actions == [{"port": 8900, "open_browser": False}]
     with pytest.raises(SystemExit):
         launcher.main(["invalid"])
+
+
+def test_launcher_requests_durable_checkpoint_before_own_history_tree_shutdown(tmp_path,monkeypatch):
+    from kalshi_edge.bootstrap import training_cycle, training_pause
+    training_cycle._write_worker_state(
+        tmp_path,stage="BUILDING_DATASET",mode="baseline",round_number=0,
+        run_id="shutdown-run",git_sha="a"*40,
+        dataset_markets_completed=250,dataset_markets_total=300,
+    )
+    training_pause.reset_pause(tmp_path,run_id="shutdown-run")
+    monkeypatch.setattr(launcher.time,"sleep",lambda *args:None)
+    launcher._request_training_shutdown(tmp_path,timeout_seconds=0)
+    intent=training_pause.read_pause(tmp_path)
+    assert intent["run_id"]=="shutdown-run"
+    assert intent["pause_requested"] is True
+    assert intent["manual"] is False
+
+
+def test_launcher_shutdown_preserves_explicit_manual_pause(tmp_path,monkeypatch):
+    from kalshi_edge.bootstrap import training_cycle, training_pause
+    training_cycle._write_worker_state(
+        tmp_path,stage="BUILDING_DATASET",mode="baseline",round_number=0,
+        run_id="manually-paused",git_sha="a"*40,
+    )
+    training_pause.set_pause(tmp_path,run_id="manually-paused",manual=True)
+    launcher._request_training_shutdown(tmp_path,timeout_seconds=0)
+    assert training_pause.read_pause(tmp_path)["manual"] is True

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import artifact, training
+from . import artifact, training, training_pause
 from .correct_learning import verified_correct_pool
 from .mistake_learning import verified_mistake_pool
 
@@ -54,7 +54,7 @@ MIN_RETRAIN_LOCKBOX_MARKETS = 80
 ACTIVE_WORKER_STAGES = frozenset({
     "STARTING", "BUILDING_DATASET", "VERIFYING_DATASET",
     "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
-    "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
+    "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE", "RESUMING",
 })
 
 
@@ -377,13 +377,16 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "log_path", "worker_pid", "started_utc", "dataset_path",
                 "dataset_markets_completed", "dataset_markets_total",
                 "dataset_last_market", "dataset_action", "dataset_row_count",
-                "dataset_market_count", "dataset_verified",
+                "dataset_market_count", "dataset_verified", "experiment_path",
+                "experiment_sha256", "resume_stage", "run_id", "git_sha",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
     percent = WORKER_STAGE_PROGRESS.get(
         stage, int(prior.get("progress_percent", 0)) if same_run else 0
     )
+    if same_run and stage != "STARTING" and prior.get("resume_stage"):
+        percent = max(percent, int(prior.get("progress_percent", 0)))
     events = list(prior.get("events", [])) if same_run and stage != "STARTING" else []
     if not events or events[-1].get("stage") != stage:
         events.append({"stage": stage, "at_utc": now, "progress_percent": percent})
@@ -400,10 +403,60 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     })
 
 
+def _save_paused_state(root: Path, *, mode: str, round_number: int,
+                       reason: str = "manual") -> None:
+    """Write acknowledged PAUSED only after the last safe checkpoint."""
+    prior = _run_state(root) or {}
+    checkpoint = prior.get("stage", "VERIFYING")
+    if checkpoint in ("PAUSED", "RESUMING"):
+        checkpoint = prior.get("resume_stage") or "VERIFYING"
+    _write_worker_state(
+        root, stage="PAUSED", mode=mode, round_number=round_number,
+        resume_stage=checkpoint, pause_reason=reason,
+        error=None,
+    )
+
+
+def _pause_boundary(root: Path, *, mode: str, round_number: int,
+                    stage: str, **kwargs: Any) -> None:
+    """Complete and save the stage transition before checking pause intent."""
+    _write_worker_state(root, stage=stage, mode=mode,
+                        round_number=round_number, **kwargs)
+    current = _run_state(root) or {}
+    training_pause.check_pause(root, current.get("run_id", ""))
+
+
+def _resume_experiment_path(root: Path, saved: dict[str, Any]) -> Path | None:
+    if saved.get("mode") not in (BASELINE_MODE, "mistake", "correct"):
+        return None
+    if saved.get("resume_stage") not in (
+        "EVALUATING", "SCORING", "COMPARING", "PROMOTION_GATE",
+    ):
+        return None
+    name = saved.get("experiment_path")
+    if not isinstance(name, str):
+        return None
+    root = root.resolve()
+    path = Path(name).resolve()
+    try:
+        path.relative_to(root / "models" / "experiments")
+    except ValueError:
+        raise CycleError("resume experiment path is outside authenticated model storage")
+    if path.suffix != ".json" or not path.exists():
+        raise CycleError("saved experiment artifact is unavailable; cannot safely resume")
+    if (root / "reports" / f"evaluation-{path.stem}.json").exists():
+        raise CycleError(
+            "evaluation already recorded for this candidate; refusing to replay "
+            "the one-time promotion/lockbox evaluation"
+        )
+    return path
+
+
 def _market_progress_reporter(
     root: Path, *, mode: str, round_number: int,
     clock: Callable[[], float] = time.monotonic,
     min_markets: int = 3, min_interval_seconds: float = 0.25,
+    run_id: str | None = None, initial_completed: int = 0,
 ) -> Callable[[int, int, str, str], None]:
     """Publish real counter updates promptly without thousands of fsync writes.
 
@@ -414,12 +467,17 @@ def _market_progress_reporter(
     """
     if min_markets < 1 or min_interval_seconds < 0:
         raise ValueError("invalid market progress throttle")
-    last_count, last_time = -1, float("-inf")
+    last_count, last_time = (initial_completed if initial_completed > 0 else -1), float("-inf")
 
     def report(completed: int, total: int, ticker: str, stage: str) -> None:
         nonlocal last_count, last_time
         if total <= 0 or not 0 <= completed <= total:
             raise ValueError("invalid dataset progress count")
+        if run_id is not None:
+            # Called immediately AFTER a market is checkpointed on disk.
+            training_pause.check_pause(root, run_id)
+        if completed <= initial_completed and stage == "markets":
+            return
         terminal = completed == total or stage != "markets"
         now = clock()
         first = last_count < 0
@@ -503,11 +561,36 @@ def run_forward_training_worker(root: Path) -> int:
     mode, round_number = FORWARD_MODE, 0
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
-            _write_worker_state(root, stage="BUILDING_DATASET", mode=mode,
-                                round_number=round_number,
-                                dataset_action="Building point-in-time forward 480s snapshot dataset")
-            dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
-            _write_worker_state(
+            previous = _run_state(root) or {}
+            saved = previous.get("dataset_path")
+            can_reuse = bool(
+                previous.get("resume_stage") in (
+                    "VERIFYING_DATASET", "SPLITTING", "VERIFYING",
+                    "FITTING", "SCORING", "COMPARING", "PROMOTION_GATE",
+                ) and previous.get("dataset_verified") and isinstance(saved, str)
+            )
+            _pause_boundary(root, stage="BUILDING_DATASET", mode=mode,
+                            round_number=round_number,
+                            dataset_action=(
+                                "Reusing the same sealed 480s dataset"
+                                if can_reuse else
+                                "Building point-in-time forward 480s snapshot dataset"
+                            ))
+            if can_reuse:
+                dataset_path = Path(saved).resolve()
+                try:
+                    dataset_path.relative_to(root / "training_runs" / "datasets")
+                except ValueError as exc:
+                    raise CycleError("sealed forward dataset path escapes training storage") from exc
+                # SHA-256, original incumbent calls and settled labels all
+                # must match the previously frozen dataset.
+                rows, _incumbents = forward_learning_480.load_verified_forward_dataset(dataset_path)
+                ready = forward_learning_480.assess_forward_training_readiness(rows)
+                if not ready["ready"]:
+                    raise CycleError("previously sealed 480s evidence is no longer eligible")
+            else:
+                dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
+            _pause_boundary(
                 root, stage="VERIFYING_DATASET", mode=mode,
                 round_number=round_number, dataset_path=str(dataset_path),
                 dataset_market_count=ready["eligible_480_markets"],
@@ -520,14 +603,14 @@ def run_forward_training_worker(root: Path) -> int:
                 if stage not in ("VERIFYING", "SPLITTING", "FITTING", "SCORING",
                                  "COMPARING"):
                     raise CycleError(f"unexpected forward training stage: {stage}")
-                _write_worker_state(root, stage=stage, mode=mode,
-                                    round_number=round_number)
+                _pause_boundary(root, stage=stage, mode=mode,
+                                round_number=round_number)
 
             result = forward_learning_480.evaluate_verified_forward_candidate(
                 root, progress=progress, dataset_path=dataset_path,
             )
-            _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
-                                round_number=round_number)
+            _pause_boundary(root, stage="PROMOTION_GATE", mode=mode,
+                            round_number=round_number)
             decision = (
                 "NOT_DEPLOYABLE" if result.get("status") == "VALIDATION_JOINT_GAIN"
                 else "VALIDATION_FAILED" if result.get("status") == "NO_VALIDATED_JOINT_GAIN"
@@ -544,6 +627,13 @@ def run_forward_training_worker(root: Path) -> int:
                 results=result, report_path=str(report_path),
             )
             return 0 if decision in ("VALIDATION_FAILED", "NOT_DEPLOYABLE") else 2
+        except training_pause.TrainingPaused:
+            intent=training_pause.read_pause(root)
+            _save_paused_state(
+                root, mode=mode, round_number=round_number,
+                reason="manual" if intent.get("manual") else "shutdown",
+            )
+            return 0
         except Exception as exc:
             LOG.exception("Verified 480s training failed")
             _write_worker_state(
@@ -630,7 +720,9 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
 
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
-            _write_worker_state(root, stage="VERIFYING", mode=mode, round_number=round_number)
+            resume_state = _run_state(root) or {}
+            saved_experiment = _resume_experiment_path(root, resume_state)
+            _pause_boundary(root, stage="VERIFYING", mode=mode, round_number=round_number)
             if mode == BASELINE_MODE:
                 eligibility = inspect_baseline_training_readiness(root)
                 if round_number != 0 or not eligibility["ready"]:
@@ -645,18 +737,36 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
             if mode == BASELINE_MODE:
                 from . import dataset
                 market_root = root / "raw" / "kalshi" / "markets"
-                _write_worker_state(
-                    root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
-                    dataset_action="Rebuilding verified historical market dataset",
+                verified_existing=bool(
+                    resume_state.get("dataset_verified")
+                    and resume_state.get("resume_stage") in (
+                        "SPLITTING","TRAINING","FITTING","EVALUATING",
+                        "SCORING","COMPARING","PROMOTION_GATE",
+                    )
+                    and (root / "derived" / "features.parquet").is_file()
                 )
-                if market_root.exists():
+                _pause_boundary(
+                    root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
+                    dataset_action=(
+                        "Reusing authenticated completed dataset checkpoint"
+                        if verified_existing else "Rebuilding verified historical market dataset"
+                    ),
+                )
+                if verified_existing:
+                    pass  # _verified_context below revalidates saved hashes.
+                elif market_root.exists():
                     on_build_progress = _market_progress_reporter(
                         root, mode=mode, round_number=round_number,
+                        run_id=(_run_state(root) or {}).get("run_id"),
+                        initial_completed=int(resume_state.get("dataset_markets_completed") or 0)
+                        if resume_state.get("resume_stage") in (
+                            "BUILDING_DATASET","VERIFYING_DATASET",
+                        ) else 0,
                     )
                     dataset_report = dataset.build_dataset(
                         root, settings, progress_callback=on_build_progress,
                     )
-                    _write_worker_state(
+                    _pause_boundary(
                         root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
                         dataset_market_count=dataset_report.market_count,
                         dataset_row_count=dataset_report.row_count,
@@ -665,17 +775,17 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                         dataset_action="Rebuilt locally sourced, provenance-manifested dataset",
                     )
                 else:
-                    _write_worker_state(
+                    _pause_boundary(
                         root, stage="BUILDING_DATASET", mode=mode, round_number=round_number,
                         dataset_action="Reused existing SHA-verified dataset: raw rebuild source missing",
                     )
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                 )
                 # Re-read full provenance, all source hashes, chronological
                 # data plan and class labels AFTER dataset generation.
                 context = training._verified_context(root)
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_verified=True,
                     dataset_action="Dataset manifest, provenance, and source hashes passed",
@@ -685,7 +795,7 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                     raise CycleError("Rebuilt dataset failed independent evaluation readiness: "
                                      + refreshed["reason"])
             else:
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_action="Verified pre-existing hash-sealed historical training dataset",
                 )
@@ -693,26 +803,42 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 # _verified_context with the exact enrolled-case selection.
                 # Do not perform a redundant rescan between eligibility
                 # verification and the actual fit.
-                _write_worker_state(
+                _pause_boundary(
                     root, stage="VERIFYING_DATASET", mode=mode, round_number=round_number,
                     dataset_verified=True,
                 )
-            _write_worker_state(root, stage="SPLITTING", mode=mode, round_number=round_number)
-            _write_worker_state(root, stage="TRAINING", mode=mode, round_number=round_number)
-            experiment = train_experiment(
-                root, settings, git_sha=git_sha,
-                mistakes_only=mode == "mistake",
-                correct_only=mode == "correct",
-            )
-            _write_worker_state(
-                root, stage="EVALUATING", mode=mode, round_number=round_number,
-                experiment_sha256=experiment.experiment_bundle_sha256,
-            )
+            _pause_boundary(root, stage="SPLITTING", mode=mode, round_number=round_number)
+            if saved_experiment is not None:
+                bundle = artifact.load_model_bundle(saved_experiment)
+                if bundle.stage != "experiment":
+                    raise CycleError("resume artifact is not a verified fitted experiment")
+                from types import SimpleNamespace
+                experiment = SimpleNamespace(
+                    experiment_path=saved_experiment,
+                    experiment_bundle_sha256=bundle.bundle_sha256,
+                )
+                _pause_boundary(
+                    root, stage="EVALUATING", mode=mode, round_number=round_number,
+                    experiment_path=str(saved_experiment),
+                    experiment_sha256=bundle.bundle_sha256,
+                )
+            else:
+                _pause_boundary(root, stage="TRAINING", mode=mode, round_number=round_number)
+                experiment = train_experiment(
+                    root, settings, git_sha=git_sha,
+                    mistakes_only=mode == "mistake",
+                    correct_only=mode == "correct",
+                )
+                _pause_boundary(
+                    root, stage="EVALUATING", mode=mode, round_number=round_number,
+                    experiment_path=str(experiment.experiment_path),
+                    experiment_sha256=experiment.experiment_bundle_sha256,
+                )
             def report_progress(stage: str) -> None:
                 if stage not in {"SCORING", "COMPARING", "PROMOTION_GATE"}:
                     raise CycleError(f"invalid full-model evaluation milestone: {stage}")
-                _write_worker_state(root, stage=stage, mode=mode,
-                                    round_number=round_number)
+                _pause_boundary(root, stage=stage, mode=mode,
+                                round_number=round_number)
 
             evaluation = run_lockbox_evaluation(
                 root, experiment.experiment_path, progress=report_progress,
@@ -740,6 +866,13 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 results=comparison,
                 reason_codes=list(evaluation.decision.reason_codes),
                 evaluation_report=str(evaluation.report_path),
+            )
+            return 0
+        except training_pause.TrainingPaused:
+            intent = training_pause.read_pause(root)
+            _save_paused_state(
+                root, mode=mode, round_number=round_number,
+                reason="manual" if intent.get("manual") else "shutdown",
             )
             return 0
         except Exception as exc:
@@ -774,8 +907,24 @@ class TrainingController:
             self._cached_at = now
         return dict(self._cached)
 
+    def _pause_flags(self, run: dict[str, Any] | None,
+                     running: bool) -> dict[str, bool]:
+        intent = training_pause.read_pause(self.root)
+        matches = bool(run and intent.get("run_id") == run.get("run_id"))
+        requested = bool(matches and intent.get("pause_requested"))
+        manual = bool(requested and intent.get("manual"))
+        paused = bool(run and run.get("stage") == "PAUSED" and not running)
+        return {
+            "pause_requested": requested,
+            "paused": paused,
+            "can_resume": paused,
+            "auto_resume": bool(run and
+                                run.get("stage") in ACTIVE_WORKER_STAGES | {"PAUSED"}
+                                and not manual),
+        }
+
     def progress(self) -> dict[str, Any]:
-        """Lightweight live state for sub-second polling; no data/model reads."""
+        """Read persisted worker state; never recompute historical/model readiness."""
         with self._lock:
             run = _run_state(self.root)
             process = self._process
@@ -786,7 +935,8 @@ class TrainingController:
                          if process is not None else
                          "Dashboard restarted before this run completed")
                 run = {**run, "stage": "INTERRUPTED", "error": error}
-            return {"running": running, "run": run}
+            return {"running": running, "run": run,
+                    **self._pause_flags(run, running)}
 
     def status(self, *, force: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -853,12 +1003,95 @@ class TrainingController:
                         **info["run"], "stage": "INTERRUPTED",
                         "error": "Dashboard restarted before this run completed",
                     }
+            info.update(self._pause_flags(info["run"], info["running"]))
+            if info["paused"]:
+                info["train_available"] = False
             return info
+
+    def _git_sha(self) -> str:
+        try:
+            sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=self.project_root,
+                check=True, capture_output=True, text=True, timeout=10,
+            ).stdout.strip().lower()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise CycleError("cannot verify installed repository Git SHA") from exc
+        if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
+            raise CycleError("cannot verify installed repository Git SHA")
+        return sha
+
+    def _launch_existing(self, saved: dict[str, Any], *, resume: bool) -> dict[str, Any]:
+        """One subprocess launch path for explicit training and restart recovery."""
+        mode = saved.get("mode")
+        round_number = saved.get("round_number")
+        run_id = saved.get("run_id")
+        git = saved.get("git_sha")
+        if (mode not in ("mistake", "correct", BASELINE_MODE, FORWARD_MODE)
+                or type(round_number) is not int or round_number < 0
+                or not isinstance(run_id, str) or not isinstance(git, str)
+                or len(git) != 40):
+            raise CycleError("saved training run identity is incomplete")
+        if self._process is not None and self._process.poll() is None:
+            raise CycleError("a training worker is already running")
+        logfile = self.root / "training_runs" / (
+            f"{'resume' if resume else mode}-{int(time.time_ns())}.log"
+        )
+        logfile.parent.mkdir(parents=True, exist_ok=True)
+        self._log_handle = logfile.open("ab")
+        previous_stage = saved.get("resume_stage") or saved.get("stage")
+        try:
+            if resume:
+                _write_worker_state(
+                    self.root, stage="RESUMING", mode=mode,
+                    round_number=round_number, resume_stage=previous_stage,
+                    log_path=str(logfile), run_id=run_id, git_sha=git,
+                    error=None,
+                )
+            else:
+                _write_worker_state(
+                    self.root, stage="STARTING", mode=mode,
+                    round_number=round_number, log_path=str(logfile),
+                    run_id=run_id, git_sha=git,
+                )
+            priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
+            self._process = subprocess.Popen(
+                [
+                    sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
+                    "--worker", "--root", str(self.root), "--mode", mode,
+                    "--round-number", str(round_number), "--git-sha", git,
+                ],
+                cwd=self.project_root,
+                stdin=subprocess.DEVNULL,
+                stdout=self._log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=priority,
+            )
+            _write_worker_state(
+                self.root, stage=("RESUMING" if resume else "STARTING"),
+                mode=mode, round_number=round_number,
+                worker_pid=self._process.pid,
+                log_path=str(logfile), run_id=run_id, git_sha=git,
+                **({"resume_stage": previous_stage} if resume else {}),
+            )
+        except Exception:
+            if self._log_handle is not None:
+                self._log_handle.close()
+                self._log_handle = None
+            raise
+        return {
+            "started": True, "resumed": resume,
+            "mode": mode, "round_number": round_number, "run_id": run_id,
+            "worker_pid": self._process.pid,
+            "log_path": str(logfile),
+        }
 
     def start(self) -> dict[str, Any]:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise CycleError("a training session is already running")
+            prior = _run_state(self.root)
+            if prior is not None and prior.get("stage") == "PAUSED":
+                raise CycleError("training is paused; press Resume, not Train Now")
             info = self._readiness(force=True)
             from .forward_learning_480 import inspect_forward_training_readiness
             forward = inspect_forward_training_readiness(self.root)
@@ -872,74 +1105,113 @@ class TrainingController:
                 raise CycleError(
                     "No eligible training path: historical cycle: "
                     + str(info.get("reason", "unavailable"))
-                    + " | full model: "
-                    + str(baseline.get("reason", "unavailable"))
-                    + " | verified 480s: "
-                    + str(forward.get("reason", "unavailable"))
+                    + " | full model: " + str(baseline.get("reason", "unavailable"))
+                    + " | verified 480s: " + str(forward.get("reason", "unavailable"))
                 )
-            active_round = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
-            active_mode = selected
+            round_number = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
+            saved = {
+                "mode": selected, "round_number": round_number,
+                "run_id": uuid.uuid4().hex, "git_sha": self._git_sha(),
+            }
+            # This explicit new run is authorized only after checking there is
+            # no currently running or manually paused earlier run.
+            training_pause.reset_pause(self.root, run_id=saved["run_id"])
+            return self._launch_existing(saved, resume=False)
 
-            git = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=self.project_root,
-                check=True, capture_output=True, text=True, timeout=10,
-            ).stdout.strip()
-            if len(git) != 40 or any(c not in "0123456789abcdef" for c in git.lower()):
-                raise CycleError("cannot verify current repository Git SHA")
-            logfile = self.root / "training_runs" / (
-                f"{'forward-480' if selected == FORWARD_MODE else 'full-model' if selected == BASELINE_MODE else 'round-'+str(active_round).zfill(4)}-{int(time.time_ns())}.log"
-            )
-            logfile.parent.mkdir(parents=True, exist_ok=True)
-            self._log_handle = logfile.open("ab")
-            _write_worker_state(
-                self.root, stage="STARTING",
-                mode=active_mode, round_number=active_round,
-                log_path=str(logfile),
-            )
-            try:
-                # Yield CPU priority to the latency-critical live forecasting
-                # process when long experiment fitting is active on Windows.
-                priority = subprocess.BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" else 0
-                self._process = subprocess.Popen(
-                    [
-                        sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
-                        "--worker", "--root", str(self.root), "--mode", active_mode,
-                        "--round-number", str(active_round),
-                        "--git-sha", git,
-                    ],
-                    cwd=self.project_root,
-                    stdin=subprocess.DEVNULL,
-                    stdout=self._log_handle,
-                    stderr=subprocess.STDOUT,
-                    creationflags=priority,
+    def pause(self) -> dict[str, Any]:
+        with self._lock:
+            if self._process is None or self._process.poll() is not None:
+                raise CycleError("no active training process to pause")
+            run = _run_state(self.root) or {}
+            if run.get("stage") not in ACTIVE_WORKER_STAGES:
+                raise CycleError("training is not in a pausable stage")
+            run_id = run.get("run_id")
+            if not isinstance(run_id, str):
+                raise CycleError("training session predates pause support; update and restart")
+            training_pause.set_pause(self.root, run_id=run_id, manual=True)
+            return {
+                "pause_requested": True,
+                "message": (
+                    "Pause requested. Dataset work stops after a checkpointed market; "
+                    "model fitting stops at the next safe stage boundary."
+                ),
+            }
+
+    def resume(self) -> dict[str, Any]:
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                raise CycleError("training is still active; wait for PAUSED acknowledgment")
+            saved = _run_state(self.root) or {}
+            if saved.get("stage") != "PAUSED":
+                raise CycleError("training is not paused")
+            if saved.get("git_sha") != self._git_sha():
+                raise CycleError("Git version changed since training paused; cannot safely resume")
+            run_id = saved.get("run_id")
+            if not isinstance(run_id, str):
+                raise CycleError("missing verified training resume identity")
+            training_pause.clear_pause(self.root, run_id=run_id)
+            result = self._launch_existing(saved, resume=True)
+            return {**(result or {}), "resumed": True}
+
+    def recover(self) -> bool:
+        """Auto-resume only training interrupted by closing the application."""
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                return False
+            saved = _run_state(self.root)
+            if not saved or saved.get("stage") not in ACTIVE_WORKER_STAGES | {"PAUSED"}:
+                return False
+            run_id = saved.get("run_id")
+            intent = training_pause.read_pause(self.root)
+            if intent and intent.get("run_id") != run_id:
+                raise CycleError("saved pause request belongs to another training run")
+            if intent.get("pause_requested") and intent.get("manual"):
+                if saved.get("stage") != "PAUSED":
+                    _save_paused_state(
+                        self.root, mode=saved["mode"], round_number=saved["round_number"],
+                        reason="manual",
+                    )
+                return False
+            if saved.get("git_sha") != self._git_sha():
+                _save_paused_state(
+                    self.root, mode=saved["mode"], round_number=saved["round_number"],
+                    reason="update_blocked",
                 )
                 _write_worker_state(
-                    self.root, stage="STARTING", mode=active_mode,
-                    round_number=active_round,
-                    worker_pid=self._process.pid,
-                    log_path=str(logfile),
+                    self.root, stage="PAUSED", mode=saved["mode"],
+                    round_number=saved["round_number"],
+                    error="Git version changed since training started; cannot safely auto-resume",
                 )
-            except (OSError, subprocess.SubprocessError):
-                self._log_handle.close()
-                self._log_handle = None
-                raise
-            return {
-                "started": True,
-                "round_number": active_round,
-                "mode": active_mode,
-                "worker_pid": self._process.pid,
-                "log_path": str(logfile),
-            }
+                return False
+            if not isinstance(run_id, str):
+                raise CycleError("old training state has no run ID; cannot safely auto-resume")
+            if intent.get("pause_requested"):
+                training_pause.clear_pause(self.root, run_id=run_id)
+            self._launch_existing(saved, resume=True)
+            return True
 
     def stop(self) -> None:
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
-                self._process.terminate()
+            process = self._process
+            if process is not None and process.poll() is None:
+                run = _run_state(self.root) or {}
+                run_id = run.get("run_id")
+                if isinstance(run_id, str):
+                    intent = training_pause.read_pause(self.root)
+                    if not (intent.get("run_id") == run_id
+                            and intent.get("pause_requested") and intent.get("manual")):
+                        training_pause.set_pause(self.root, run_id=run_id, manual=False)
+                # Cooperative dataset checkpoint is preferred; fit may be a
+                # non-interruptible sklearn operation and must replay on restart.
                 try:
-                    self._process.wait(timeout=8)
+                    process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=5)
+                    process.terminate()
+                    try:
+                        process.wait(timeout=8)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
             self._process = None
             if self._log_handle is not None:
                 self._log_handle.close()

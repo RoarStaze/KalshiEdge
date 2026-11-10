@@ -74,6 +74,34 @@ def _spawn_service(args: list[str], root: Path, log: IO[bytes]) -> subprocess.Po
     )
 
 
+def _request_training_shutdown(data_root: Path, *, timeout_seconds: float = 1.0) -> None:
+    """Allow the training worker to checkpoint before Windows kills child tree.
+
+    Unexpected window/terminal termination cannot run this hook. Persistent
+    current.json and signed dataset rows still permit restart recovery.
+    """
+    try:
+        from .bootstrap import training_cycle, training_pause
+        run = training_cycle._run_state(data_root)
+        if not run or run.get("stage") not in training_cycle.ACTIVE_WORKER_STAGES:
+            return
+        run_id = run.get("run_id")
+        if not isinstance(run_id, str):
+            return
+        intent = training_pause.read_pause(data_root)
+        if intent.get("run_id") == run_id and intent.get("pause_requested") and intent.get("manual"):
+            return  # A user requested manual pause; never silently change intent.
+        training_pause.set_pause(data_root, run_id=run_id, manual=False)
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while time.monotonic() < deadline:
+            run = training_cycle._run_state(data_root)
+            if run is None or run.get("stage") in ("PAUSED", "COMPLETE", "FAILED"):
+                return
+            time.sleep(0.05)
+    except Exception:
+        LOG.exception("Could not request graceful training checkpoint at shutdown")
+
+
 def _stop(service: subprocess.Popen | None) -> None:
     if service is None or service.poll() is not None:
         return
@@ -247,6 +275,11 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     finally:
+        # When this launcher owns the history service, request a durable
+        # checkpoint before the Windows /T /F process-tree fallback.
+        # If the dashboard was reused, it belongs to another launcher.
+        if history is not None:
+            _request_training_shutdown(data_root)
         _stop(predictor)
         _stop(history)
 
