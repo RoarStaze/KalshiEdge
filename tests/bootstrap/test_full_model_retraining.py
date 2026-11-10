@@ -45,6 +45,7 @@ def _report(*,cq=50,cc=48,iq=43,ic=40,with_480=True):
         required_ablations_present=True,
         metrics=metrics,decision_metrics=gate,
         comparison_rule=evaluate.PROMOTION_RULE_ID,
+        requires_retrain_480_gate=True,
     )
 
 
