@@ -568,6 +568,8 @@ class TrainingController:
         self._cached_at = 0.0
         self._forward_cached: dict[str, Any] | None = None
         self._forward_at = 0.0
+        self._baseline_cached: dict[str, Any] | None = None
+        self._baseline_at = 0.0
         self._log_handle = None
 
     def _readiness(self, *, force: bool = False) -> dict[str, Any]:
@@ -597,12 +599,20 @@ class TrainingController:
                     }
                 self._forward_at = now
             info["forward_480"] = dict(self._forward_cached)
-            selected = _select_training_mode(info, info["forward_480"])
+            if (force or self._baseline_cached is None
+                    or now - self._baseline_at > CACHE_SECONDS):
+                self._baseline_cached = inspect_baseline_training_readiness(self.root)
+                self._baseline_at = now
+            info["baseline_retrain"] = dict(self._baseline_cached)
+            selected = _select_training_mode(
+                info, info["forward_480"], info["baseline_retrain"],
+            )
             info["selected_mode"] = selected
             info["train_available"] = selected is not None
             info["train_reason"] = (
                 "Verified forward 480s data ready for supervised training and validation."
                 if selected == FORWARD_MODE else
+                info["baseline_retrain"].get("reason") if selected == BASELINE_MODE else
                 info.get("reason") if selected is None else
                 "Learning cycle ready for independent lockbox training and promotion evaluation."
             )
@@ -623,6 +633,8 @@ class TrainingController:
                         self._log_handle = None
                     # Reflect a newly evaluated round immediately after completion.
                     self._cached_at = 0
+                    self._baseline_at = 0
+                    self._forward_at = 0
             else:
                 info["running"] = False
                 if info["run"] is not None and info["run"].get("stage") in ACTIVE_WORKER_STAGES:
@@ -641,15 +653,20 @@ class TrainingController:
             forward = inspect_forward_training_readiness(self.root)
             self._forward_cached = forward
             self._forward_at = time.monotonic()
-            selected = _select_training_mode(info, forward)
+            baseline = inspect_baseline_training_readiness(self.root)
+            self._baseline_cached = baseline
+            self._baseline_at = time.monotonic()
+            selected = _select_training_mode(info, forward, baseline)
             if selected is None:
                 raise CycleError(
                     "No eligible training path: historical cycle: "
                     + str(info.get("reason", "unavailable"))
+                    + " | full model: "
+                    + str(baseline.get("reason", "unavailable"))
                     + " | verified 480s: "
                     + str(forward.get("reason", "unavailable"))
                 )
-            active_round = 0 if selected == FORWARD_MODE else info["round_number"]
+            active_round = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
             active_mode = selected
 
             git = subprocess.run(
@@ -659,7 +676,7 @@ class TrainingController:
             if len(git) != 40 or any(c not in "0123456789abcdef" for c in git.lower()):
                 raise CycleError("cannot verify current repository Git SHA")
             logfile = self.root / "training_runs" / (
-                f"{'forward-480' if selected == FORWARD_MODE else 'round-'+str(active_round).zfill(4)}-{int(time.time_ns())}.log"
+                f"{'forward-480' if selected == FORWARD_MODE else 'full-model' if selected == BASELINE_MODE else 'round-'+str(active_round).zfill(4)}-{int(time.time_ns())}.log"
             )
             logfile.parent.mkdir(parents=True, exist_ok=True)
             self._log_handle = logfile.open("ab")
