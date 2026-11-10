@@ -686,9 +686,21 @@ def finalize_evaluation(
     )
     promoted_path = artifact.save_model_bundle(promoted, root / "models" / "promoted")
     sealed_promoted = artifact.load_model_bundle(promoted_path)
+    from .model_identity import current_model_identity, next_promoted_model_number
+    prior_identity = current_model_identity(root)
+    model_number = next_promoted_model_number(root, sealed_promoted.bundle_sha256)
+    # Numbering lives in the same atomic pointer as the hash-sealed model.
+    # Failed training/evaluation never increments the model number.
     default_path = _atomic_json(
         root / "models" / "default.json",
         {
+            "model_number": model_number,
+            "previous_model_hash": (
+                prior_identity["promoted_hash"]
+                if (prior_identity["promoted_hash"] is not None
+                    and prior_identity["promoted_hash"] != sealed_promoted.bundle_sha256)
+                else prior_identity["previous_model_hash"]
+            ),
             "bundle_sha256": sealed_promoted.bundle_sha256,
             "path": promoted_path.relative_to(root).as_posix(),
             "source_experiment_sha256": experiment.bundle_sha256,
