@@ -252,6 +252,166 @@ body[data-page="api"] .section-intro{display:none!important}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 """
 
+
+# Decorative-only motion. The background image remains an optional local asset.
+# No JavaScript timers, remote assets or trading/data paths are involved.
+LIVE_MOTION_STYLE = r"""
+/* The soft-focus backdrop sits behind the original page; UI stays crisp. */
+body::before{
+ filter:blur(4px) saturate(1.08);
+ transform:scale(1.08);
+ animation:ke-background-drift 32s ease-in-out infinite alternate;
+ will-change:transform;
+}
+.ke-atmosphere{
+ position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;
+ contain:layout style paint;
+}
+.ke-aurora{
+ position:absolute;inset:-22%;
+ background:
+  radial-gradient(ellipse 36% 34% at 18% 43%,rgba(0,233,166,.24),transparent 78%),
+  radial-gradient(ellipse 38% 42% at 83% 23%,rgba(17,162,195,.23),transparent 80%),
+  radial-gradient(ellipse 54% 26% at 53% 85%,rgba(0,234,178,.16),transparent 80%);
+ filter:blur(35px);opacity:.78;
+ animation:ke-aurora-drift 25s ease-in-out infinite alternate;
+ will-change:transform;
+}
+.ke-aurora.ke-aurora-alt{
+ transform:scale(1.18) rotate(-7deg);opacity:.47;
+ animation-direction:alternate-reverse;animation-duration:33s;animation-delay:-14s;
+}
+.ke-energy-grid{
+ position:absolute;left:-20%;width:140%;height:65%;bottom:-30%;
+ background-image:
+  linear-gradient(90deg,rgba(45,231,183,.18) 1px,transparent 1px),
+  linear-gradient(0deg,rgba(45,231,183,.17) 1px,transparent 1px);
+ background-size:66px 66px;opacity:.28;
+ transform:perspective(520px) rotateX(68deg);
+ transform-origin:center bottom;
+ animation:ke-grid-glimmer 16s ease-in-out infinite alternate;
+}
+.ke-particles{
+ position:absolute;inset:-12%;
+ background-image:
+  radial-gradient(circle,rgba(132,255,214,.8) 0 1.3px,transparent 2.8px),
+  radial-gradient(circle,rgba(47,213,194,.65) 0 1px,transparent 2.1px),
+  radial-gradient(circle,rgba(71,184,228,.7) 0 1.1px,transparent 2.3px);
+ background-position:21px 43px,117px 78px,190px 17px;
+ background-size:263px 189px,347px 277px,419px 329px;
+ opacity:.48;animation:ke-particle-drift 24s ease-in-out infinite alternate;
+ will-change:transform;
+}
+.ke-market-trace{
+ position:absolute;top:16%;left:-8%;width:116%;height:66%;
+ opacity:.34;overflow:visible;
+ filter:drop-shadow(0 0 7px rgba(30,246,191,.38));
+}
+.ke-market-trace path{
+ fill:none;stroke:#36dfb3;stroke-width:1.4;stroke-linejoin:round;
+ stroke-linecap:round;stroke-dasharray:10 22;
+ animation:ke-market-pulse 17s linear infinite;
+}
+.ke-market-trace path:nth-child(2){
+ stroke:#49a8d7;stroke-width:1;stroke-dasharray:6 26;
+ animation-duration:23s;animation-direction:reverse;opacity:.55;
+}
+@keyframes ke-background-drift{
+ from{transform:scale(1.08) translate3d(-.8%,.6%,0)}
+ to{transform:scale(1.13) translate3d(1%,-.6%,0)}
+}
+@keyframes ke-aurora-drift{
+ from{transform:translate3d(-3%,2%,0) rotate(-4deg) scale(1.04)}
+ to{transform:translate3d(4%,-2%,0) rotate(4deg) scale(1.13)}
+}
+@keyframes ke-particle-drift{
+ from{transform:translate3d(-2%,2%,0)}
+ to{transform:translate3d(3%,-3%,0)}
+}
+@keyframes ke-grid-glimmer{
+ from{opacity:.16;background-position:0 0,0 0}
+ to{opacity:.32;background-position:33px 0,0 33px}
+}
+@keyframes ke-market-pulse{
+ from{stroke-dashoffset:0}
+ to{stroke-dashoffset:-288}
+}
+/* Each outlined panel gets a single continuously orbiting green light pulse,
+   with the center cut away so the contents remain untouched/clickable. */
+@property --ke-trace-angle{
+ syntax:"<angle>";
+ inherits:false;
+ initial-value:0deg;
+}
+:where(
+ .site-nav,.card,.manual-trade,.training-step,.training-count,.training-pill,
+ .kpi,.history-section,.api-card,.api-status,
+ .hero-price-surface,.hero-clock-panel,.lock-banner,.record-note,
+ .mt-auto-record,.mt-auto-performance,.mt-inputbox,.mt-pills
+){position:relative}
+:where(
+ .site-nav,.card,.manual-trade,.training-step,.training-count,.training-pill,
+ .kpi,.history-section,.api-card,.api-status,
+ .hero-price-surface,.hero-clock-panel,.lock-banner,.record-note,
+ .mt-auto-record,.mt-auto-performance,.mt-inputbox,.mt-pills
+)::before{
+ content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;
+ border:1.5px solid transparent;pointer-events:none;
+ background:conic-gradient(
+  from var(--ke-trace-angle),
+  transparent 0deg,rgba(29,245,177,.04) 233deg,
+  rgba(33,246,177,.3) 268deg,#43ffc7 296deg,
+  #a4ffe2 307deg,rgba(29,245,177,.45) 321deg,
+  transparent 350deg
+ ) border-box;
+ -webkit-mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);
+ -webkit-mask-composite:xor;
+ mask:linear-gradient(#000 0 0) padding-box,linear-gradient(#000 0 0);
+ mask-composite:exclude;
+ animation:ke-border-orbit 6.4s linear infinite;
+}
+@keyframes ke-border-orbit{
+ to{--ke-trace-angle:360deg}
+}
+/* Frost the foreground glass, not the text or interactive controls. */
+body[data-page] :is(.forecast,.context>.manual-trade,.training-card,
+ .history-view .card,.api-card,.site-nav){
+ backdrop-filter:blur(13px) saturate(1.14);
+ -webkit-backdrop-filter:blur(13px) saturate(1.14);
+}
+body[data-page] :is(.forecast,.context>.manual-trade,.training-card,
+ .history-view .card,.api-card){
+ box-shadow:0 20px 65px rgba(0,0,0,.56),0 0 30px rgba(12,232,173,.12)!important;
+}
+@media(max-width:700px){
+ .ke-market-trace{opacity:.22}
+ .ke-energy-grid{opacity:.15}
+ .ke-aurora{opacity:.5}
+}
+/* Reduced motion: the backdrop and tracer are visible but entirely static. */
+@media (prefers-reduced-motion:reduce){
+ body::before{animation:none!important;transform:scale(1.08);will-change:auto}
+ .ke-atmosphere *{animation:none!important;will-change:auto}
+ :where(.site-nav,.card,.manual-trade,.training-step,.training-count,
+ .training-pill,.kpi,.history-section,.api-card,.api-status,
+ .hero-price-surface,.hero-clock-panel,.lock-banner,.record-note,
+ .mt-auto-record,.mt-auto-performance,.mt-inputbox,.mt-pills)::before{
+  animation:none!important;
+ }
+}
+"""
+
+LIVE_MOTION_MARKUP = r"""<div class="ke-atmosphere" aria-hidden="true">
+ <div class="ke-aurora"></div>
+ <div class="ke-aurora ke-aurora-alt"></div>
+ <div class="ke-energy-grid"></div>
+ <div class="ke-particles"></div>
+ <svg class="ke-market-trace" viewBox="0 0 1200 500" preserveAspectRatio="none" focusable="false">
+  <path d="M0 355 L105 342 L170 372 L238 294 L302 318 L380 270 L462 287 L535 212 L612 250 L698 193 L752 216 L833 153 L918 170 L985 124 L1060 147 L1140 78 L1200 95"/>
+  <path d="M0 405 L90 382 L158 390 L226 359 L309 375 L388 320 L460 336 L555 290 L626 308 L698 268 L780 287 L855 246 L936 256 L1018 201 L1093 218 L1200 174"/>
+ </svg>
+</div>"""
+
 NAV = """<nav class="site-nav" aria-label="Primary navigation">
  <a class="site-nav-link" href="/trade">Trade</a>
  <a class="site-nav-link" href="/train">Train</a>
@@ -292,8 +452,8 @@ def render_site_page(page: str, section: str) -> str:
         if page.count(base_helpers) != 1:
             raise ValueError("Train cache hook missing from dashboard")
         page = page.replace(base_helpers, TRAIN_STATUS_SESSION_HELPERS, 1)
-    page = page.replace('</style>', STYLE + '\n</style>', 1)
-    page = page.replace('<body>', f'<body data-page="{section}">', 1)
+    page = page.replace('</style>', STYLE + LIVE_MOTION_STYLE + '\n</style>', 1)
+    page = page.replace('<body>', f'<body data-page="{section}">\n' + LIVE_MOTION_MARKUP, 1)
     page = page.replace('<header>', '<header class="site-header">', 1)
     # The AutoTrader UI is intentionally not installed on this page. Remove the
     # old launcher too, while preserving the signed order and train endpoints.
