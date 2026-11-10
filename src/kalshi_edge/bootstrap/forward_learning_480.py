@@ -17,7 +17,7 @@ import json
 import math
 from pathlib import Path
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .forward_feature_evidence_480 import _joined
 from .frozen_specialist_480 import fit_frozen_specialist, score_frozen_specialist
@@ -145,6 +145,7 @@ def evaluate_forward_candidate(
     rows: Sequence[FeatureRow],
     incumbent_by_ticker: Mapping[str, Mapping[str, Any]],
     *, frozen_at_ns: int,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Fit once on earlier labels, evaluate only later verified market labels.
 
@@ -168,6 +169,8 @@ def evaluate_forward_candidate(
     if not readiness["ready"]:
         result["reason"] = readiness["reason"]
         return result
+    if progress is not None:
+        progress("SPLITTING")
     train, valid = partition_forward_training(rows)
     result.update(training_markets=len(train), validation_markets=len(valid),
                   training_last_checkpoint_ns=train[-1].checkpoint_ts_ns,
@@ -182,11 +185,15 @@ def evaluate_forward_candidate(
     digest = hashlib.sha256(json.dumps(
         training_data, sort_keys=True, separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")).hexdigest()
+    if progress is not None:
+        progress("FITTING")
     model = fit_frozen_specialist(
         train, dataset_sha256=digest,
         frozen_at_ns=train[-1].checkpoint_ts_ns + 1,
     )
     # score_frozen_specialist refuses timestamps at/before fit boundary.
+    if progress is not None:
+        progress("SCORING")
     paired = []
     for row in valid:
         prior = incumbent_by_ticker.get(row.market_ticker)
@@ -209,6 +216,8 @@ def evaluate_forward_candidate(
             "settlements, eligible features and saved incumbent probabilities"
         )
         return result
+    if progress is not None:
+        progress("COMPARING")
     labels = [x[0] for x in paired]
     candidate = [x[1] for x in paired]
     incumbent = [x[2] for x in paired]
@@ -246,17 +255,109 @@ def evaluate_forward_candidate(
     return result
 
 
-def evaluate_verified_forward_candidate(root: Path) -> dict[str, Any]:
-    """Read only local, independently verified 480s labels and saved incumbent calls."""
+def _canonical_snapshot_bytes(payload: Mapping[str, Any]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                      allow_nan=False).encode("utf-8")
+
+
+def create_verified_forward_dataset(root: Path) -> tuple[Path, dict[str, Any]]:
+    """Persist only causally verified snapshot/outcome joins for a training run.
+
+    The frozen incumbent probabilities and all labels are sealed together so
+    the training worker cannot silently use a different dataset at evaluation.
+    No synthetic historical inputs, leaked future sources or live orders.
+    """
+    import os
+    import uuid
+
     root = Path(root).resolve()
-    rows, _audit = _joined(root)
-    finals = {
+    rows, audit = _joined(root)
+    readiness = assess_forward_training_readiness(rows, audit)
+    if not readiness["ready"]:
+        raise ValueError(readiness["reason"])
+    immutable_rows, _ = _eligible(rows)
+    tickers = {r.market_ticker for r in immutable_rows}
+    incumbent = {
         x.market_ticker: {
             "market_ticker": x.market_ticker, "p_yes": x.p_yes,
             "forecast": x.forecast, "coin_flip_assessment": x.coin_flip_assessment,
-        } for x in _forecasts(root) if x.checkpoint_seconds == 480
+        } for x in _forecasts(root)
+        if x.checkpoint_seconds == 480 and x.market_ticker in tickers
     }
-    return evaluate_forward_candidate(rows, finals, frozen_at_ns=time.time_ns())
+    payload: dict[str, Any] = {
+        "schema": "KALSHIEDGE_IMMUTABLE_FORWARD_480_DATASET_V1",
+        "rows": [r.model_dump(mode="json") for r in immutable_rows],
+        "incumbents": incumbent,
+        "readiness": readiness,
+        "audit": audit,
+    }
+    content = _canonical_snapshot_bytes(payload)
+    digest = hashlib.sha256(content).hexdigest()
+    folder = root / "training_runs" / "datasets"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"forward-480-{digest}.json"
+    if not path.exists():
+        temporary = folder / f".{path.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary.open("xb") as target:
+                target.write(content)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    load_verified_forward_dataset(path)  # verify persisted SHA and schema
+    return path, readiness
+
+
+def load_verified_forward_dataset(
+    path: Path,
+) -> tuple[list[FeatureRow], dict[str, Mapping[str, Any]]]:
+    """Reject changed or corrupted training material rather than refitting it."""
+    path = Path(path).resolve()
+    stem = path.stem
+    if not stem.startswith("forward-480-") or len(stem) != len("forward-480-") + 64:
+        raise ValueError("Verified 480s dataset filename hash missing")
+    try:
+        data = path.read_bytes()
+        payload = json.loads(data.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("Cannot load sealed forward 480s dataset") from exc
+    if hashlib.sha256(_canonical_snapshot_bytes(payload)).hexdigest() != stem.removeprefix("forward-480-"):
+        raise ValueError("Verified forward 480s dataset integrity hash mismatch")
+    if not isinstance(payload, dict) or payload.get("schema") != "KALSHIEDGE_IMMUTABLE_FORWARD_480_DATASET_V1":
+        raise ValueError("Verified forward 480s dataset schema mismatch")
+    rows = [FeatureRow.model_validate(item) for item in payload["rows"]]
+    prior = payload["incumbents"]
+    if not isinstance(prior, dict):
+        raise ValueError("Verified forward 480s incumbent probability map malformed")
+    readiness = assess_forward_training_readiness(rows, payload.get("audit"))
+    if not readiness["ready"]:
+        raise ValueError("Verified forward 480s dataset is no longer eligible")
+    return rows, prior
+
+
+def evaluate_verified_forward_candidate(
+    root: Path, *, progress: Callable[[str], None] | None = None,
+    dataset_path: Path | None = None,
+) -> dict[str, Any]:
+    """Fit ONLY the sealed dataset when supplied; never silently reread labels."""
+    root = Path(root).resolve()
+    if progress is not None:
+        progress("VERIFYING")
+    if dataset_path is not None:
+        rows, finals = load_verified_forward_dataset(dataset_path)
+    else:
+        rows, _audit = _joined(root)
+        finals = {
+            x.market_ticker: {
+                "market_ticker": x.market_ticker, "p_yes": x.p_yes,
+                "forecast": x.forecast, "coin_flip_assessment": x.coin_flip_assessment,
+            } for x in _forecasts(root) if x.checkpoint_seconds == 480
+        }
+    return evaluate_forward_candidate(
+        rows, finals, frozen_at_ns=time.time_ns(), progress=progress,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

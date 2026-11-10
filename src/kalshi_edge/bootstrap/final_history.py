@@ -573,8 +573,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             if self.path.startswith("/api/autotrader/"):
                 self._autotrader_post()
                 return
-            is_forward_evaluation = self.path == "/api/training/forward480/evaluate"
-            if self.path != "/api/training/start" and not is_forward_evaluation:
+            if self.path != "/api/training/start":
                 self._json(404, {"error": "endpoint not found"})
                 return
             # Loopback bind alone does not stop cross-site browser POSTs.
@@ -602,22 +601,6 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return
             if body != {}:
                 self._json(400, {"error": "Train Now accepts no overrides"})
-                return
-            if is_forward_evaluation:
-                # Research-only work: no credential access, model promotion,
-                # persistent model writes, orders or AutoTrade modification.
-                try:
-                    from .forward_learning_480 import evaluate_verified_forward_candidate
-                    result = evaluate_verified_forward_candidate(root)
-                except Exception:
-                    LOG.exception("Verified forward 480s evaluation failed")
-                    self._json(503, {"error": "Forward 480s evaluation unavailable; inspect server logs"})
-                    return
-                if result.get("status") in ("NOT_READY", "INSUFFICIENT_PAIRED_VALIDATION"):
-                    self._json(409, {"error": result.get("reason", "Insufficient verified 480s data"),
-                                     "status": result.get("status")})
-                    return
-                self._json(200, result)
                 return
             try:
                 result = training_controller.start()

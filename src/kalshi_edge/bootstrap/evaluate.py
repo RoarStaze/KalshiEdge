@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -126,6 +126,9 @@ class BootstrapEvaluationReport(BaseModel):
     # Newly computed gate diagnostics are optional for old historical reports
     # but MANDATORY for promotion of future 480s volatility challengers.
     decision_metrics: dict[str, GateSnapshot] = Field(default_factory=dict)
+    # Full retraining of an already-promoted live model must pass fresh,
+    # same-market 480s accuracy + coverage gates before replacing it.
+    requires_retrain_480_gate: bool = False
     comparison_rule: str
 
 
@@ -287,6 +290,56 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
                 and better.accuracy <= existing.accuracy + PROMOTION_NONWORSE_TOLERANCE):
             reasons.append("VOLATILITY_480_OVERALL_ACCURACY_NOT_IMPROVED")
 
+    if report.requires_retrain_480_gate:
+        prefix = "retrain_480_"
+        required = tuple(prefix + name for name in ("candidate", "incumbent", "kalshi"))
+        if incumbent is None:
+            reasons.append("RETRAIN_INCUMBENT_MODEL_MISSING")
+        if any(name not in report.metrics for name in required):
+            reasons.append("RETRAIN_480_BENCHMARK_MISSING")
+        else:
+            challenger, current, market = (
+                report.metrics[name] for name in required
+            )
+            for name, benchmark in (("INCUMBENT", current), ("KALSHI", market)):
+                nonworse, improved, _, _ = _dominates(challenger, benchmark)
+                if not nonworse or not improved:
+                    reasons.append(f"RETRAIN_480_{name}_NOT_BEATEN")
+                if challenger.ece > benchmark.ece + PROMOTION_MAX_ECE_DEGRADATION:
+                    reasons.append(f"RETRAIN_480_{name}_ECE_DEGRADED")
+                if challenger.accuracy <= benchmark.accuracy + PROMOTION_NONWORSE_TOLERANCE:
+                    reasons.append(f"RETRAIN_480_{name}_ACCURACY_NOT_IMPROVED")
+        candidate_gate = report.decision_metrics.get("retrain_480_candidate")
+        incumbent_gate = report.decision_metrics.get("retrain_480_incumbent")
+        if candidate_gate is None or incumbent_gate is None:
+            reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISSING")
+        elif (
+            candidate_gate.total_markets != incumbent_gate.total_markets
+            or candidate_gate.total_markets < 80
+            or abs(candidate_gate.minimum_confidence - .69) > 1e-9
+            or abs(incumbent_gate.minimum_confidence - .69) > 1e-9
+        ):
+            reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISMATCH")
+        else:
+            if candidate_gate.qualified_markets <= incumbent_gate.qualified_markets:
+                reasons.append("RETRAIN_480_COVERAGE_NOT_INCREASED")
+            if incumbent_gate.qualified_accuracy is None:
+                reasons.append("RETRAIN_480_QUALIFIED_BASELINE_UNAVAILABLE")
+            if (
+                candidate_gate.qualified_accuracy is None
+                or incumbent_gate.qualified_accuracy is None
+                or candidate_gate.qualified_accuracy
+                   <= incumbent_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
+            ):
+                reasons.append("RETRAIN_480_QUALIFIED_ACCURACY_NOT_IMPROVED")
+            if (
+                candidate_gate.qualified_accuracy is not None
+                and incumbent_gate.qualified_accuracy is not None
+                and candidate_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
+                    < incumbent_gate.qualified_accuracy
+            ):
+                reasons.append("RETRAIN_480_QUALIFIED_ACCURACY_DEGRADED")
+
     promoted = superior and not reasons
     return PromotionDecision(
         promoted=promoted,
@@ -304,15 +357,21 @@ def _one_checkpoint_per_market(
 ) -> list[FeatureRow]:
     """Select strictly causal locked-horizon rows, one per ticker.
 
-    Only rows within one second of the requested remaining time qualify.
-    In the unlikely case of multiple snapshots choose the closest, then the
-    earlier observation. Never interpolate to synthesize a checkpoint.
+    For the live 480-second final, accept only the immutable checkpoint
+    through two seconds afterward; never accept a pre-lock observation.
+    Older research horizons retain their historical one-second tolerance.
+    In the unlikely case of duplicates choose the closest, then earlier.
+    Never interpolate a checkpoint or infer features from future data.
     """
     selected: dict[str, FeatureRow] = {}
     for row in rows:
         value = row.features.get("seconds_remaining")
-        if (type(value) not in (int, float) or not math.isfinite(value)
-                or abs(value - seconds) > 1.0):
+        if type(value) not in (int, float) or not math.isfinite(value):
+            continue
+        if seconds == 480:
+            if not 478.0 <= value <= 480.0:
+                continue
+        elif abs(value - seconds) > 1.0:
             continue
         previous = selected.get(row.market_ticker)
         if previous is None or (
@@ -640,9 +699,21 @@ def finalize_evaluation(
     )
     promoted_path = artifact.save_model_bundle(promoted, root / "models" / "promoted")
     sealed_promoted = artifact.load_model_bundle(promoted_path)
+    from .model_identity import current_model_identity, next_promoted_model_number
+    prior_identity = current_model_identity(root)
+    model_number = next_promoted_model_number(root, sealed_promoted.bundle_sha256)
+    # Numbering lives in the same atomic pointer as the hash-sealed model.
+    # Failed training/evaluation never increments the model number.
     default_path = _atomic_json(
         root / "models" / "default.json",
         {
+            "model_number": model_number,
+            "previous_model_hash": (
+                prior_identity["promoted_hash"]
+                if (prior_identity["promoted_hash"] is not None
+                    and prior_identity["promoted_hash"] != sealed_promoted.bundle_sha256)
+                else prior_identity["previous_model_hash"]
+            ),
             "bundle_sha256": sealed_promoted.bundle_sha256,
             "path": promoted_path.relative_to(root).as_posix(),
             "source_experiment_sha256": experiment.bundle_sha256,
@@ -672,7 +743,10 @@ def _latest_experiment_path(root: Path) -> Path:
     return path
 
 
-def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> BootstrapEvaluationRun:
+def run_lockbox_evaluation(
+    root: Path, bundle_path: Path | None = None, *,
+    progress: Callable[[str], None] | None = None,
+) -> BootstrapEvaluationRun:
     """Materialize the lockbox only after confirming the experiment has not been evaluated."""
     root = root.resolve()
     experiment_path = _latest_experiment_path(root) if bundle_path is None else bundle_path.resolve()
@@ -688,6 +762,12 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
         experiment.boundaries.lockbox_end_ts_ns,
     )
     is_volatility = any(k.startswith("volatility_challengers/") for k in experiment.input_hashes)
+    is_learning = any(k.startswith(("mistake_pool/", "correct_pool/"))
+                      for k in experiment.input_hashes)
+    is_full_retrain = (
+        not is_volatility and not is_learning
+        and (root / "models" / "default.json").is_file()
+    )
     if is_volatility:
         from .volatility_upgrade import verify_challenger
         verify_challenger(root, experiment)
@@ -695,8 +775,12 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
         lockbox_rows = training.load_lockbox_rows(root, experiment.boundaries, experiment=experiment)
     except Exception as exc:
         raise EvaluationError("could not materialize the predeclared lockbox") from exc
+    if progress is not None:
+        progress("SCORING")
     report = evaluate_lockbox(experiment, lockbox_rows)
-    if is_volatility or any(key.startswith(("mistake_pool/", "correct_pool/")) for key in experiment.input_hashes):
+    if is_volatility or is_learning or is_full_retrain:
+        if progress is not None:
+            progress("COMPARING")
         # Compare the incumbent without fitting it, or touching any other
         # holdout period. This is the SAME one-time evaluation call and data.
         from .live import load_default_bundle
@@ -746,7 +830,35 @@ def run_lockbox_evaluation(root: Path, bundle_path: Path | None = None) -> Boots
                     gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
                         labels, incumbent_outputs["candidate"],
                     )
+        if is_full_retrain:
+            # Standard (non-mistake) retraining is ACTUALLY promotable. On a
+            # pre-existing live model, require an unused 480s lockbox measured
+            # against the incumbent at identical market/checkpoint instants.
+            horizon_rows = _one_checkpoint_per_market(scored, 480)
+            _require_horizon_sample(horizon_rows, seconds=480, minimum=80)
+            candidate_outputs = _predict_bundle_rows(experiment, horizon_rows)
+            incumbent_outputs = _predict_bundle_rows(incumbent_bundle, horizon_rows)
+            market_outputs = [training._kalshi_prior(row) for row in horizon_rows]
+            labels = [row.label_yes for row in horizon_rows]
+            prefix = "retrain_480_"
+            enriched.update({
+                prefix + "candidate": artifact.metric_snapshot(
+                    probability_metrics(labels, candidate_outputs["candidate"])),
+                prefix + "incumbent": artifact.metric_snapshot(
+                    probability_metrics(labels, incumbent_outputs["candidate"])),
+                prefix + "kalshi": artifact.metric_snapshot(
+                    probability_metrics(labels, market_outputs)),
+            })
+            gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
+                labels, candidate_outputs["candidate"],
+            )
+            gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
+                labels, incumbent_outputs["candidate"],
+            )
         report = report.model_copy(update={
             "metrics": enriched, "decision_metrics": gate_reports,
+            "requires_retrain_480_gate": is_full_retrain,
         })
+    if progress is not None:
+        progress("PROMOTION_GATE")
     return finalize_evaluation(root, experiment_path, report)
