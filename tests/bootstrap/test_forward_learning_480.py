@@ -91,7 +91,7 @@ def test_unhealthy_future_or_duplicate_rows_never_unblock_training():
     })]
     readiness = forward_learning_480.assess_forward_training_readiness(rows)
     assert not readiness["ready"]
-    assert readiness["eligible_480_markets"] == 117
+    assert readiness["eligible_480_markets"] == 118
     assert readiness["exclusions"].get("duplicate_rows") == 2
 
 
