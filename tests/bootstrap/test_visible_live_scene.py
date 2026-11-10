@@ -50,32 +50,41 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
         return  # CI without Chromium still checks HTML and JS contracts.
     html=page("trade")
     probe="""<script>
-setTimeout(()=>{
+(function(){
  const node=document.querySelector(".forecast");
  const svg=node?.querySelector(":scope > svg.ke-border-overlay");
  const rect=svg?.querySelector("rect.ke-neon-runner");
  const view=svg?.viewBox.baseVal;
- const a=rect?parseFloat(getComputedStyle(rect).strokeDashoffset):NaN;
- const widthOk=!!view && Math.abs(view.width-node.getBoundingClientRect().width)<3;
- const heightOk=!!view && Math.abs(view.height-node.getBoundingClientRect().height)<3;
- const boxOk=!!rect && rect.getBoundingClientRect().width>node.clientWidth-8;
+ const widthOk=!!view&&Math.abs(view.width-node.getBoundingClientRect().width)<3;
+ const heightOk=!!view&&Math.abs(view.height-node.getBoundingClientRect().height)<3;
+ const boxOk=!!rect&&rect.getBoundingClientRect().width>node.clientWidth-8;
  const labelOk=!document.querySelector(".panel-label > .ke-border-overlay");
  const colorsOk=(svg?.querySelectorAll("linearGradient stop").length||0)>=4;
- setTimeout(()=>{
-  const b=rect?parseFloat(getComputedStyle(rect).strokeDashoffset):NaN;
-  document.body.dataset.rainbowProbe=[
-   widthOk,heightOk,boxOk,labelOk,colorsOk,
-   Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)>2
-  ].join(",");
- },400);
-},150);
+ const anim=rect?.getAnimations().find(a=>a.animationName==="ke-rainbow-orbit");
+ let moving=false;
+ if(anim){
+  anim.pause();
+  anim.currentTime=100;
+  const before=parseFloat(getComputedStyle(rect).strokeDashoffset);
+  anim.currentTime=1100;
+  const after=parseFloat(getComputedStyle(rect).strokeDashoffset);
+  moving=Number.isFinite(before)&&Number.isFinite(after)&&Math.abs(before-after)>2;
+ }
+ document.body.dataset.rainbowProbe=[
+  widthOk,heightOk,boxOk,labelOk,colorsOk,moving
+ ].join(",");
+})();
 </script>"""
     html=html.replace("</body>",probe+"</body>",1)
     file=tmp_path/"rainbow-geometry.html"
     file.write_text(html,encoding="utf-8")
     p=subprocess.run([chrome,"--headless","--no-sandbox","--disable-gpu",
         "--disable-dev-shm-usage","--no-first-run",
-        "--virtual-time-budget=1600","--dump-dom",file.as_uri()],
+        "--force-prefers-reduced-motion=no-preference",
+        "--virtual-time-budget=900","--dump-dom",file.as_uri()],
         capture_output=True,text=True,timeout=35)
     assert p.returncode==0,p.stderr[-2000:]
-    assert 'data-rainbow-probe="true,true,true,true,true,true"' in p.stdout
+    import re
+    match=re.search(r'data-rainbow-probe="([^"]+)"',p.stdout)
+    assert match is not None, "Browser probe did not execute: " + p.stderr[-1200:]
+    assert match.group(1)=="true,true,true,true,true,true", match.group(1)
