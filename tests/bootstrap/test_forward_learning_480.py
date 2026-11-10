@@ -152,7 +152,7 @@ def test_train_page_exposes_prospective_progress_separately():
     assert 'info.forward_480' in PAGE
 
 
-def test_manual_forward_evaluation_api_is_same_origin_and_cannot_override_training(tmp_path):
+def test_deprecated_forward_evaluation_api_is_not_available(tmp_path):
     import threading
     from http.server import ThreadingHTTPServer
     import httpx
@@ -165,12 +165,10 @@ def test_manual_forward_evaluation_api_is_same_origin_and_cannot_override_traini
         with httpx.Client(timeout=5.0) as client:
             base = f"http://127.0.0.1:{server.server_port}"
             endpoint = base + "/api/training/forward480/evaluate"
-            assert client.post(endpoint, json={}).status_code == 403
+            assert client.post(endpoint, json={}).status_code == 404
             headers = {"Origin": base, "X-KalshiEdge-Action": "train"}
-            assert client.post(endpoint, json={"promote": True}, headers=headers).status_code == 400
-            response = client.post(endpoint, json={}, headers=headers)
-            assert response.status_code == 409
-            assert "settlement" in response.json()["error"].lower()
+            assert client.post(endpoint, json={"promote": True}, headers=headers).status_code == 404
+            assert client.post(endpoint, json={}, headers=headers).status_code == 404
     finally:
         server.shutdown()
         server.server_close()
