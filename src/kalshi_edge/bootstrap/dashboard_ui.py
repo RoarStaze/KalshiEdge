@@ -414,111 +414,198 @@ async function refreshHistory(){try{const response=await fetch("/api/history",{c
 catch(err){text("history-status","Could not refresh: "+err.message)}}
 el("filter")?.addEventListener("change",()=>{if(history)renderHistory(history)});
 let trainingStatus=null;
+const trainingStages=[
+ ["VERIFYING","Verify evidence"],
+ ["SPLITTING","Split markets"],
+ ["FITTING","Fit model"],
+ ["SCORING","Score holdout"],
+ ["COMPARING","Compare results"],
+ ["PROMOTION_GATE","Deployment gate"]
+];
+function trainPercent(n){return typeof n==="number"&&Number.isFinite(n)?(100*n).toFixed(1)+"%":"—"}
+function renderTrainingSession(run,running){
+ const events=Array.isArray(run.events)?run.events:[];
+ const current=String(run.stage||"");
+ const done=current==="COMPLETE";
+ const failed=current==="FAILED"||current==="INTERRUPTED";
+ const mapped=x=>x==="TRAINING"?"FITTING":x==="EVALUATING"?"SCORING":x;
+ const doneStages=events.map(e=>mapped(String(e.stage||"")));
+ const currentMapped=mapped(current);
+ const list=el("training-stage-list");
+ list.replaceChildren();
+ for(let i=0;i<trainingStages.length;i++){
+  const [stage,label]=trainingStages[i];
+  const stageDiv=document.createElement("div");
+  stageDiv.className="training-stage"+(doneStages.includes(stage)?" done":"")+
+   (!done&&!failed&&currentMapped===stage?" current":"")+
+   (failed&&currentMapped===stage?" failed":"");
+  const number=document.createElement("span");number.className="step-id";
+  number.textContent="STAGE "+(i+1);
+  const name=document.createElement("div");name.className="step-name";name.textContent=label;
+  stageDiv.append(number,name);list.append(stageDiv);
+ }
+ const hasRun=!!run.stage;
+ const pct=hasRun?Math.max(0,Math.min(100,Number(run.progress_percent)||0)):0;
+ text("training-worker-progress",hasRun?pct+"%":"—");
+ el("training-worker-bar-fill").style.width=pct+"%";
+ el("training-worker-bar").setAttribute("aria-valuenow",String(pct));
+ const comparison=el("training-comparison");
+ comparison.replaceChildren();
+ const r=run.results||{};
+ if(r.candidate_69_gate&&r.incumbent_69_gate){
+  const metrics=[
+   ["Newly trained model",r.candidate_69_gate],
+   ["Current live model",r.incumbent_69_gate]
+  ];
+  for(const [title,data] of metrics){
+   const card=document.createElement("div");card.className="training-metric";
+   const h=document.createElement("h4");h.textContent=title;
+   const strong=document.createElement("strong");
+   strong.textContent=trainPercent(data.qualified_accuracy);
+   const caption=document.createElement("small");
+   caption.textContent=String(data.correct||0)+"/"+String(data.qualified||0)+
+    " correct · "+String(data.qualified||0)+" forecasts · "+
+    trainPercent(data.coverage)+" coverage";
+   card.append(h,strong,caption);comparison.append(card);
+  }
+ }
+ const outcome=el("training-outcome");
+ outcome.className="training-outcome";
+ const reasons=Array.isArray(run.reasons)?run.reasons:[];
+ if(!hasRun){
+  outcome.textContent="No training run yet. Training steps, model comparisons, and the final decision will appear here and remain after refreshing.";
+ }else if(failed){
+  outcome.classList.add("fail");
+  outcome.textContent="TRAINING FAILED — Existing model unchanged.\n"+
+   (run.error||reasons.join("\n")||"Worker interrupted; inspect training log.");
+ }else if(!done){
+  outcome.textContent="IN PROGRESS · "+
+   (current.replaceAll("_"," ")||"Starting")+
+   "\nCompleted milestones: "+pct+"%. This is stage progress, not an elapsed-time estimate.";
+ }else if(run.decision==="PROMOTED"&&run.promoted===true){
+  outcome.classList.add("pass");
+  outcome.textContent="PASS · NEW MODEL PROMOTED.\nThe verified candidate passed the independent evaluation and incumbent checks. Restart KalshiEdge to load the newly promoted model.\n"+
+   reasons.join("\n");
+ }else if(run.decision==="VALIDATION_FAILED"){
+  outcome.classList.add("fail");
+  outcome.textContent="FAIL · NEW MODEL REJECTED — Existing model retained.\n"+
+   (reasons.length?reasons.join("\n"):"Independent validation gates not passed.");
+ }else if(run.decision==="NOT_DEPLOYABLE"){
+  outcome.classList.add("pending");
+  outcome.textContent="VALIDATION IMPROVED · NOT ACTIVATED.\n"+
+   (reasons.length?reasons.join("\n"):"Independent prospective evidence and live model compatibility still required.");
+ }else{
+  outcome.classList.add("pending");
+  outcome.textContent="NOT PROMOTED · "+(run.decision||"Evaluation incomplete")+
+   "\n"+(reasons.length?reasons.join("\n"):"See the verified evaluation report.");
+ }
+ text("forward-480-result",done?
+  "Report: "+(run.report_path||run.evaluation_report||"see local training logs")+
+  " · Promotion status: "+(run.promoted===true?"PROMOTED":"NOT PROMOTED"):
+  "Stages update from the local training worker; no fictitious completion estimate.");
+}
 function renderTraining(info){
  trainingStatus=info;
  const run=info.run||{};
  const running=!!info.running;
- const step=Number(info.cycle_position)||1;
+ const prospective=info.forward_480||{};
+ const ready=!!(info.train_available ?? (info.ready||prospective.ready));
+ const mode=String(info.selected_mode||(info.ready?info.mode:prospective.ready?"forward_480":""));
  const phase=String(run.stage||"");
+ const pill=el("train-status-pill");
+ pill.textContent=running?"TRAINING RUNNING":ready?"READY TO TRAIN":
+  info.status==="BLOCKED"?"DATA BLOCKED":"COLLECTING DATA";
+ pill.className="training-pill"+(running||ready?"":" waiting");
  const pctValue=Math.max(0,Math.min(100,Number(info.progress_percent)||0));
- const state=running?(phase==="EVALUATING"?"EVALUATING":"TRAINING"):info.ready?"TRAINING READY":info.status==="BLOCKED"?"DATA BLOCKED":info.status==="EVALUATION_PENDING"?"EVALUATION PENDING":"COLLECTING DATA";
- const pillEl=el("train-status-pill");pillEl.textContent=state;pillEl.className="training-pill "+(running||info.ready?"":"waiting");
- text("training-target","Round "+info.round_number+" · "+info.mode_label);
+ text("training-target","Round "+(info.round_number||1)+" · "+(info.mode_label||"Learn from mistakes"));
  text("training-progress-pct",pctValue+"%");
  el("training-bar-fill").style.width=pctValue+"%";
  el("training-bar").setAttribute("aria-valuenow",String(pctValue));
- text("training-cases",(Number(info.eligible_markets)||0)+" / "+info.target_markets);
+ text("training-cases",(Number(info.eligible_markets)||0)+" / "+(info.target_markets||12));
  text("training-outcomes",(Number(info.outcome_classes)||0)+" / 2");
- text("training-lockbox",(Number(info.new_evaluation_markets)||0)+" / "+info.target_new_markets);
- text("training-reason",info.reason);
- const prospective=info.forward_480||{};
- const forwardN=Math.max(0,Number(prospective.eligible_480_markets)||0);
- const forwardTarget=Math.max(1,Number(prospective.required_markets)||120);
- const forwardPct=Math.max(0,Math.min(100,Number(prospective.progress_percent)||0));
- text("forward-480-progress",forwardPct+"%");
- text("forward-480-eligible",forwardN+" / "+forwardTarget+
-   " verified, causal 480s markets · "+String(prospective.verified_outcome_classes||0)+
-   " / 2 official outcome classes");
- text("forward-480-reason",prospective.reason||
-   "Waiting for verified forward training evidence");
- el("forward-480-evaluate").disabled=!prospective.ready||running;
-
+ text("training-lockbox",(Number(info.new_evaluation_markets)||0)+" / "+(info.target_new_markets||20));
+ text("training-reason",info.reason||"Historical case readiness unavailable");
+ const n=Math.max(0,Number(prospective.eligible_480_markets)||0);
+ const target=Math.max(1,Number(prospective.required_markets)||120);
+ const p=Math.max(0,Math.min(100,Number(prospective.progress_percent)||0));
+ text("forward-480-progress",p+"%");
+ el("forward-480-bar-fill").style.width=p+"%";
+ text("forward-480-eligible",n+" / "+target+" verified markets · "+
+  String(prospective.verified_outcome_classes||0)+" / 2 settled outcome classes");
+ text("forward-480-reason",prospective.reason||"Waiting for verified forward 480s features.");
+ const step=Math.max(1,Math.min(4,Number(info.cycle_position)||1));
  for(let i=1;i<=4;i++){
-   const stepEl=el("train-step-"+i);
-   stepEl.className="training-step "+(i===step?"active":i<step?"completed":"");
+  const x=el("train-step-"+i);
+  x.className="training-step "+(i===step?"active":i<step?"completed":"");
  }
- text("training-headline",running?"Training in progress":info.ready?"Training Ready":"Collecting training data");
+ text("training-headline",running?"Training and evaluating…":
+  mode==="forward_480"?"Ready to train the 480-second model":
+  ready?"Ready for verified legacy training":"Waiting for verified training evidence");
  text("training-description",running?
-   "Running "+info.mode_label.toLowerCase()+" training. The fresh lockbox is evaluated once after training; only a passing candidate can replace the promoted model. Keep KalshiEdge open.":
-   info.ready?"All prerequisites passed. Train Now runs this round, evaluates the reserved lockbox once, and advances the 3:1 cycle whether promotion passes or fails.":
-   "Training stays disabled until the required eligible markets, both settlement classes, and fresh evaluation markets are present.");
- el("train-now").disabled=!info.ready||running||!!run.stage&&run.stage==="STARTING";
- if(running){text("train-feedback","Worker: "+phase+" · Round "+info.round_number)}
- else if(phase==="COMPLETE"){text("train-feedback","Previous round finished · "+(run.promoted?"model promoted (restart KalshiEdge to load it).":"promotion criteria not met; existing model retained."))}
- else if(phase==="FAILED"||phase==="INTERRUPTED"){text("train-feedback","Previous run "+phase.toLowerCase()+": "+(run.error||"see local logs"))}
- else{text("train-feedback",info.ready?"Ready for manual training.":"The progress bar measures data readiness, not training time.")}
+  "The worker is fitting and evaluating with real checkpoint data. Live predictions and trading remain unchanged until an authorized, compatible model is promoted.":
+  mode==="forward_480"?
+  "Use Train Now to fit on earlier settled 480-second snapshots and test against the current model on later markets. Deployment requires independent prospective validation.":
+  ready?"Use Train Now to fit and independently evaluate the legacy cycle. A passing compatible model is promoted for the next restart.":
+  "Neither training path currently has all of its verified prerequisites.");
+ const button=el("train-now");
+ button.disabled=!ready||running||phase==="STARTING";
+ button.textContent=running?"Training…":"Train Now";
+ renderTrainingSession(run,running);
+ if(running){
+  text("train-feedback","Worker active · "+String(run.mode||mode).replaceAll("_"," ")+
+   " · "+(run.updated_utc||"awaiting first milestone"));
+ }else if(run.stage==="COMPLETE"){
+  text("train-feedback","Training run finished · "+String(run.decision||"REVIEW RESULTS").replaceAll("_"," "));
+ }else if(run.stage==="FAILED"||run.stage==="INTERRUPTED"){
+  text("train-feedback","Training stopped · "+(run.error||"See diagnostic report"));
+ }else{
+  text("train-feedback",ready?"Ready. Press Train Now to begin a recorded training session.":
+   "The progress shown above is evidence readiness, not training time.");
+ }
 }
 async function refreshTraining(){
  try{
-   const response=await fetch("/api/training",{cache:"no-store"});
-   if(!response.ok)throw Error("HTTP "+response.status);
-   renderTraining(await response.json());
+  const response=await fetch("/api/training",{cache:"no-store"});
+  if(!response.ok)throw Error("HTTP "+response.status);
+  renderTraining(await response.json());
  }catch(err){
-   text("training-headline","Training readiness unavailable");
-   text("train-status-pill","CONNECTION ERROR");
-   text("training-reason","Cannot load training readiness: "+err.message+
-     ". Check the local /api/training endpoint and KalshiEdge logs.");
-   text("training-cases","—");text("training-outcomes","—");text("training-lockbox","—");
-   text("training-progress-pct","—");
-   el("training-bar-fill").style.width="0%";
-   el("training-bar").setAttribute("aria-valuenow","0");
-   el("train-now").disabled=true;
-   el("forward-480-evaluate").disabled=true;
-   text("forward-480-eligible","Forward training status unavailable");
-   text("forward-480-progress","—");
-   text("forward-480-reason","Could not load verified 480s evidence.");
+  text("training-headline","Training readiness unavailable");
+  text("train-status-pill","CONNECTION ERROR");
+  text("training-reason","Cannot load training readiness: "+err.message);
+  text("training-cases","—");text("training-outcomes","—");text("training-lockbox","—");
+  text("training-progress-pct","—");
+  el("training-bar-fill").style.width="0%";
+  el("training-bar").setAttribute("aria-valuenow","0");
+  el("train-now").disabled=true;
+  text("forward-480-eligible","Forward training status unavailable");
+  text("forward-480-progress","—");
+  text("forward-480-reason","Cannot load verified prospective evidence.");
+  text("training-outcome","The training service is unavailable: "+err.message);
  }
 }
-el("forward-480-evaluate").addEventListener("click",async()=>{
- if(!trainingStatus?.forward_480?.ready)return;
- if(!confirm("Fit one fixed 480s candidate on earlier verified markets, and compare with the unchanged model on later settled markets? This does not promote a model, place trades or change risk limits."))return;
- const button=el("forward-480-evaluate");
+el("train-now").addEventListener("click",async()=>{
+ if(!(trainingStatus?.train_available??(trainingStatus?.ready||trainingStatus?.forward_480?.ready))||
+    trainingStatus?.running)return;
+ const mode=String(trainingStatus?.selected_mode||(trainingStatus?.ready?trainingStatus?.mode:"forward_480"));
+ const prompt=mode==="forward_480"?
+  "Start verified 480-second training? This fits one candidate, evaluates later settled markets, and reports exactly why it passed or failed. Research candidates cannot replace live trading without prospective validation.":
+  "Start the verified "+String(trainingStatus?.mode_label||"historical")+" cycle? Only independently passing, compatible models can be promoted for the next restart.";
+ if(!confirm(prompt))return;
+ const button=el("train-now");
  button.disabled=true;
- text("forward-480-result","Training offline candidate and comparing later verified markets…");
+ text("train-feedback","Starting the recorded training worker…");
  try{
-  const response=await fetch("/api/training/forward480/evaluate",{
+  const response=await fetch("/api/training/start",{
    method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"train"},
    body:"{}",cache:"no-store",
   });
   const result=await response.json();
-  if(!response.ok)throw Error(result.error||result.reason||"HTTP "+response.status);
-  const candidate=result.candidate_69_gate||{};
-  const incumbent=result.incumbent_69_gate||{};
-  const fmt=(v)=>typeof v==="number"?(100*v).toFixed(1)+"%":"unavailable";
-  text("forward-480-result","Candidate: "+
-    String(candidate.qualified||0)+" qualifying, "+fmt(candidate.qualified_accuracy)+
-    " accuracy, "+fmt(candidate.coverage)+" coverage · Incumbent: "+
-    String(incumbent.qualified||0)+" qualifying, "+fmt(incumbent.qualified_accuracy)+
-    " accuracy, "+fmt(incumbent.coverage)+" coverage · "+String(result.status)+
-    ". Live model unchanged. Prospective validation remains required.");
+  if(!response.ok)throw Error(result.error||"HTTP "+response.status);
+  text("train-feedback","Training worker started · "+String(result.mode).replaceAll("_"," ")+
+   " · tracking progress below.");
  }catch(err){
-  text("forward-480-result","Forward candidate evaluation unavailable: "+err.message);
+  text("train-feedback","Could not start training: "+err.message);
  }
- await refreshTraining();
-});
-el("train-now").addEventListener("click",async()=>{
- if(!trainingStatus?.ready||trainingStatus.running)return;
- if(!confirm("Start round "+trainingStatus.round_number+" ("+trainingStatus.mode_label+")? This can run for hours. After fitting, the fresh untouched lockbox will be evaluated exactly once and a model may be promoted only if it passes the benchmark and incumbent checks."))return;
- const button=el("train-now");button.disabled=true;text("train-feedback","Submitting training request…");
- try{
-   const response=await fetch("/api/training/start",{
-     method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"train"},
-     body:"{}",cache:"no-store"
-   });
-   const result=await response.json();
-   if(!response.ok)throw Error(result.error||"HTTP "+response.status);
-   text("train-feedback","Training round "+result.round_number+" started · "+result.mode+" · see local worker log for diagnostics.");
- }catch(err){text("train-feedback","Could not start training: "+err.message)}
  await refreshTraining();
 });
 refreshLive();refreshHistory();refreshTraining();
