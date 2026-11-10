@@ -143,3 +143,14 @@ def test_binance_backfill_rejects_unenrolled_requested_day(tmp_path, monkeypatch
         backfill.backfill_binance(
             BootstrapSettings(bootstrap_dir=tmp_path),
             required_dates=(date(2026,10,27),))
+
+
+def test_failed_training_ui_distinguishes_stopped_run_from_active_progress():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    from kalshi_edge.bootstrap.site_pages import TRAIN_STATUS_SESSION_HELPERS
+
+    assert 'failed?"FAILED"' in PAGE
+    assert 'failed?"Dataset build stopped"' in PAGE
+    assert 'run.stage==="FAILED"?"Previous training stopped' in PAGE
+    assert 'snapshot.status.run?.stage==="FAILED"' in TRAIN_STATUS_SESSION_HELPERS
+    assert "Previous training failed" in TRAIN_STATUS_SESSION_HELPERS
