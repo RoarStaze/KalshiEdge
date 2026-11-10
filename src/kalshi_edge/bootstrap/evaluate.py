@@ -126,6 +126,9 @@ class BootstrapEvaluationReport(BaseModel):
     # Newly computed gate diagnostics are optional for old historical reports
     # but MANDATORY for promotion of future 480s volatility challengers.
     decision_metrics: dict[str, GateSnapshot] = Field(default_factory=dict)
+    # Full retraining of an already-promoted live model must pass fresh,
+    # same-market 480s accuracy + coverage gates before replacing it.
+    requires_retrain_480_gate: bool = False
     comparison_rule: str
 
 
@@ -286,6 +289,49 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         if (better is not None and existing is not None
                 and better.accuracy <= existing.accuracy + PROMOTION_NONWORSE_TOLERANCE):
             reasons.append("VOLATILITY_480_OVERALL_ACCURACY_NOT_IMPROVED")
+
+    if report.requires_retrain_480_gate:
+        prefix = "retrain_480_"
+        required = tuple(prefix + name for name in ("candidate", "incumbent", "kalshi"))
+        if incumbent is None:
+            reasons.append("RETRAIN_INCUMBENT_MODEL_MISSING")
+        if any(name not in report.metrics for name in required):
+            reasons.append("RETRAIN_480_BENCHMARK_MISSING")
+        else:
+            challenger, current, market = (
+                report.metrics[name] for name in required
+            )
+            for name, benchmark in (("INCUMBENT", current), ("KALSHI", market)):
+                nonworse, improved, _, _ = _dominates(challenger, benchmark)
+                if not nonworse or not improved:
+                    reasons.append(f"RETRAIN_480_{name}_NOT_BEATEN")
+                if challenger.ece > benchmark.ece + PROMOTION_MAX_ECE_DEGRADATION:
+                    reasons.append(f"RETRAIN_480_{name}_ECE_DEGRADED")
+                if challenger.accuracy <= benchmark.accuracy + PROMOTION_NONWORSE_TOLERANCE:
+                    reasons.append(f"RETRAIN_480_{name}_ACCURACY_NOT_IMPROVED")
+        candidate_gate = report.decision_metrics.get("retrain_480_candidate")
+        incumbent_gate = report.decision_metrics.get("retrain_480_incumbent")
+        if candidate_gate is None or incumbent_gate is None:
+            reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISSING")
+        elif (
+            candidate_gate.total_markets != incumbent_gate.total_markets
+            or candidate_gate.total_markets < 80
+            or abs(candidate_gate.minimum_confidence - .69) > 1e-9
+            or abs(incumbent_gate.minimum_confidence - .69) > 1e-9
+        ):
+            reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISMATCH")
+        else:
+            if candidate_gate.qualified_markets <= incumbent_gate.qualified_markets:
+                reasons.append("RETRAIN_480_COVERAGE_NOT_INCREASED")
+            if incumbent_gate.qualified_accuracy is None:
+                reasons.append("RETRAIN_480_QUALIFIED_BASELINE_UNAVAILABLE")
+            if (
+                candidate_gate.qualified_accuracy is None
+                or (incumbent_gate.qualified_accuracy is not None
+                    and candidate_gate.qualified_accuracy + PROMOTION_NONWORSE_TOLERANCE
+                    < incumbent_gate.qualified_accuracy)
+            ):
+                reasons.append("RETRAIN_480_QUALIFIED_ACCURACY_DEGRADED")
 
     promoted = superior and not reasons
     return PromotionDecision(
