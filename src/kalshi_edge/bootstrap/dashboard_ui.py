@@ -553,6 +553,35 @@ function renderModelIdentity(){
   text("installed-model-number","Model #"+n+" installed · loaded model hash differs");
  }
 }
+// Navigation uses real page URLs; preserve the last rendered training
+// status across page loads in this tab. Restore for display only, then verify.
+const TRAIN_STATUS_CACHE_KEY="kalshiedge.train.status.v1";
+function saveTrainingSnapshot(info){
+ try{
+  if(!info||typeof info!=="object"||Array.isArray(info))return;
+  sessionStorage.setItem(TRAIN_STATUS_CACHE_KEY,JSON.stringify({
+   savedAt:Date.now(),status:info,
+  }));
+ }catch(err){/* Storage can be disabled; normal server polling still works. */}
+}
+function restoreTrainingSnapshot(){
+ try{
+  const raw=sessionStorage.getItem(TRAIN_STATUS_CACHE_KEY);
+  if(!raw)return false;
+  const snapshot=JSON.parse(raw);
+  if(!snapshot||typeof snapshot!=="object"||
+     !Number.isFinite(snapshot.savedAt)||
+     snapshot.savedAt>Date.now()+60000||
+     Date.now()-snapshot.savedAt>12*60*60*1000||
+     !snapshot.status||typeof snapshot.status!=="object"||
+     Array.isArray(snapshot.status))return false;
+  renderTraining(snapshot.status);
+  // Cached readiness cannot authorize a new training session.
+  el("train-now").disabled=true;
+  text("train-feedback","Last known training progress · syncing with the active worker…");
+  return true;
+ }catch(err){return false;}
+}
 function renderTraining(info){
  trainingStatus=info;
  renderModelIdentity();
@@ -624,8 +653,17 @@ async function refreshTraining(){
  try{
   const response=await fetch("/api/training",{cache:"no-store"});
   if(!response.ok)throw Error("HTTP "+response.status);
-  renderTraining(await response.json());
+  const info=await response.json();
+  renderTraining(info);
+  saveTrainingSnapshot(info);
  }catch(err){
+  if(trainingStatus){
+   // Keep completed stages, progress, model identity and the latest verdict.
+   el("train-now").disabled=true;
+   text("train-feedback","Connection interrupted · showing last verified training status; "+
+    "retrying soon. "+err.message);
+   return;
+  }
   text("training-headline","Training readiness unavailable");
   text("train-status-pill","CONNECTION ERROR");
   text("training-reason","Cannot load training readiness: "+err.message);
