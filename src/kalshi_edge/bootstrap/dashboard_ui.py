@@ -109,22 +109,12 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-head h2{font-size:24px;letter-spacing:-.7px;margin:7px 0 5px}
 .training-pill{border:1px solid #3b7180;background:#14323a;color:var(--mint);padding:7px 12px;border-radius:25px;font-size:11px;font-weight:700;letter-spacing:.7px}
 .training-pill.waiting{border-color:#6b6049;color:#efd09a;background:#2a261f}
-.training-cycle{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:24px 0}
-.training-step{padding:14px;border-radius:10px;background:#101e2b;border:1px solid #2a3c51}
-.training-step.active{border-color:var(--cyan);background:#143543}
-.training-step.completed{border-color:#337266}
-.training-step small{display:block;font-size:10px;color:var(--muted);letter-spacing:1.1px}
-.training-step strong{display:block;margin-top:8px;font-size:12px}
 .training-layout{display:grid;grid-template-columns:minmax(0,1fr) 285px;gap:24px;align-items:start}
 .training-progress-title{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:12px;font-weight:600}
 .training-big-percent{font-size:26px;font-variant-numeric:tabular-nums;color:var(--mint)}
 .training-bar{height:9px;background:#2b3e51;border-radius:12px;overflow:hidden;margin:13px 0 12px}
 .training-bar>div{height:100%;width:0%;background:linear-gradient(90deg,#52b8d4,#8fe7c3);border-radius:12px;transition:width .4s}
 .training-detail{font-size:12px;color:var(--muted);line-height:1.65;min-height:38px}
-.training-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:18px}
-.training-count{border:1px solid #2b4154;background:#10202f;padding:11px;border-radius:8px}
-.training-count b{display:block;font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
-.training-count span{display:block;color:var(--muted);font-size:10px;line-height:1.4;margin-top:5px}
 .training-action{border-left:1px solid var(--line);padding-left:23px}
 .training-forward{padding:22px 24px;margin-top:22px;background:linear-gradient(135deg,rgba(30,65,61,.67),rgba(18,34,39,.9));border:1px solid #2e6257;border-radius:14px}
 .training-forward .training-bar{margin:13px 0 10px}
@@ -158,11 +148,6 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-outcome.pass{background:#14342c;border-color:#2a8970;color:#c2f3dd}
 .training-outcome.fail{background:#352529;border-color:#96545a;color:#f6c3c6}
 .training-outcome.pending{background:#353024;border-color:#9d844c;color:#f0ddac}
-.training-legacy-details{margin-top:19px;background:#111d24;border:1px solid #2b4450;border-radius:11px;padding:18px 20px}
-.training-legacy-details>summary{cursor:pointer;font-size:14px;font-weight:650;display:flex;justify-content:space-between;gap:16px;align-items:center}
-.training-legacy-details>summary strong{font-variant-numeric:tabular-nums;color:#8fbaae}
-.training-legacy-details .subtitle{margin-top:12px;font-size:12px}
-.training-legacy-details .training-counts{margin-bottom:4px}
 @media(max-width:800px){.training-stage-list{grid-template-columns:repeat(3,minmax(0,1fr))}.training-launch .train-button{width:100%}}
 @media(max-width:460px){.training-stage-list{grid-template-columns:repeat(2,minmax(0,1fr))}.training-comparison{grid-template-columns:1fr}}
 
@@ -180,7 +165,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .train-button:hover:not(:disabled){filter:brightness(1.12)}
 .train-button:disabled{background:#344859;color:#9daab7;cursor:not-allowed}
 .train-feedback{font-size:11px;color:#acc9d6;line-height:1.6;margin-top:12px;overflow-wrap:anywhere;min-height:18px}
-@media(max-width:800px){.training-layout{grid-template-columns:1fr}.training-action{border-left:0;border-top:1px solid var(--line);padding:20px 0 0}.training-cycle{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.training-layout{grid-template-columns:1fr}.training-action{border-left:0;border-top:1px solid var(--line);padding:20px 0 0}}
 @media(max-width:960px){.layout{grid-template-columns:1fr}.context{display:grid;grid-template-columns:1.5fr 1fr}.forecast{min-height:0}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.shell{padding:0 14px 40px}header{padding:15px 0}.tag{font-size:8px}.header-right{font-size:10px}.section-intro{margin:22px 0 16px}.forecast{padding:20px}.context{display:flex}.context-header,.health{padding:20px}.market-data{gap:9px}.datum{padding:14px}.datum-number{font-size:19px}.history-header{margin-top:28px}.kpi{padding:14px}.kpi-num{font-size:27px}th,td{padding:11px}}
 </style>
@@ -290,24 +275,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
   <div id="forward-480-result" class="training-forward-note">Model training and evaluation are combined into Train Now. A high validation score is not automatically permission for live trading.</div>
  </div>
- <details class="training-legacy-details">
-  <summary>Legacy four-round learning cycle <strong id="training-progress-pct">0%</strong></summary>
-  <p class="subtitle">The historical mistake-case cycle is distinct from verified prospective 480-second training.</p>
-  <div class="training-cycle" id="train-steps">
-   <div class="training-step active" id="train-step-1"><small>ROUND 1</small><strong>Mistakes</strong></div>
-   <div class="training-step" id="train-step-2"><small>ROUND 2</small><strong>Mistakes</strong></div>
-   <div class="training-step" id="train-step-3"><small>ROUND 3</small><strong>Mistakes</strong></div>
-   <div class="training-step" id="train-step-4"><small>ROUND 4</small><strong>Correct refresher</strong></div>
-  </div>
-  <div id="training-target" class="training-forward-note">Round 1 · Learn from mistakes</div>
-  <div class="training-bar" role="progressbar" aria-label="Legacy training data readiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-bar"><div id="training-bar-fill"></div></div>
-  <p class="training-detail" id="training-reason">Checking legacy training prerequisites…</p>
-  <div class="training-counts">
-   <div class="training-count"><b id="training-cases">0</b><span>Eligible mistake cases / 12</span></div>
-   <div class="training-count"><b id="training-outcomes">0</b><span>Settled classes / 2</span></div>
-   <div class="training-count"><b id="training-lockbox">0</b><span>New evaluation markets / 20</span></div>
-  </div>
- </details>
+ 
 </section>
 <section aria-label="Final Forecast history">
  <div class="history-header"><div><div class="eyebrow">VERIFIED PERFORMANCE</div><h2>Final forecast history</h2><p class="subtitle">Official Kalshi settlements only · Accuracy = correct ÷ (correct + incorrect)</p></div><span id="history-status" class="subtitle">Loading history…</span></div>
@@ -572,15 +540,6 @@ function renderTraining(info){
  pill.textContent=running?"TRAINING RUNNING":ready?"READY TO TRAIN":
   info.status==="BLOCKED"?"DATA BLOCKED":"COLLECTING DATA";
  pill.className="training-pill"+(running||ready?"":" waiting");
- const pctValue=Math.max(0,Math.min(100,Number(info.progress_percent)||0));
- text("training-target","Round "+(info.round_number||1)+" · "+(info.mode_label||"Learn from mistakes"));
- text("training-progress-pct",pctValue+"%");
- el("training-bar-fill").style.width=pctValue+"%";
- el("training-bar").setAttribute("aria-valuenow",String(pctValue));
- text("training-cases",(Number(info.eligible_markets)||0)+" / "+(info.target_markets||12));
- text("training-outcomes",(Number(info.outcome_classes)||0)+" / 2");
- text("training-lockbox",(Number(info.new_evaluation_markets)||0)+" / "+(info.target_new_markets||20));
- text("training-reason",info.reason||"Historical case readiness unavailable");
  const n=Math.max(0,Number(prospective.eligible_480_markets)||0);
  const target=Math.max(1,Number(prospective.required_markets)||120);
  const p=Math.max(0,Math.min(100,Number(prospective.progress_percent)||0));
@@ -591,11 +550,6 @@ function renderTraining(info){
  text("forward-480-reason",prospective.reason||"Waiting for verified forward 480s features.");
  text("baseline-retrain-ready",(baseline.ready?"Full model ready: ":"Full model: ")+
   (baseline.reason||"Checking historical dataset and fresh independent lockbox"));
- const step=Math.max(1,Math.min(4,Number(info.cycle_position)||1));
- for(let i=1;i<=4;i++){
-  const x=el("train-step-"+i);
-  x.className="training-step "+(i===step?"active":i<step?"completed":"");
- }
  text("training-headline",running?"Training and evaluating…":
   mode==="forward_480"?"Ready to train the 480-second research challenger":
   mode==="baseline"?"Ready to train and evaluate a full model":
@@ -641,16 +595,50 @@ async function refreshTraining(){
   }
   text("training-headline","Training readiness unavailable");
   text("train-status-pill","CONNECTION ERROR");
-  text("training-reason","Cannot load training readiness: "+err.message);
-  text("training-cases","—");text("training-outcomes","—");text("training-lockbox","—");
-  text("training-progress-pct","—");
-  el("training-bar-fill").style.width="0%";
-  el("training-bar").setAttribute("aria-valuenow","0");
   el("train-now").disabled=true;
   text("forward-480-eligible","Forward training status unavailable");
   text("forward-480-progress","—");
   text("forward-480-reason","Cannot load verified prospective evidence.");
   text("training-outcome","The training service is unavailable: "+err.message);
+ }
+}
+// Worker-only progress poll: no feature rebuild, model scoring or expensive
+// readiness inspection. Full training status still syncs every five seconds.
+let progressPollPending=false;
+async function refreshTrainingProgress(){
+ if(progressPollPending||document.hidden||!trainingStatus||!trainingStatus.running)return;
+ progressPollPending=true;
+ try{
+  const response=await fetch("/api/training/progress",{cache:"no-store"});
+  if(!response.ok)throw Error("HTTP "+response.status);
+  const payload=await response.json();
+  if(!payload||typeof payload!=="object")return;
+  const next=payload.run;
+  if(!next||typeof next!=="object")return;
+  const previous=trainingStatus.run||{};
+  const newer=String(next.updated_utc||"");
+  const older=String(previous.updated_utc||"");
+  // A late GET must never move the same in-progress dataset back.
+  if(next.started_utc===previous.started_utc&&newer&&older&&newer<older)return;
+  const running=payload.running===true;
+  if(newer===older&&next.stage===previous.stage&&running===trainingStatus.running)return;
+  trainingStatus={...trainingStatus,run:next,running};
+  renderTrainingSession(next,running);
+  saveTrainingSnapshot(trainingStatus);
+  if(running){
+   text("train-status-pill","TRAINING RUNNING");
+   text("training-headline","Training and evaluating…");
+   text("train-feedback","Worker active · "+String(next.stage||"STARTING").replaceAll("_"," ")+
+    " · "+(next.updated_utc||"checking latest state"));
+   el("train-now").disabled=true;
+  }else{
+   el("train-now").disabled=true;
+   refreshTraining();
+  }
+ }catch(err){
+  // Temporary network delay leaves last verified progress visible.
+ }finally{
+  progressPollPending=false;
  }
 }
 el("train-now").addEventListener("click",async()=>{
