@@ -357,15 +357,21 @@ def _one_checkpoint_per_market(
 ) -> list[FeatureRow]:
     """Select strictly causal locked-horizon rows, one per ticker.
 
-    Only rows within one second of the requested remaining time qualify.
-    In the unlikely case of multiple snapshots choose the closest, then the
-    earlier observation. Never interpolate to synthesize a checkpoint.
+    For the live 480-second final, accept only the immutable checkpoint
+    through two seconds afterward; never accept a pre-lock observation.
+    Older research horizons retain their historical one-second tolerance.
+    In the unlikely case of duplicates choose the closest, then earlier.
+    Never interpolate a checkpoint or infer features from future data.
     """
     selected: dict[str, FeatureRow] = {}
     for row in rows:
         value = row.features.get("seconds_remaining")
-        if (type(value) not in (int, float) or not math.isfinite(value)
-                or abs(value - seconds) > 1.0):
+        if type(value) not in (int, float) or not math.isfinite(value):
+            continue
+        if seconds == 480:
+            if not 478.0 <= value <= 480.0:
+                continue
+        elif abs(value - seconds) > 1.0:
             continue
         previous = selected.get(row.market_ticker)
         if previous is None or (
