@@ -69,3 +69,24 @@ def test_order_training_history_and_api_ids_unchanged():
             assert html.count('id="' + target + '"') == 1
         assert html.count('class="site-nav-link') == 4
         assert "pointer-events:none" in html
+
+
+def test_rainbow_svg_is_aligned_to_true_outer_border_box():
+    """Old 100% width/top=0 was relative to the padding box, not border edges."""
+    html = render("trade")
+    assert 'parseFloat(css.borderLeftWidth)' in html
+    assert 'parseFloat(css.borderTopWidth)' in html
+    assert 'svg.style.left=' in html
+    assert 'svg.style.top=' in html
+    assert 'svg.style.width=' in html
+    assert 'svg.style.height=' in html
+    assert 'const inset=strokeWidth/2' in html
+    assert 'const inset=2.5;' not in html
+
+
+def test_outer_nav_and_trade_panels_keep_full_color_cycling_outline():
+    for route in ("trade", "train", "history", "api"):
+        html = render(route)
+        assert "stroke-dasharray:none" in html
+        assert "ke-rainbow-cycle" in html
+        assert 'if(node.parentElement?.closest(".ke-neon-target"))return;' in html
