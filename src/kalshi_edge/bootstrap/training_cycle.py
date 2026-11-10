@@ -385,6 +385,8 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     percent = WORKER_STAGE_PROGRESS.get(
         stage, int(prior.get("progress_percent", 0)) if same_run else 0
     )
+    if same_run and stage != "STARTING" and prior.get("resume_stage"):
+        percent = max(percent, int(prior.get("progress_percent", 0)))
     events = list(prior.get("events", [])) if same_run and stage != "STARTING" else []
     if not events or events[-1].get("stage") != stage:
         events.append({"stage": stage, "at_utc": now, "progress_percent": percent})
@@ -559,11 +561,11 @@ def run_forward_training_worker(root: Path) -> int:
     mode, round_number = FORWARD_MODE, 0
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
-            _write_worker_state(root, stage="BUILDING_DATASET", mode=mode,
-                                round_number=round_number,
-                                dataset_action="Building point-in-time forward 480s snapshot dataset")
+            _pause_boundary(root, stage="BUILDING_DATASET", mode=mode,
+                            round_number=round_number,
+                            dataset_action="Building point-in-time forward 480s snapshot dataset")
             dataset_path, ready = forward_learning_480.create_verified_forward_dataset(root)
-            _write_worker_state(
+            _pause_boundary(
                 root, stage="VERIFYING_DATASET", mode=mode,
                 round_number=round_number, dataset_path=str(dataset_path),
                 dataset_market_count=ready["eligible_480_markets"],
@@ -576,14 +578,14 @@ def run_forward_training_worker(root: Path) -> int:
                 if stage not in ("VERIFYING", "SPLITTING", "FITTING", "SCORING",
                                  "COMPARING"):
                     raise CycleError(f"unexpected forward training stage: {stage}")
-                _write_worker_state(root, stage=stage, mode=mode,
-                                    round_number=round_number)
+                _pause_boundary(root, stage=stage, mode=mode,
+                                round_number=round_number)
 
             result = forward_learning_480.evaluate_verified_forward_candidate(
                 root, progress=progress, dataset_path=dataset_path,
             )
-            _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
-                                round_number=round_number)
+            _pause_boundary(root, stage="PROMOTION_GATE", mode=mode,
+                            round_number=round_number)
             decision = (
                 "NOT_DEPLOYABLE" if result.get("status") == "VALIDATION_JOINT_GAIN"
                 else "VALIDATION_FAILED" if result.get("status") == "NO_VALIDATED_JOINT_GAIN"
@@ -600,6 +602,13 @@ def run_forward_training_worker(root: Path) -> int:
                 results=result, report_path=str(report_path),
             )
             return 0 if decision in ("VALIDATION_FAILED", "NOT_DEPLOYABLE") else 2
+        except training_pause.TrainingPaused:
+            intent=training_pause.read_pause(root)
+            _save_paused_state(
+                root, mode=mode, round_number=round_number,
+                reason="manual" if intent.get("manual") else "shutdown",
+            )
+            return 0
         except Exception as exc:
             LOG.exception("Verified 480s training failed")
             _write_worker_state(
@@ -767,8 +776,8 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
             def report_progress(stage: str) -> None:
                 if stage not in {"SCORING", "COMPARING", "PROMOTION_GATE"}:
                     raise CycleError(f"invalid full-model evaluation milestone: {stage}")
-                _write_worker_state(root, stage=stage, mode=mode,
-                                    round_number=round_number)
+                _pause_boundary(root, stage=stage, mode=mode,
+                                round_number=round_number)
 
             evaluation = run_lockbox_evaluation(
                 root, experiment.experiment_path, progress=report_progress,
