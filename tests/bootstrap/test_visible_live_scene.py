@@ -32,8 +32,8 @@ def test_every_route_installs_the_same_visible_live_scene():
 
 def test_every_existing_panel_gets_a_real_rounded_perimeter_runner():
     html = page("trade")
-    assert 'createElementNS("http://www.w3.org/2000/svg", "svg")' in html
-    assert 'createElementNS("http://www.w3.org/2000/svg", "rect")' in html
+    assert 'createElementNS(svgNS,"svg")' in html
+    assert 'createElementNS(svgNS,"rect")' in html
     assert 'pathLength' in html
     assert 'stroke-dasharray:19 81' in html
     assert 'stroke-dashoffset:-100' in html
