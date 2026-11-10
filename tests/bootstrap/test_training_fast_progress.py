@@ -108,6 +108,9 @@ def test_train_page_removes_legacy_four_round_readiness():
     assert 'id="training-bar-fill"' not in PAGE
     assert 'id="training-worker-progress"' in PAGE
     assert 'id="dataset-build-detail"' in PAGE
+    assert 'id="dataset-build-bar"' in PAGE
+    assert 'id="dataset-build-bar-fill"' in PAGE
+    assert 'el("dataset-build-bar-fill").style.width' in PAGE
 
 
 def test_train_route_polls_light_state_faster_than_full_readiness():
@@ -126,6 +129,6 @@ def test_train_route_polls_light_state_faster_than_full_readiness():
     assert 'setInterval(refreshTrainingProgress,750)' in p
     assert 'setInterval(refreshTraining,5000)' in p
     assert '"/api/training/progress"' in p
-    assert 'if(progressPollPending)' in p
+    assert 'if(progressPollPending||document.hidden' in p
     assert 'document.hidden' in p
     assert '"current_model"' not in p[p.index('async function refreshTrainingProgress()'):p.index('el("train-now").addEventListener')]
