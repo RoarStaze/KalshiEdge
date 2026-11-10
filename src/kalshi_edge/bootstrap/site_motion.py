@@ -47,15 +47,14 @@ body[data-page] .site-nav{
  inherits:false;
  initial-value:0deg;
 }
-body[data-page] .ke-neon-target{
+body[data-page] :is(.site-nav,.forecast,.context>.manual-trade,.training-card,.history-view .card,.api-card).ke-neon-target{
  position:relative;
  --ke-rainbow-panel:linear-gradient(155deg,rgba(3,17,23,.86),rgba(2,11,19,.91) 74%);
  border:2px solid transparent!important;
  /* Preserve the existing card-specific rounded corners. */
  background:
   var(--ke-rainbow-panel) padding-box,
-  conic-gradient(
-   from var(--ke-rainbow-angle),
+  conic-gradient(from var(--ke-rainbow-angle),
    #31ffcc 0deg,#2edbff 62deg,#8368ff 127deg,
    #ff3abc 192deg,#f6fc67 263deg,#39ffb0 322deg,#31ffcc 360deg
   ) border-box!important;
