@@ -113,7 +113,15 @@ def test_train_page_removes_legacy_four_round_readiness():
 def test_train_route_polls_light_state_faster_than_full_readiness():
     # Keep the full 5s readiness/status check; a separate 750ms progress read
     # avoids expensive refits/re-scans and only runs while the Train page is active.
-    p = render_site_page(PAGE, "train")
+    from kalshi_edge.bootstrap.api_credentials_ui import integrate_api_credentials
+    from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
+    from kalshi_edge.bootstrap.round_price_ui import integrate_round_price_hero
+    p = render_site_page(
+        integrate_api_credentials(
+            integrate_manual_trade(integrate_round_price_hero(PAGE))
+        ),
+        "train",
+    )
     assert 'refreshTrainingProgress' in p
     assert 'setInterval(refreshTrainingProgress,750)' in p
     assert 'setInterval(refreshTraining,5000)' in p
