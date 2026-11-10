@@ -47,6 +47,11 @@ WORKER_STAGE_PROGRESS = {
     "COMPLETE": 100,
 }
 FORWARD_MODE = "forward_480"
+ACTIVE_WORKER_STAGES = frozenset({
+    "STARTING", "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
+    "SCORING", "EVALUATING", "COMPARING", "PROMOTION_GATE",
+})
+
 
 
 def _select_training_mode(legacy: dict, forward: dict) -> str | None:
@@ -541,7 +546,7 @@ class TrainingController:
                 info["running"] = code is None
                 if code is not None:
                     info["worker_exit_code"] = code
-                    if info["run"] is not None and info["run"].get("stage") in {"STARTING", "TRAINING", "EVALUATING"}:
+                    if info["run"] is not None and info["run"].get("stage") in ACTIVE_WORKER_STAGES:
                         info["run"] = {
                             **info["run"], "stage": "INTERRUPTED",
                             "error": f"worker exited with status {code}",
@@ -554,7 +559,7 @@ class TrainingController:
                     self._cached_at = 0
             else:
                 info["running"] = False
-                if info["run"] is not None and info["run"].get("stage") in {"STARTING", "TRAINING", "EVALUATING"}:
+                if info["run"] is not None and info["run"].get("stage") in ACTIVE_WORKER_STAGES:
                     info["run"] = {
                         **info["run"], "stage": "INTERRUPTED",
                         "error": "Dashboard restarted before this run completed",
