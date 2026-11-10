@@ -126,6 +126,41 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-count b{display:block;font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
 .training-count span{display:block;color:var(--muted);font-size:10px;line-height:1.4;margin-top:5px}
 .training-action{border-left:1px solid var(--line);padding-left:23px}
+.training-forward{padding:22px 24px;margin-top:22px;background:linear-gradient(135deg,rgba(30,65,61,.67),rgba(18,34,39,.9));border:1px solid #2e6257;border-radius:14px}
+.training-forward .training-bar{margin:13px 0 10px}
+.training-launch{display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;padding-top:13px;margin-top:16px;border-top:1px solid #2d514c}
+.training-launch h3{font-size:17px;margin:0 0 4px}
+.training-launch p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
+.training-launch .train-button{min-width:190px;padding:13px 22px;background:#66cdb2;border-radius:10px;color:#10201d;border:none;box-shadow:0 6px 22px rgba(78,196,158,.12)}
+.training-launch .train-button:disabled{background:#2f4855;color:#81929d;box-shadow:none}
+.training-live-panel{background:linear-gradient(180deg,#132029,#111b23);border:1px solid #2c4350;border-radius:14px;margin-top:20px;padding:23px 24px}
+.training-live-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.training-live-head h3{font-size:19px;margin:5px 0 0}
+.training-worker-bar{height:10px;margin-top:16px}
+.training-stage-list{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:19px}
+.training-stage{background:#172730;border:1px solid #304754;border-radius:9px;padding:12px 10px;min-height:70px;transition:background .25s,border-color .25s}
+.training-stage .step-id{display:block;font-size:9px;letter-spacing:1px;color:#8da8aa}
+.training-stage .step-name{font-size:12px;font-weight:700;margin-top:9px}
+.training-stage.done{border-color:#2e7b66;background:#15372f}
+.training-stage.current{border-color:#58d7be;background:#1e403b}
+.training-stage.failed{border-color:#b97864;background:#3c2629}
+.training-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:18px}
+.training-metric{border:1px solid #304b57;background:#172731;border-radius:11px;padding:15px}
+.training-metric h4{margin:0;color:#a5bbbe;font-size:12px;font-weight:600}
+.training-metric strong{display:block;font-size:23px;margin-top:10px;color:#8ae4cc;font-variant-numeric:tabular-nums}
+.training-metric small{color:#a3b9bb;font-size:11px;line-height:1.6}
+.training-outcome{padding:16px 18px;border:1px solid #365260;background:#152731;border-radius:11px;margin-top:17px;font-size:13px;line-height:1.7;white-space:pre-wrap}
+.training-outcome.pass{background:#14342c;border-color:#2a8970;color:#c2f3dd}
+.training-outcome.fail{background:#352529;border-color:#96545a;color:#f6c3c6}
+.training-outcome.pending{background:#353024;border-color:#9d844c;color:#f0ddac}
+.training-legacy-details{margin-top:19px;background:#111d24;border:1px solid #2b4450;border-radius:11px;padding:18px 20px}
+.training-legacy-details>summary{cursor:pointer;font-size:14px;font-weight:650;display:flex;justify-content:space-between;gap:16px;align-items:center}
+.training-legacy-details>summary strong{font-variant-numeric:tabular-nums;color:#8fbaae}
+.training-legacy-details .subtitle{margin-top:12px;font-size:12px}
+.training-legacy-details .training-counts{margin-bottom:4px}
+@media(max-width:800px){.training-stage-list{grid-template-columns:repeat(3,minmax(0,1fr))}.training-launch .train-button{width:100%}}
+@media(max-width:460px){.training-stage-list{grid-template-columns:repeat(2,minmax(0,1fr))}.training-comparison{grid-template-columns:1fr}}
+
 .training-forward{margin-top:20px;padding:18px 20px;border:1px solid #31534d;background:#14231f;border-radius:12px}
 .training-forward-head{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}
 .training-forward-title{font-size:14px;font-weight:700;color:#92e2c8}
@@ -205,45 +240,60 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 </section>
 <section class="card training-card" aria-label="Adaptive model training">
  <div class="training-head">
-  <div><div class="eyebrow">ADAPTIVE LEARNING / MANUAL TRAINING</div><h2>Learning cycle</h2>
-   <p class="subtitle">Three mistake rounds, then one correct-market refresher. Evaluation controls promotion.</p>
+  <div>
+   <div class="eyebrow">TRAIN / MODEL EVOLUTION</div>
+   <h2>Train. Verify. Improve.</h2>
+   <p class="subtitle">One training control. Every stage recorded. Only validated, compatible models can be activated.</p>
   </div>
   <span class="training-pill waiting" id="train-status-pill">CHECKING DATA</span>
  </div>
- <div class="training-cycle" id="train-steps">
-  <div class="training-step active" id="train-step-1"><small>ROUND 1</small><strong>Mistakes</strong></div>
-  <div class="training-step" id="train-step-2"><small>ROUND 2</small><strong>Mistakes</strong></div>
-  <div class="training-step" id="train-step-3"><small>ROUND 3</small><strong>Mistakes</strong></div>
-  <div class="training-step" id="train-step-4"><small>ROUND 4</small><strong>Correct refresher</strong></div>
- </div>
- <div class="training-layout">
-  <div>
-   <div class="training-progress-title"><span id="training-target">Round 1 · Learn from mistakes</span><strong class="training-big-percent" id="training-progress-pct">0%</strong></div>
-   <div class="training-bar" role="progressbar" aria-label="Training data collection readiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-bar"><div id="training-bar-fill"></div></div>
-   <div class="training-detail" id="training-reason">Checking training data and required model files…</div>
-   <div class="training-counts">
-    <div class="training-count"><b id="training-cases">0</b><span>Eligible markets / 12</span></div>
-    <div class="training-count"><b id="training-outcomes">0</b><span>Outcome classes / 2</span></div>
-    <div class="training-count"><b id="training-lockbox">0</b><span>New markets / 20</span></div>
-   </div>
-  </div>
-  <div class="training-action">
-   <h3 id="training-headline">Collecting training data</h3>
-   <p id="training-description">Training remains disabled until verified examples, two settlement classes and a new untouched lockbox are ready.</p>
-   <button class="train-button" type="button" disabled id="train-now">Train Now</button>
-   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
-  </div>
- </div>
  <div class="training-forward" aria-label="Prospective eight-minute predictor training">
-   <div class="training-forward-head">
-     <div class="training-forward-title">Prospective 480s model · verified forward features</div>
-     <strong id="forward-480-progress" class="training-big-percent">0%</strong>
+  <div class="training-forward-head">
+   <div><div class="training-forward-title">Verified 480-second predictor training</div>
+    <div id="forward-480-eligible" class="training-forward-numbers">Checking verified markets…</div>
    </div>
-   <div id="forward-480-eligible" class="training-forward-numbers">Checking 0 / 120 settled, causal feature snapshots</div>
-   <div id="forward-480-reason" class="training-forward-note">Live eight-minute snapshots and official outcomes are checked independently of historical backfill.</div>
-   <button id="forward-480-evaluate" type="button" disabled>Evaluate 480s challenger</button>
-   <div id="forward-480-result" class="training-forward-result" role="status" aria-live="polite">Research-only model fit and later chronological validation; no live promotion or order changes.</div>
+   <strong id="forward-480-progress" class="training-big-percent">0%</strong>
+  </div>
+  <div class="training-bar" aria-label="Evidence readiness"><div id="forward-480-bar-fill"></div></div>
+  <p id="forward-480-reason" class="training-forward-note">Checking independent, settled model evidence.</p>
+  <div class="training-launch">
+   <div>
+    <h3 id="training-headline">Checking training readiness</h3>
+    <p id="training-description">Training will use the eligible verified dataset, never simulated examples.</p>
+   </div>
+   <button class="train-button" type="button" disabled id="train-now">Train Now</button>
+  </div>
  </div>
+ <div class="training-live-panel" aria-label="Training session and validation results">
+  <div class="training-live-head">
+   <div><div class="eyebrow">LIVE TRAINING SESSION</div><h3>Training progress</h3></div>
+   <strong class="training-big-percent" id="training-worker-progress">—</strong>
+  </div>
+  <div class="training-bar training-worker-bar" role="progressbar" aria-label="Completed training milestones" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-worker-bar"><div id="training-worker-bar-fill"></div></div>
+  <div class="training-stage-list" id="training-stage-list" aria-label="Model training milestones"></div>
+  <div class="training-comparison" id="training-comparison" aria-label="Challenger versus current model"></div>
+  <div id="training-outcome" class="training-outcome" role="status" aria-live="polite">No training run yet. Training results will appear here and remain after refreshing the page.</div>
+  <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
+  <div id="forward-480-result" class="training-forward-note">Model training and evaluation are combined into Train Now. A high validation score is not automatically permission for live trading.</div>
+ </div>
+ <details class="training-legacy-details">
+  <summary>Legacy four-round learning cycle <strong id="training-progress-pct">0%</strong></summary>
+  <p class="subtitle">The historical mistake-case cycle is distinct from verified prospective 480-second training.</p>
+  <div class="training-cycle" id="train-steps">
+   <div class="training-step active" id="train-step-1"><small>ROUND 1</small><strong>Mistakes</strong></div>
+   <div class="training-step" id="train-step-2"><small>ROUND 2</small><strong>Mistakes</strong></div>
+   <div class="training-step" id="train-step-3"><small>ROUND 3</small><strong>Mistakes</strong></div>
+   <div class="training-step" id="train-step-4"><small>ROUND 4</small><strong>Correct refresher</strong></div>
+  </div>
+  <div id="training-target" class="training-forward-note">Round 1 · Learn from mistakes</div>
+  <div class="training-bar" role="progressbar" aria-label="Legacy training data readiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-bar"><div id="training-bar-fill"></div></div>
+  <p class="training-detail" id="training-reason">Checking legacy training prerequisites…</p>
+  <div class="training-counts">
+   <div class="training-count"><b id="training-cases">0</b><span>Eligible mistake cases / 12</span></div>
+   <div class="training-count"><b id="training-outcomes">0</b><span>Settled classes / 2</span></div>
+   <div class="training-count"><b id="training-lockbox">0</b><span>New evaluation markets / 20</span></div>
+  </div>
+ </details>
 </section>
 <section aria-label="Final Forecast history">
  <div class="history-header"><div><div class="eyebrow">VERIFIED PERFORMANCE</div><h2>Final forecast history</h2><p class="subtitle">Official Kalshi settlements only · Accuracy = correct ÷ (correct + incorrect)</p></div><span id="history-status" class="subtitle">Loading history…</span></div>
