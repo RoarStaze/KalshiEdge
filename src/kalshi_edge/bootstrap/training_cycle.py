@@ -510,6 +510,72 @@ def run_forward_training_worker(root: Path) -> int:
             return 2
 
 
+def _verified_lockbox_comparison(path: Path) -> dict[str, Any]:
+    """Read only actual saved exchange-lockbox evaluation output for the UI."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        result = payload["report"]
+        gates = result.get("decision_metrics") or {}
+        prefix = "retrain_480_" if result.get("requires_retrain_480_gate") else "volatility_480_"
+        cand = gates.get(prefix + "candidate")
+        prior = gates.get(prefix + "incumbent")
+        if not isinstance(cand, dict) or not isinstance(prior, dict):
+            return {}
+        def view(value: dict) -> dict:
+            total = int(value["total_markets"])
+            qualified = int(value["qualified_markets"])
+            correct = int(value["qualified_correct"])
+            if not (total >= qualified >= correct >= 0):
+                raise ValueError("Invalid lockbox prediction counts")
+            return {
+                "settled_markets": total,
+                "qualified": qualified,
+                "correct": correct,
+                "coverage": qualified/total if total else None,
+                "qualified_accuracy": correct/qualified if qualified else None,
+            }
+        scores = result.get("metrics") or {}
+        return {
+            "candidate_69_gate": view(cand),
+            "incumbent_69_gate": view(prior),
+            "candidate_probability_metrics": scores.get(prefix + "candidate"),
+            "incumbent_probability_metrics": scores.get(prefix + "incumbent"),
+            "validation_source": "HASH_VERIFIED_FRESH_LOCKBOX_480",
+        }
+    except (OSError, ValueError, KeyError, TypeError, ArithmeticError):
+        return {}
+
+
+def _lockbox_rejection_reasons(codes: tuple[str, ...],
+                               comparison: dict[str, Any]) -> list[str]:
+    out = []
+    cand = comparison.get("candidate_69_gate") or {}
+    base = comparison.get("incumbent_69_gate") or {}
+    if cand and base:
+        n = cand.get("settled_markets") or 0
+        ca, ia = cand.get("qualified") or 0, base.get("qualified") or 0
+        cp, ip = cand.get("qualified_accuracy"), base.get("qualified_accuracy")
+        def pct(x: Any) -> str:
+            return f"{x*100:.1f}%" if isinstance(x, (int, float)) else "unavailable"
+        out.append(
+            f"Fresh 480s lockbox: candidate {ca}/{n} qualifying at "
+            f"{pct(cp)} accuracy vs current model {ia}/{n} at "
+            f"{pct(ip)} accuracy."
+        )
+    for code in codes:
+        if code.endswith("COVERAGE_NOT_INCREASED"):
+            out.append("Coverage did not increase: fewer or equal usable forecasts at the 69% gate.")
+        elif code.endswith("QUALIFIED_ACCURACY_NOT_IMPROVED"):
+            out.append("Qualified directional accuracy did not improve at the eight-minute checkpoint.")
+        elif code.endswith("QUALIFIED_ACCURACY_DEGRADED"):
+            out.append("Qualified directional accuracy is worse than the current model.")
+        elif "Brier" in code or "CALIBRATION" in code or "ECE" in code:
+            out.append("Probability quality or calibration gate failed: " + code.replace("_"," ").lower() + ".")
+        else:
+            out.append("Promotion gate: " + code.replace("_"," ").lower() + ".")
+    return out
+
+
 def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: str) -> int:
     """Long-running, explicitly user-triggered train + one-time evaluation."""
 
@@ -609,19 +675,36 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 root, stage="EVALUATING", mode=mode, round_number=round_number,
                 experiment_sha256=experiment.experiment_bundle_sha256,
             )
-            evaluation = run_lockbox_evaluation(root, experiment.experiment_path)
-            _write_worker_state(root, stage="PROMOTION_GATE", mode=mode,
-                                round_number=round_number)
+            def report_progress(stage: str) -> None:
+                if stage not in {"SCORING", "COMPARING", "PROMOTION_GATE"}:
+                    raise CycleError(f"invalid full-model evaluation milestone: {stage}")
+                _write_worker_state(root, stage=stage, mode=mode,
+                                    round_number=round_number)
+
+            evaluation = run_lockbox_evaluation(
+                root, experiment.experiment_path, progress=report_progress,
+            )
+            comparison = _verified_lockbox_comparison(evaluation.report_path)
+            from .model_identity import current_model_identity
+            model_id = current_model_identity(root) if evaluation.decision.promoted else {}
+            rejection = _lockbox_rejection_reasons(
+                evaluation.decision.reason_codes, comparison,
+            )
             _write_worker_state(
                 root, stage="COMPLETE", mode=mode, round_number=round_number,
                 experiment_sha256=experiment.experiment_bundle_sha256,
                 promoted=evaluation.decision.promoted,
+                promoted_model_number=model_id.get("model_number"),
                 decision=("PROMOTED" if evaluation.decision.promoted else "VALIDATION_FAILED"),
-                reasons=list(evaluation.decision.reason_codes) or (
-                    ["Passed all independent lockbox and incumbent checks; "
-                     "hash-sealed model promoted. Restart to activate."]
-                    if evaluation.decision.promoted
-                    else ["Independent lockbox validation did not authorize promotion."]),
+                reasons=(
+                    ["Passed verified lockbox and incumbent checks. "
+                     "Hash-sealed Model #"
+                     + str(model_id.get("model_number") or "?")
+                     + " is installed; restart to use it."]
+                    if evaluation.decision.promoted else
+                    rejection or ["Independent lockbox evaluation did not authorize promotion."]
+                ),
+                results=comparison,
                 reason_codes=list(evaluation.decision.reason_codes),
                 evaluation_report=str(evaluation.report_path),
             )
