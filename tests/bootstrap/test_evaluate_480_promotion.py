@@ -132,3 +132,15 @@ def test_480_subsample_requires_minimum_distinct_markets_before_scoring():
         evaluate._require_horizon_sample(selected,seconds=480,minimum=80)
     selected.append(_row("extra",480,1080))
     evaluate._require_horizon_sample(selected,seconds=480,minimum=80)
+
+
+def test_full_retrain_480_checkpoint_matches_immutable_late_lock_window():
+    # Live final can lock no earlier than 480s and at most 2s after.
+    rows = [
+        _row("late-valid", 478.1, 1000),
+        _row("too-late", 477.9, 1100),
+        _row("pre-lock", 480.1, 1200),
+    ]
+    selected = evaluate._one_checkpoint_per_market(rows, 480)
+    assert [r.market_ticker for r in selected] == ["late-valid"]
+
