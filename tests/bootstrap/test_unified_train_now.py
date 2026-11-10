@@ -141,3 +141,32 @@ def test_forward_worker_interruption_is_detected_after_dashboard_restart(tmp_pat
     assert status["running"] is False
     assert status["run"]["stage"]=="INTERRUPTED"
     assert "restarted" in status["run"]["error"].lower()
+
+
+def test_one_train_now_launches_forward_worker_when_legacy_blocked(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    controller=training_cycle.TrainingController(tmp_path,project_root=tmp_path)
+    monkeypatch.setattr(controller,"_readiness",lambda force=False:{
+        "ready":False,"mode":"mistake","reason":"0/12 mistake cases",
+        "progress_percent":40,
+    })
+    monkeypatch.setattr(forward_learning_480,"inspect_forward_training_readiness",
+                        lambda root:{"ready":True,"reason":"303/120 verified"})
+    monkeypatch.setattr(training_cycle.subprocess,"run",
+                        lambda *args,**kwargs:SimpleNamespace(stdout="a"*40))
+    launched=[]
+    class FakeProcess:
+        pid=998
+        def poll(self):return None
+        def terminate(self):pass
+        def wait(self,timeout=None):return 0
+    def fake_popen(args,**kwargs):
+        launched.append(args)
+        return FakeProcess()
+    monkeypatch.setattr(training_cycle.subprocess,"Popen",fake_popen)
+    result=controller.start()
+    assert result["started"] is True
+    assert result["mode"]=="forward_480"
+    assert launched and launched[0][launched[0].index("--mode")+1]=="forward_480"
+    assert training_cycle._run_state(tmp_path)["stage"]=="STARTING"
+    controller.stop()
