@@ -85,4 +85,4 @@ def test_browser_rainbow_follows_card_perimeter_and_animates(tmp_path):
     import re
     match=re.search(r'data-rainbow-probe="([^"]+)"',p.stdout)
     assert match is not None, "Browser probe did not execute: " + p.stderr[-1200:]
-    assert match.group(1)=="true,true,true,true,true,true", (match.group(1), re.search(r\'data-rainbow-debug="([^"]+)"\',p.stdout).group(1))
+    assert match.group(1)=="true,true,true,true,true,true", (match.group(1), p.stdout[p.stdout.find("data-rainbow-debug="):][:120])
