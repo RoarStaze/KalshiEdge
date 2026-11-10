@@ -308,7 +308,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     same_run = (prior is not None and prior.get("round_number") == round_number
                 and prior.get("mode") == mode)
     retained = {}
-    if same_run:
+    if same_run and stage != "STARTING":
         retained = {
             key: prior[key] for key in (
                 "log_path", "worker_pid", "started_utc"
@@ -318,7 +318,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     percent = WORKER_STAGE_PROGRESS.get(
         stage, int(prior.get("progress_percent", 0)) if same_run else 0
     )
-    events = list(prior.get("events", [])) if same_run else []
+    events = list(prior.get("events", [])) if same_run and stage != "STARTING" else []
     if not events or events[-1].get("stage") != stage:
         events.append({"stage": stage, "at_utc": now, "progress_percent": percent})
     retained.setdefault("started_utc", now)
@@ -526,6 +526,15 @@ class TrainingController:
                     }
                 self._forward_at = now
             info["forward_480"] = dict(self._forward_cached)
+            selected = _select_training_mode(info, info["forward_480"])
+            info["selected_mode"] = selected
+            info["train_available"] = selected is not None
+            info["train_reason"] = (
+                "Verified forward 480s data ready for supervised training and validation."
+                if selected == FORWARD_MODE else
+                info.get("reason") if selected is None else
+                "Learning cycle ready for independent lockbox training and promotion evaluation."
+            )
             info["run"] = _run_state(self.root)
             if self._process is not None:
                 code = self._process.poll()
@@ -557,8 +566,20 @@ class TrainingController:
             if self._process is not None and self._process.poll() is None:
                 raise CycleError("a training session is already running")
             info = self._readiness(force=True)
-            if not info["ready"]:
-                raise CycleError(info["reason"])
+            from .forward_learning_480 import inspect_forward_training_readiness
+            forward = inspect_forward_training_readiness(self.root)
+            self._forward_cached = forward
+            self._forward_at = time.monotonic()
+            selected = _select_training_mode(info, forward)
+            if selected is None:
+                raise CycleError(
+                    "No eligible training path: historical cycle: "
+                    + str(info.get("reason", "unavailable"))
+                    + " | verified 480s: "
+                    + str(forward.get("reason", "unavailable"))
+                )
+            active_round = 0 if selected == FORWARD_MODE else info["round_number"]
+            active_mode = selected
 
             git = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=self.project_root,
@@ -567,13 +588,13 @@ class TrainingController:
             if len(git) != 40 or any(c not in "0123456789abcdef" for c in git.lower()):
                 raise CycleError("cannot verify current repository Git SHA")
             logfile = self.root / "training_runs" / (
-                f"round-{info['round_number']:04d}-{int(time.time())}.log"
+                f"{'forward-480' if selected == FORWARD_MODE else 'round-'+str(active_round).zfill(4)}-{int(time.time_ns())}.log"
             )
             logfile.parent.mkdir(parents=True, exist_ok=True)
             self._log_handle = logfile.open("ab")
             _write_worker_state(
                 self.root, stage="STARTING",
-                mode=info["mode"], round_number=info["round_number"],
+                mode=active_mode, round_number=active_round,
                 log_path=str(logfile),
             )
             try:
@@ -583,8 +604,8 @@ class TrainingController:
                 self._process = subprocess.Popen(
                     [
                         sys.executable, "-m", "kalshi_edge.bootstrap.training_cycle",
-                        "--worker", "--root", str(self.root), "--mode", info["mode"],
-                        "--round-number", str(info["round_number"]),
+                        "--worker", "--root", str(self.root), "--mode", active_mode,
+                        "--round-number", str(active_round),
                         "--git-sha", git,
                     ],
                     cwd=self.project_root,
@@ -594,8 +615,8 @@ class TrainingController:
                     creationflags=priority,
                 )
                 _write_worker_state(
-                    self.root, stage="STARTING", mode=info["mode"],
-                    round_number=info["round_number"],
+                    self.root, stage="STARTING", mode=active_mode,
+                    round_number=active_round,
                     worker_pid=self._process.pid,
                     log_path=str(logfile),
                 )
@@ -605,8 +626,8 @@ class TrainingController:
                 raise
             return {
                 "started": True,
-                "round_number": info["round_number"],
-                "mode": info["mode"],
+                "round_number": active_round,
+                "mode": active_mode,
                 "worker_pid": self._process.pid,
                 "log_path": str(logfile),
             }
@@ -631,10 +652,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Internal supervised KalshiEdge learning-cycle worker")
     parser.add_argument("--worker", action="store_true", required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("mistake", "correct"), required=True)
+    parser.add_argument("--mode", choices=("mistake", "correct", FORWARD_MODE), required=True)
     parser.add_argument("--round-number", type=int, required=True)
     parser.add_argument("--git-sha", required=True)
     args = parser.parse_args()
+    if args.mode == FORWARD_MODE:
+        if args.round_number != 0:
+            raise CycleError("invalid forward-training round identity")
+        return run_forward_training_worker(args.root)
     return run_training_worker(
         args.root, mode=args.mode,
         round_number=args.round_number, git_sha=args.git_sha,
