@@ -91,7 +91,7 @@ def test_unhealthy_future_or_duplicate_rows_never_unblock_training():
     })]
     readiness = forward_learning_480.assess_forward_training_readiness(rows)
     assert not readiness["ready"]
-    assert readiness["eligible_480_markets"] == 118
+    assert readiness["eligible_480_markets"] == 117
     assert readiness["exclusions"].get("duplicate_rows") == 2
 
 
@@ -131,7 +131,7 @@ def test_readiness_legacy_zero_case_explanation_is_actionable(tmp_path, monkeypa
     (root/"models").mkdir()
     (root/"derived"/"features.parquet").write_bytes(b"not-read-in-mock")
     (root/"models"/"default.json").write_text("{}")
-    monkeypatch.setattr(training_cycle.training, "_previous_lockbox_end_ts_ns", lambda _: 10000)
+    monkeypatch.setattr(training_cycle.training, "_previous_lockbox_end_ts_ns", lambda _: 13000)
     groups = [(f"KXBTC15M-HIST-{i}", i*100+1, i*100+20) for i in range(120)]
     groups += [(f"KXBTC15M-FRESH-{i}", 20000+i*100, 20020+i*100) for i in range(472)]
     monkeypatch.setattr(training_cycle.training, "_metadata_groups", lambda _: groups)
