@@ -1126,7 +1126,7 @@ class TrainingController:
                 raise CycleError("missing verified training resume identity")
             training_pause.clear_pause(self.root, run_id=run_id)
             result = self._launch_existing(saved, resume=True)
-            return {**result, "resumed": True}
+            return {**(result or {}), "resumed": True}
 
     def recover(self) -> bool:
         """Auto-resume only training interrupted by closing the application."""
