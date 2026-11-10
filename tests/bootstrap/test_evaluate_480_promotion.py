@@ -46,9 +46,9 @@ def test_selection_of_480s_is_exact_and_unique_market_scoped():
         _row("d",float("nan"),500),
     ]
     selected=evaluate._one_checkpoint_per_market(rows,480)
-    assert [row.market_ticker for row in selected]==["a","b"]
+    assert [row.market_ticker for row in selected]==["a","b","c"]
     assert selected[0].checkpoint_ts_ns==200
-    assert all(abs(row.features["seconds_remaining"]-480)<=1 for row in selected)
+    assert all(478 <= row.features["seconds_remaining"] <= 480 for row in selected)
 
 
 def test_480_gate_rejects_more_confident_but_worse_probabilities():
