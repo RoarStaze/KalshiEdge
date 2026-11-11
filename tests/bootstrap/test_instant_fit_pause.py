@@ -23,6 +23,14 @@ class FakeWorker:
         return 0
 
 
+@pytest.fixture(autouse=True)
+def fake_os_identity(monkeypatch):
+    monkeypatch.setattr(training_cycle.training_process_control,"identity",
+                        lambda pid:f"fake-start:{pid}")
+    monkeypatch.setattr(training_cycle.training_process_control,"is_alive",
+                        lambda pid,token:token==f"fake-start:{pid}")
+
+
 def setup_controller(root, stage="TRAINING"):
     controller=training_cycle.TrainingController(root,project_root=root)
     process=FakeWorker()
@@ -30,6 +38,7 @@ def setup_controller(root, stage="TRAINING"):
     training_cycle._write_worker_state(
         root,stage=stage,mode="baseline",round_number=0,
         run_id="live-run-1",git_sha="a"*40,worker_pid=process.pid,
+        worker_identity=f"fake-start:{process.pid}",
         fit_steps_completed=3,fit_steps_total=25,
         fit_step_detail="Optimizing xgboost fold 2",
     )
@@ -98,7 +107,7 @@ def test_dataset_pause_stays_at_verified_checkpoint_not_unsafe_process_suspensio
     assert controller.progress()["running"] is True
 
 
-def test_stop_thaws_suspended_worker_before_shutdown(tmp_path,monkeypatch):
+def test_manual_pause_survives_app_close_then_resumes_same_in_memory_fit(tmp_path,monkeypatch):
     controller,process=setup_controller(tmp_path)
     called=[]
     monkeypatch.setattr(training_cycle.training_process_control,"suspend",
@@ -107,11 +116,23 @@ def test_stop_thaws_suspended_worker_before_shutdown(tmp_path,monkeypatch):
                         lambda pid:called.append(("resume",pid)))
     assert controller.pause()["paused"] is True
     controller.stop()
-    assert called==[("suspend",process.pid),("resume",process.pid)]
-    assert process.wait_calls==[2]
+    assert called==[("suspend",process.pid)]
+    assert process.wait_calls==[]
     assert controller._process is None
     assert controller._suspended is False
     assert training_pause.read_pause(tmp_path)["manual"] is True
+
+    # New dashboard adopts the frozen worker by PID + creation identity.
+    reopened=training_cycle.TrainingController(tmp_path,project_root=tmp_path)
+    monkeypatch.setattr(reopened,"_git_sha",lambda:"a"*40)
+    monkeypatch.setattr(reopened,"_launch_existing",
+                        lambda *a,**k:pytest.fail("must resume original fit"))
+    assert reopened.recover() is False  # manual pause remains manual
+    assert reopened.progress()["paused"] is True
+    resumed=reopened.resume()
+    assert resumed["in_memory"] is True
+    assert called==[("suspend",process.pid),("resume",process.pid)]
+    assert reopened.progress()["running"] is True
 
 
 def test_suspended_progress_is_never_incorrectly_reported_as_running(tmp_path,monkeypatch):
@@ -133,3 +154,48 @@ def test_training_ui_recognizes_immediately_paused_response():
     from kalshi_edge.bootstrap.dashboard_ui import PAGE
     assert 'result.paused===true' in PAGE
     assert 'trainingStatus?.paused' in PAGE or 'await refreshTraining()' in PAGE
+
+
+def test_active_fit_auto_suspends_on_close_and_auto_resumes_on_reopen(tmp_path,monkeypatch):
+    controller,worker=setup_controller(tmp_path)
+    called=[]
+    monkeypatch.setattr(training_cycle.training_process_control,"suspend",
+                        lambda pid:called.append(("suspend",pid)))
+    monkeypatch.setattr(training_cycle.training_process_control,"resume",
+                        lambda pid:called.append(("resume",pid)))
+    controller.stop()
+    assert called==[("suspend",worker.pid)]
+    state=training_cycle._run_state(tmp_path)
+    assert state["stage"]=="PAUSED"
+    assert state["suspended_in_memory"] is True
+    assert state["resume_stage"]=="TRAINING"
+    assert training_pause.read_pause(tmp_path)["manual"] is False
+    reopened=training_cycle.TrainingController(tmp_path,project_root=tmp_path)
+    monkeypatch.setattr(reopened,"_git_sha",lambda:"a"*40)
+    monkeypatch.setattr(reopened,"_launch_existing",
+                        lambda *a,**k:pytest.fail("restarted instead of thawing worker"))
+    assert reopened.recover() is True
+    assert called[-1]==("resume",worker.pid)
+    assert reopened.progress()["running"] is True
+    assert reopened.progress()["run"]["stage"]=="TRAINING"
+
+
+def test_stale_pid_is_not_suspended_or_adopted_on_reopen(tmp_path,monkeypatch):
+    controller,worker=setup_controller(tmp_path)
+    monkeypatch.setattr(training_cycle.training_process_control,"is_alive",
+                        lambda pid,token:False)
+    monkeypatch.setattr(training_cycle.training_process_control,"suspend",
+                        lambda pid:pytest.fail("must not suspend stale PID"))
+    response=controller.pause()
+    assert response["immediate"] is False
+    assert response["pause_requested"] is True
+    assert training_cycle._run_state(tmp_path)["stage"]=="TRAINING"
+
+
+def test_process_identity_rejects_invalid_and_recycled_pid(monkeypatch):
+    from kalshi_edge.bootstrap import training_process_control as control
+    with pytest.raises(control.ProcessControlError):
+        control.identity(0)
+    with pytest.raises(control.ProcessControlError):
+        control.suspend(0)
+    assert control.is_alive(2147483001,"recycled") is False
