@@ -969,7 +969,11 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                     experiment_sha256=bundle.bundle_sha256,
                 )
             else:
-                _pause_boundary(root, stage="TRAINING", mode=mode, round_number=round_number)
+                _pause_boundary(
+                    root, stage="TRAINING", mode=mode, round_number=round_number,
+                    fit_steps_completed=0, fit_steps_total=0,
+                    fit_step_detail="Preparing verified model-fitting inputs",
+                )
                 on_fit_progress = _fit_progress_reporter(
                     root, mode=mode, round_number=round_number,
                 )
