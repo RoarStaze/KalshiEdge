@@ -486,14 +486,18 @@ class ManualTrader:
             return None
 
     def place_auto_value(self, preview_id, current_ticker, *,
-                         confidence: float, prefer_maker: bool = False):
+                         confidence: float, prefer_maker: bool = False,
+                         client_order_id: str | None = None):
         """Profit-gated AutoTrade: bounded maker first, verified IOC if no passive quote."""
         if prefer_maker and callable(getattr(self.client, "send_resting_order", None)):
-            return self._place_auto_maker(preview_id, current_ticker, confidence)
+            return self._place_auto_maker(preview_id, current_ticker, confidence,
+                                          client_order_id=client_order_id)
         return self._place(preview_id, current_ticker,
-                           auto_reprice_buy=True, edge_confidence=confidence)
+                           auto_reprice_buy=True, edge_confidence=confidence,
+                           client_order_id=client_order_id)
 
-    def _place_auto_maker(self, preview_id, current_ticker, confidence):
+    def _place_auto_maker(self, preview_id, current_ticker, confidence, *,
+                          client_order_id: str | None = None):
         """At most ONE maker POST. Remote expiry caps outstanding order lifetime.
 
         If a maker quote cannot be constructed before any POST, fall back
@@ -537,14 +541,15 @@ class ManualTrader:
             # Nothing posted yet: the ordinary IOC path STILL applies its
             # own fresh quote, budget and positive net-EV validations.
             return self._place(preview_id, current_ticker,
-                               auto_reprice_buy=True, edge_confidence=confidence)
+                               auto_reprice_buy=True, edge_confidence=confidence,
+                               client_order_id=client_order_id)
         # Consume the held preview atomically BEFORE any exchange POST.
         with self._lock:
             popped = self._pending.pop(preview_id, None)
         if popped is not data or time.monotonic() - data["at"] > QUOTE_LIFETIME_SECONDS:
             raise OrderNotSubmitted("Maker quote expired before submission")
         request = {
-            "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
+            "ticker": data["ticker"], "client_order_id": client_order_id or str(uuid.uuid4()),
             "side": plan["side"], "count": plan["count"], "price": plan["price"],
         }
         expiry = int(time.time()) + 18
@@ -577,7 +582,8 @@ class ManualTrader:
         }
 
     def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool,
-               edge_confidence: float | None = None):
+               edge_confidence: float | None = None,
+               client_order_id: str | None = None):
         # Atomically consume BEFORE doing anything that may submit an order.
         with self._lock:
             data = self._pending.pop(preview_id, None)
@@ -647,7 +653,7 @@ class ManualTrader:
             raise OrderNotSubmitted(reason) from exc
         # A short-lived, explicitly clicked action makes ONE signed POST.
         order = {
-            "ticker": data["ticker"], "client_order_id": str(uuid.uuid4()),
+            "ticker": data["ticker"], "client_order_id": client_order_id or str(uuid.uuid4()),
             "side": working["side"], "price": working["price"], "count": working["count"],
             "reduce_only": data["action"] == "SELL",
         }

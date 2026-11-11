@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import threading
 import time
+import uuid
 from typing import Callable
 
 from .autotrade_history import AutoTradeHistory
@@ -22,7 +23,7 @@ from .autotrade_scorecard import summarize_autotrade_performance
 from .profit_intelligence import build_profit_intelligence
 from .auto_edge import assess_auto_buy_edge, suggest_auto_stake
 from .autotrade_execution_audit import sanitize_quote_snapshot
-from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted
+from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted, ManualTrader
 from kalshi_edge.bootstrap.final_forecast import FINAL_CHECKPOINT_SECONDS
 
 LOG = logging.getLogger(__name__)
@@ -366,6 +367,9 @@ class ArmedAutoTrader:
             if self._state.get("ticker") != ticker or self._state["state"] != "EXECUTING":
                 return "NO_QUOTE", {}
         first = not self._attempted(ticker)
+        # The same exchange client ID must survive a lost POST response.
+        client_order_id = (str(uuid.uuid4()) if action == "BUY" and
+                           isinstance(self.manual, ManualTrader) else None)
         # Record intent BEFORE POST: a crash cannot replay this stage after restart.
         try:
             if self.history_store:
@@ -376,7 +380,7 @@ class ArmedAutoTrader:
                 self.history_store.record_stage_attempt(
                     ticker=ticker, stage=stage, attempted_at_ns=self.now_ns(),
                     outcome=side, amount=amount, confidence=confidence,
-                    quote=quote_evidence)
+                    quote=quote_evidence, client_order_id=client_order_id)
             with self._lock:
                 self._used.add(ticker)
         except Exception:
@@ -388,10 +392,13 @@ class ArmedAutoTrader:
             value_place = getattr(self.manual, "place_auto_value", None)
             auto_place = getattr(self.manual, "place_auto", None)
             if action == "BUY" and callable(value_place):
-                result = value_place(
-                    preview["preview_id"], ticker, confidence=confidence,
-                    prefer_maker=(stage == "FINAL_BUY" and maker_approved),
-                )
+                kwargs = {
+                    "confidence": confidence,
+                    "prefer_maker": stage == "FINAL_BUY" and maker_approved,
+                }
+                if client_order_id is not None:
+                    kwargs["client_order_id"] = client_order_id
+                result = value_place(preview["preview_id"], ticker, **kwargs)
             elif callable(auto_place):
                 result = auto_place(preview["preview_id"],ticker)
             else:
