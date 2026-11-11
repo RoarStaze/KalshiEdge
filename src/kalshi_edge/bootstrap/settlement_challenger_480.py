@@ -234,15 +234,21 @@ def build_settlement_shadow(
             except (TypeError, ValueError, OverflowError):
                 reason = "MISSING_OR_INVALID_CAUSAL_BRTI_VOLATILITY"
 
-    fields: dict[str, Any] = {}
+    fields: dict[str, Any] = {
+        "brti_value": None,
+        "source_ts_ns": None,
+        "sigma_per_sqrt_second": None,
+        "sigma_observed_seconds": None,
+        "sigma_observation_count": None,
+    }
     if source is not None:
-        fields = {
+        fields.update({
             "brti_value": source[0],
             "source_ts_ns": source[1],
             "sigma_per_sqrt_second": source[2],
             "sigma_observed_seconds": source[3],
             "sigma_observation_count": source[4],
-        }
+        })
     payload = {
         "schema_version": SCHEMA,
         "policy_id": POLICY_ID,
