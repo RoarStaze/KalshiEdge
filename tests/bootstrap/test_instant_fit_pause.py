@@ -275,6 +275,40 @@ def test_resume_live_frozen_fit_rejects_changed_training_code(tmp_path, monkeypa
     assert training_pause.read_pause(tmp_path)["pause_requested"] is True
 
 
+def test_resume_frozen_fit_after_controller_only_update(tmp_path, monkeypatch):
+    """A new dashboard controller does not replace the old suspended worker."""
+    worker_and_main = (
+        "def worker():\n    return 1\n\n"
+        "class TrainingController:\n    pass\n\n"
+        "def main() -> int:\n    return 0\n"
+    )
+    repo, old_sha = _commit_training_source(
+        tmp_path, training_source=worker_and_main,
+    )
+    controller, process = setup_controller(tmp_path)
+    controller.project_root = repo
+    training_cycle._write_worker_state(
+        tmp_path, stage="TRAINING", mode="baseline", round_number=0,
+        git_sha=old_sha,
+    )
+    monkeypatch.setattr(training_cycle.training_process_control, "suspend", lambda pid: None)
+    resumed = []
+    monkeypatch.setattr(training_cycle.training_process_control, "resume",
+                        lambda pid: resumed.append(pid))
+    assert controller.pause()["paused"] is True
+
+    controller_only = worker_and_main.replace(
+        "class TrainingController:\n    pass",
+        "class TrainingController:\n    def resume(self):\n        return True",
+    )
+    _commit_training_source(
+        tmp_path, training_source=controller_only, readme="controller-only fix",
+    )
+    assert controller.resume()["in_memory"] is True
+    assert resumed == [process.pid]
+    assert training_cycle._run_state(tmp_path)["git_sha"] == old_sha
+
+
 def test_paused_disk_checkpoint_still_rejects_git_version_change(tmp_path, monkeypatch):
     """Never restart an old on-disk experiment under newly changed code."""
     controller = training_cycle.TrainingController(tmp_path, project_root=tmp_path)
