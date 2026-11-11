@@ -1,0 +1,11 @@
+# Viewport-fit Train page and isolated test preview
+
+**Goal.** Make Train a single-screen desktop dashboard, and provide `kalshiedge test` in a second terminal while the real KalshiEdge installation continues to train.
+
+**Decisions.** On desktop at least 1101px wide and 761px high, lay out the existing Train header over two columns containing the readiness card and seven-stage training panel. Tighten spacing and font sizes, not hide stage counters or controls. Use `height:100dvh` on the page and avoid page scrolling there. On smaller windows allow natural scrolling instead of cutting off essential control/status text.
+
+**Test website.** Introduce a dedicated localhost-only read-only test server, default port 8900. It uses the exact current templates but responds with conspicuously labeled synthetic preview data. Every HTTP POST returns 403; credentials are never read, modified, or accepted. It never starts the predictor, trainer, settlement polling, paper trader, or API client, never touches training lock or state, and does not share process lifecycle with `kalshiedge start`. It may read only the optional local neon background image for visual fidelity. Do not use port 8899, even if the main dashboard is absent. Port collisions fail rather than reuse or stop another server.
+
+**Safety.** The only file-backed access allowed in preview is an allowlisted optional WebP image. The server binds to 127.0.0.1. No external connections, local subprocesses, or file writes. Explicit preview banner and disabled actions differentiate synthetic data from a live prediction. Tests verify no live-source mutations.
+
+**Deployment without interrupting a running trainer.** Update GitHub `main`; for a still-running local copy, fetch (without `git pull`) and create a separate detached worktree with `origin/main`. In a new PowerShell, set `PYTHONPATH` to the preview worktree's `src` and activate the already-installed console entrypoint, then run `kalshiedge test`. This avoids replacing importable files of the active process. The usual git pull may wait until the training session finishes.
