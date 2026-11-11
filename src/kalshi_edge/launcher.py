@@ -306,10 +306,21 @@ def main(argv: list[str] | None = None) -> int:
     command = sub.add_parser("start", help="start predictor, settlement tracking and unified local dashboard")
     command.add_argument("--no-browser", action="store_true", help="do not open the dashboard browser tab")
     command.add_argument("--port", type=int, default=DASHBOARD_PORT, help="dashboard TCP port (default 8899)")
+    preview = sub.add_parser("test", help="open a standalone synthetic, read-only test website (never touches live training)")
+    preview.add_argument("--no-browser", action="store_true", help="print the preview URL without opening a tab")
+    preview.add_argument("--port", type=int, default=8900, help="preview-only TCP port (default 8900)")
     args = parser.parse_args(argv)
 
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
+    if args.command == "test":
+        from .bootstrap.preview_site import run_test_preview
+        # READ ONLY: the optional image is the only path consulted. No locks,
+        # trainer, predictor, settlement poller, credentials or database opened.
+        image = BootstrapSettings().bootstrap_dir / "assets" / "kalshiedge-neon-city.webp"
+        return run_test_preview(
+            port=args.port, open_browser=not args.no_browser, asset_path=image,
+        )
     return start(port=args.port, open_browser=not args.no_browser)
 
 

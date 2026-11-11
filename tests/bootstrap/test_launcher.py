@@ -214,3 +214,24 @@ def test_preserving_suspended_worker_stops_only_dashboard_not_children(monkeypat
     launcher._stop(process,preserve_children=True)
     assert process.stopped
     assert calls==[]
+
+
+def test_test_command_runs_only_preview_without_production_services(tmp_path, monkeypatch):
+    """Second PowerShell preview never starts the production supervisor."""
+    from kalshi_edge.bootstrap import preview_site
+    from types import SimpleNamespace
+    monkeypatch.setattr(launcher, "BootstrapSettings",
+                        lambda: SimpleNamespace(bootstrap_dir=tmp_path / "live-data"))
+    called=[]
+    monkeypatch.setattr(preview_site, "run_test_preview",
+                        lambda **kwargs: called.append(kwargs) or 0)
+    monkeypatch.setattr(launcher, "start", Mock(side_effect=AssertionError("must not start live service")))
+    monkeypatch.setattr(launcher, "_request_training_shutdown",
+                        Mock(side_effect=AssertionError("must not pause live trainer")))
+    assert launcher.main(["test","--no-browser"])==0
+    assert called==[{
+        "port":8900,"open_browser":False,
+        "asset_path":tmp_path/"live-data"/"assets"/"kalshiedge-neon-city.webp",
+    }]
+    assert launcher.main(["test","--no-browser","--port","8901"])==0
+    assert called[-1]["port"]==8901
