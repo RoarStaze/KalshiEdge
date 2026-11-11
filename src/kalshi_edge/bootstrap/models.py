@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .metrics import ProbabilityMetrics, probability_metrics
 from .splits import WalkForwardSplit
@@ -258,6 +258,8 @@ def train_candidate_models(
     dataset: Sequence[FeatureRow],
     splits: Sequence[WalkForwardSplit],
     seed: int,
+    *,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> CandidateResults:
     rows = tuple(dataset)
     if not rows:
@@ -277,6 +279,11 @@ def train_candidate_models(
     x = _row_matrix(rows, feature_names)
     y = [row.label_yes for row in rows]
 
+    fit_total = len(CANDIDATE_NAMES) * (len(splits) + 1)
+    fitted_count = 0
+    if progress is not None:
+        progress(0, fit_total, "Starting walk-forward candidate fits")
+
     oof: dict[str, list[float | None]] = {name: [None] * len(rows) for name in CANDIDATE_NAMES}
     selected: dict[str, list[dict[str, Any]]] = {name: [] for name in CANDIDATE_NAMES}
 
@@ -286,6 +293,11 @@ def train_candidate_models(
         if not train_rows or not validation_rows:
             raise ModelError("walk-forward fold has empty train or validation rows")
         for name in CANDIDATE_NAMES:
+            if progress is not None:
+                progress(
+                    fitted_count, fit_total,
+                    f"Optimizing {name} for walk-forward fold {fold_number + 1}/{len(splits)}",
+                )
             params = _select_params(name, rows, groups, fold.train_indices, feature_names, seed + fold_number)
             selected[name].append(dict(params))
             fitted = _fit_candidate(
@@ -300,6 +312,9 @@ def train_candidate_models(
                 if oof[name][row_index] is not None:
                     raise ModelError("OOF prediction would overwrite an earlier validation prediction")
                 oof[name][row_index] = probability
+            fitted_count += 1
+            if progress is not None:
+                progress(fitted_count, fit_total, f"Completed {name} walk-forward fold {fold_number + 1}/{len(splits)}")
 
     oof_metrics: dict[str, ProbabilityMetrics] = {}
     for name in CANDIDATE_NAMES:
@@ -314,6 +329,8 @@ def train_candidate_models(
 
     final_models: dict[str, object] = {}
     for name in CANDIDATE_NAMES:
+        if progress is not None:
+            progress(fitted_count, fit_total, f"Fitting final {name} model")
         params = selected[name][-1]
         final_models[name] = _fit_candidate(
             name,
@@ -322,6 +339,9 @@ def train_candidate_models(
             [y[index] for index in development_rows],
             seed,
         )
+        fitted_count += 1
+        if progress is not None:
+            progress(fitted_count, fit_total, f"Completed final {name} candidate fit")
 
     return CandidateResults(
         candidate_names=CANDIDATE_NAMES,

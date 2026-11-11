@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
@@ -533,9 +533,14 @@ def _resolved_git_sha(explicit: str | None = None) -> str:
 def _build_experiment_bundle(
     root: Path, settings: BootstrapSettings, *, git_sha: str,
     mistakes_only: bool = False, correct_only: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> artifact.ModelBundle:
+    kwargs: dict[str, Any] = {}
+    if progress is not None:
+        kwargs["progress"] = progress
     return training.build_experiment_bundle(
-        root, settings, git_sha=git_sha, mistakes_only=mistakes_only, correct_only=correct_only,
+        root, settings, git_sha=git_sha, mistakes_only=mistakes_only,
+        correct_only=correct_only, **kwargs,
     )
 
 
@@ -546,6 +551,7 @@ def train_experiment(
     git_sha: str | None = None,
     mistakes_only: bool = False,
     correct_only: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> BootstrapTrainingReport:
     """Train and save an experiment bundle without reading/evaluating the lockbox."""
     root = root.resolve()
@@ -556,6 +562,8 @@ def train_experiment(
     kwargs = {"mistakes_only": mistakes_only}
     if correct_only:
         kwargs["correct_only"] = True
+    if progress is not None:
+        kwargs["progress"] = progress
     bundle = _build_experiment_bundle(root, settings, git_sha=resolved_sha, **kwargs)
     if bundle.stage != "experiment":
         raise EvaluationError("training must produce an experiment bundle")
