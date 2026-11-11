@@ -456,13 +456,13 @@ def _resume_experiment_path(root: Path, saved: dict[str, Any]) -> Path | None:
 def _market_progress_reporter(
     root: Path, *, mode: str, round_number: int,
     clock: Callable[[], float] = time.monotonic,
-    min_markets: int = 3, min_interval_seconds: float = 0.25,
+    min_markets: int = 1, min_interval_seconds: float = 0.25,
     run_id: str | None = None, initial_completed: int = 0,
 ) -> Callable[[int, int, str, str], None]:
     """Stream verified market-file and feature-build counts independently.
 
     Publish the first count of each phase immediately, followed by every
-    three items and at most four disk updates per second. Keep the fast
+    one item when time allows and at most four disk updates per second. Keep the fast
     worker-only endpoint independent of expensive training readiness checks.
     """
     if min_markets < 1 or min_interval_seconds < 0:

@@ -57,7 +57,8 @@ def test_cinematic_background_keeps_no_extra_particles():
         assert 'id="ke-live-canvas"' not in html
         assert "ke-live-beam" not in html
         assert "ke-live-grid" not in html
-        assert "requestAnimationFrame" not in html
+        assert "ke-live-canvas" not in html
+        assert "tickVerifiedMarketCounter" in html  # training UI motion, not backdrop
         assert 'url("/assets/kalshiedge-neon-city.webp")' in html
 
 
