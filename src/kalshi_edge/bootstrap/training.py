@@ -17,7 +17,7 @@ import pickle
 import platform
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from . import artifact, calibration, models, structural, volatility
 from .config import BootstrapSettings
@@ -988,6 +988,7 @@ def _required_bundle_features(outcome_features: Sequence[str], dataset_features:
 def build_experiment_bundle(
     root: Path, settings: BootstrapSettings, *, git_sha: str,
     mistakes_only: bool = False, correct_only: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> artifact.ModelBundle:
     context = _verified_context(root, mistakes_only=mistakes_only, correct_only=correct_only)
     pre_lockbox_rows = _read_rows_before_lockbox(context)
@@ -1013,19 +1014,51 @@ def build_experiment_bundle(
         raise TrainingError("development/calibration leakage audit failed")
     splits = _development_splits(development_rows, context.plan.development_groups)
 
-    full_result = models.train_candidate_models(development_rows, splits, seed=settings.random_seed)
+    # Four candidate passes, each with one actual fit per candidate/fold
+    # plus final fits, followed by eight completed model assembly operations.
+    # These are real operation counts, never an estimated time percentage.
+    candidate_batch_total = (len(splits) + 1) * len(models.CANDIDATE_NAMES)
+    fit_total = candidate_batch_total * 4 + 8
+    fit_completed = 0
+
+    def mark(detail: str) -> None:
+        nonlocal fit_completed
+        fit_completed += 1
+        if progress is not None:
+            progress(fit_completed, fit_total, detail)
+
+    def fit_candidates(rows: Sequence[FeatureRow], family: str) -> models.CandidateResults:
+        nonlocal fit_completed
+        start = fit_completed
+        if progress is None:
+            result = models.train_candidate_models(rows, splits, seed=settings.random_seed)
+        else:
+            def on_candidate(completed: int, total: int, detail: str) -> None:
+                if total != candidate_batch_total:
+                    raise TrainingError("candidate fit operation count changed unexpectedly")
+                progress(start + completed, fit_total, f"{family}: {detail}")
+            result = models.train_candidate_models(
+                rows, splits, seed=settings.random_seed, progress=on_candidate,
+            )
+        fit_completed = start + candidate_batch_total
+        return result
+
+    if progress is not None:
+        progress(0, fit_total, "Preparing verified training partitions and feature rows")
+    mark("Prepared leakage-safe training partitions")
+    full_result = fit_candidates(development_rows, "Full feature set")
     no_btc_rows = _filtered_rows(development_rows, remove_btc=True)
-    no_btc_result = models.train_candidate_models(no_btc_rows, splits, seed=settings.random_seed)
+    no_btc_result = fit_candidates(no_btc_rows, "Without external BTC features")
     btc_ablation = _family_ablation("external_btc_features", full_result, no_btc_result, development_rows, no_btc_rows)
 
     no_flow_rows = _filtered_rows(development_rows, remove_kalshi_flow=True)
-    no_flow_result = models.train_candidate_models(no_flow_rows, splits, seed=settings.random_seed)
+    no_flow_result = fit_candidates(no_flow_rows, "Without Kalshi flow features")
     flow_ablation = _family_ablation("kalshi_flow_features", full_result, no_flow_result, development_rows, no_flow_rows)
 
     remove_btc = not btc_ablation.retained
     remove_flow = not flow_ablation.retained
     active_rows = _filtered_rows(development_rows, remove_btc=remove_btc, remove_kalshi_flow=remove_flow)
-    active_result = models.train_candidate_models(active_rows, splits, seed=settings.random_seed)
+    active_result = fit_candidates(active_rows, "Selected active features")
 
     lower_variance = min(
         ("logistic", "hist_gradient_boosting"),
@@ -1040,6 +1073,7 @@ def build_experiment_bundle(
     outcome_model = active_result.final_models[outcome_name]
     logistic_model = active_result.final_models["logistic"]
     outcome_features = active_result.feature_names
+    mark("Selected candidate model and feature ablations")
 
     structural_model, structural_oof, structural_name = _structural_training(
         development_rows,
@@ -1047,6 +1081,7 @@ def build_experiment_bundle(
         splits,
         seed=settings.random_seed,
     )
+    mark("Fitted structural model and out-of-fold predictions")
     residual_oof = _residual_oof(
         active_rows,
         context.plan.development_groups,
@@ -1054,6 +1089,7 @@ def build_experiment_bundle(
         outcome_features,
         seed=settings.random_seed,
     )
+    mark("Fitted residual out-of-fold corrections")
     final_residual = _final_residual(
         active_rows,
         context.plan.development_groups,
@@ -1061,6 +1097,7 @@ def build_experiment_bundle(
         outcome_features,
         seed=settings.random_seed,
     )
+    mark("Fitted final residual correction")
     historical_oof = active_result.oof_predictions[outcome_name]
     stacker, structural_ablation, residual_ablation = _stacker_and_component_ablations(
         active_rows,
@@ -1068,6 +1105,7 @@ def build_experiment_bundle(
         structural_oof,
         residual_oof,
     )
+    mark("Fitted stacking ensemble and component ablations")
 
     evaluation_calibration_rows = tuple(row for row in calibration_rows if is_evaluation_row(row))
     if len(evaluation_calibration_rows) < 6 or len({row.label_yes for row in evaluation_calibration_rows}) < 2:
@@ -1090,6 +1128,7 @@ def build_experiment_bundle(
     uncalibrated = stacker.predict(active_components)
     calibrator = calibration.fit_calibrator(uncalibrated, [row.label_yes for row in evaluation_calibration_rows])
     calibrated = calibrator.predict(uncalibrated)
+    mark("Fitted independent calibration mapping")
     labels = [row.label_yes for row in evaluation_calibration_rows]
 
     pipeline = FittedBootstrapPipeline(
@@ -1140,7 +1179,7 @@ def build_experiment_bundle(
         artifact.ComponentIdentity(name="calibrator", kind="calibrator", identity=calibrator.method, weight=1.0),
     )
     finding_codes = tuple(sorted({finding.code for finding in leakage.findings}))
-    return artifact.ModelBundle(
+    bundle = artifact.ModelBundle(
         stage="experiment",
         model_version=MODEL_VERSION,
         git_sha=git_sha,
@@ -1167,6 +1206,10 @@ def build_experiment_bundle(
         serialized_pipeline_b64=base64.b64encode(payload).decode("ascii"),
         serialized_pipeline_sha256=payload_hash,
     )
+    mark("Sealed fitted experiment bundle for independent holdout evaluation")
+    if fit_completed != fit_total:
+        raise TrainingError("model fitting progress operation count mismatch")
+    return bundle
 
 
 def partition_row_counts(
