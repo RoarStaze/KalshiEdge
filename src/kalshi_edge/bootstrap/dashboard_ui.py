@@ -134,6 +134,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-live-head h3{font-size:19px;margin:5px 0 0}
 .training-worker-bar{height:10px;margin-top:16px}
 .training-dataset-bar{height:7px;margin:8px 0 15px}
+.training-dataset-bar[hidden]{display:none!important}
 .training-stage-list{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-top:19px}
 .training-head-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .training-model-identity{display:flex;flex-direction:column;gap:3px;border:1px solid #3e8275;background:#143931;border-radius:12px;padding:12px 17px;min-width:176px}
