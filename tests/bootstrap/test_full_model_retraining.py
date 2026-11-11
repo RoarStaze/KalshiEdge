@@ -90,7 +90,7 @@ def test_full_retrain_uses_compatible_existing_training_and_actual_promotion(tmp
     monkeypatch.setattr(training_cycle.training,"_verified_context",
                         lambda root: SimpleNamespace())
     calls=[]
-    def fake_train(root,settings,*,git_sha,mistakes_only=False,correct_only=False):
+    def fake_train(root,settings,*,git_sha,mistakes_only=False,correct_only=False, progress=None):
         calls.append(("fit",mistakes_only,correct_only))
         return SimpleNamespace(experiment_bundle_sha256="a"*64,
                                experiment_path=tmp_path/"experiment.json")
