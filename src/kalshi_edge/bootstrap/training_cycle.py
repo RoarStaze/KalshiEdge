@@ -1312,11 +1312,19 @@ class TrainingController:
                 stderr=subprocess.STDOUT,
                 creationflags=priority,
             )
+            try:
+                identity_token=training_process_control.identity(self._process.pid)
+            except OSError as exc:
+                # A restricted OS or unavailable process inspection must
+                # never block training; use the original safe pause fallback.
+                LOG.warning("Instant pause unavailable for worker %s: %s",
+                            self._process.pid, exc)
+                identity_token=None
             _write_worker_state(
                 self.root, stage=("RESUMING" if resume else "STARTING"),
                 mode=mode, round_number=round_number,
                 worker_pid=self._process.pid,
-                worker_identity=training_process_control.identity(self._process.pid),
+                worker_identity=identity_token,
                 suspended_in_memory=False,
                 log_path=str(logfile), run_id=run_id, git_sha=git,
                 **({"resume_stage": previous_stage} if resume else {}),
