@@ -50,6 +50,7 @@ class AutoTradeHistory:
                     status TEXT NOT NULL,
                     order_id TEXT,
                     fill_count TEXT,
+                    client_order_id TEXT,
                     PRIMARY KEY (ticker, stage)
                 )
             """)
@@ -58,6 +59,8 @@ class AutoTradeHistory:
             existing = {row[1] for row in db.execute(
                 "PRAGMA table_info(auto_trade_stages)"
             )}
+            if "client_order_id" not in existing:
+                db.execute("ALTER TABLE auto_trade_stages ADD COLUMN client_order_id TEXT")
             for name in QUOTE_FIELDS:
                 if name not in existing:
                     kind = "INTEGER" if name == "preview_received_at_ns" else "TEXT"
@@ -119,6 +122,7 @@ class AutoTradeHistory:
     def record_stage_attempt(self, *, ticker: str, stage: str,
                              attempted_at_ns: int, outcome: str, amount: str,
                              confidence: float,
+                             client_order_id: str | None = None,
                              quote: dict | None = None) -> None:
         allowed = ("EARLY_BUY", "EARLY_BUY_2", "REVERSAL_SELL",
                    "FINAL_BUY", "FINAL_BUY_2")
@@ -134,9 +138,9 @@ class AutoTradeHistory:
             with db:
                 db.execute(f"""
                     INSERT INTO auto_trade_stages
-                    (ticker,stage,attempted_at_ns,outcome,amount,confidence,status,{fields})
-                    VALUES (?,?,?,?,?,?,'ATTEMPTED',{placeholders})
-                """, (ticker,stage,attempted_at_ns,outcome,amount,confidence,*values))
+                    (ticker,stage,attempted_at_ns,outcome,amount,confidence,status,client_order_id,{fields})
+                    VALUES (?,?,?,?,?,?,'ATTEMPTED',?,{placeholders})
+                """, (ticker,stage,attempted_at_ns,outcome,amount,confidence,client_order_id,*values))
 
     def record_quote_rejection(self, *, ticker: str, stage: str,
                                reason: str, observed_at_ns: int,
@@ -203,7 +207,7 @@ class AutoTradeHistory:
         with closing(sqlite3.connect(self.path, timeout=5.0)) as db:
             rows = db.execute("""
                 SELECT ticker,stage,attempted_at_ns,outcome,amount,confidence,
-                       status,order_id,fill_count,
+                       status,order_id,fill_count,client_order_id,
                        preview_received_at_ns,quoted_unit_price_dollars,
                        quoted_count_fp,quoted_fee_dollars,quoted_total_dollars,
                        model_win_probability,model_expected_net_dollars,quote_gate
@@ -215,7 +219,7 @@ class AutoTradeHistory:
                     WHEN 'FINAL_BUY' THEN 3 ELSE 4 END
             """, (ticker,)).fetchall()
         names = ("ticker","stage","attempted_at_ns","outcome","amount",
-                 "confidence","status","order_id","fill_count",*QUOTE_FIELDS)
+                 "confidence","status","order_id","fill_count","client_order_id",*QUOTE_FIELDS)
         return [{**dict(zip(names,r)),
                  "status":"UNKNOWN" if r[6]=="ATTEMPTED" else r[6]} for r in rows]
 

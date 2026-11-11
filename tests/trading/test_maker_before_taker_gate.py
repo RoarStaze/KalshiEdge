@@ -83,6 +83,7 @@ def test_profitable_maker_is_considered_when_taker_ev_is_negative(tmp_path):
     assert client.iocs == []
     assert bot.status()["last_result"] == "FILLED"
     assert bot.history_store.has_attempt(TICKER)
+    assert client.makers[0]["client_order_id"] == bot.history_store.recent_stages(TICKER)[0]["client_order_id"]
 
 
 def test_truly_unprofitable_maker_still_never_places_an_order(tmp_path):
