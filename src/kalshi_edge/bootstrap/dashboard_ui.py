@@ -428,14 +428,21 @@ const datasetTicker={
 function advanceVerifiedMarketCounter(shown,verified){
  return shown<verified?shown+1:verified;
 }
+// Don't round 29,855 / 29,865 to a misleading 100.0%.
+function formatDatasetPercent(completed,total){
+ if(!Number.isFinite(total)||total<=0)return "0.0";
+ const pct=100*Math.min(total,Math.max(0,completed))/total;
+ return (completed<total?Math.min(99.9,Math.floor(pct*10)/10):100).toFixed(1);
+}
 function paintVerifiedMarketCounter(){
  const ticker=datasetTicker;
  const pct=ticker.valid?
   Math.min(100,Math.max(0,100*ticker.shown/ticker.total)):0;
  const counts=ticker.valid?
   " · "+ticker.shown+" / "+ticker.total+
-  (ticker.phase==="labels"?" market files verified (":" markets checked (")+
-  pct.toFixed(1)+"%)":
+  (ticker.phase==="labels"?" market files verified (":
+   ticker.phase==="checkpoints"?" checkpoint records verified (":" markets checked (")+
+  formatDatasetPercent(ticker.shown,ticker.total)+"%)":
   (ticker.hasRun&&ticker.active?" · counting verified market files…":"");
  el("dataset-build-bar-fill").style.width=pct+"%";
  el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(pct)));
@@ -458,7 +465,8 @@ function renderVerifiedMarketCounter(run,hasRun,failed,running){
  const total=Number(run.dataset_markets_total);
  const valid=Number.isFinite(completed)&&Number.isFinite(total)&&
   Number.isInteger(completed)&&Number.isInteger(total)&&total>0&&completed>=0;
- const phase=run.dataset_progress_phase==="labels"?"labels":"markets";
+ const phase=run.dataset_progress_phase==="labels"?"labels":
+  run.dataset_progress_phase==="checkpoints"?"checkpoints":"markets";
  const runId=String(run.run_id||run.started_utc||"unknown");
  const changed=runId!==datasetTicker.runId||
   phase!==datasetTicker.phase||total!==datasetTicker.total;
