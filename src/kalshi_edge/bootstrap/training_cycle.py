@@ -1368,89 +1368,175 @@ class TrainingController:
 
     def pause(self) -> dict[str, Any]:
         with self._lock:
-            if self._process is None or self._process.poll() is not None:
+            pid=self._tracked_pid()
+            if pid is None or self._suspended:
                 raise CycleError("no active training process to pause")
-            run = _run_state(self.root) or {}
+            run=_run_state(self.root) or {}
             if run.get("stage") not in ACTIVE_WORKER_STAGES:
                 raise CycleError("training is not in a pausable stage")
-            run_id = run.get("run_id")
-            if not isinstance(run_id, str):
+            if run.get("worker_pid") != pid:
+                raise CycleError("training worker PID does not match active run")
+            if not isinstance(run.get("run_id"),str):
                 raise CycleError("training session predates pause support; update and restart")
-            training_pause.set_pause(self.root, run_id=run_id, manual=True)
+            immediate=_suspend_training_fit(self.root,run,manual=True)
+            if immediate:
+                self._suspended=True
+                return {
+                    "pause_requested":True, "paused":True, "immediate":True,
+                    "message":"Training paused instantly; model fit remains in memory "
+                              "and can resume after reopening KalshiEdge.",
+                }
             return {
-                "pause_requested": True,
-                "message": (
-                    "Pause requested. Dataset work stops after a checkpointed market; "
-                    "model fitting stops at the next safe stage boundary."
-                ),
+                "pause_requested":True, "paused":False, "immediate":False,
+                "message":"Pause requested; worker will stop at the next safe checkpoint.",
             }
 
     def resume(self) -> dict[str, Any]:
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
-                raise CycleError("training is still active; wait for PAUSED acknowledgment")
-            saved = _run_state(self.root) or {}
+            saved=_run_state(self.root) or {}
             if saved.get("stage") != "PAUSED":
                 raise CycleError("training is not paused")
             if saved.get("git_sha") != self._git_sha():
                 raise CycleError("Git version changed since training paused; cannot safely resume")
-            run_id = saved.get("run_id")
-            if not isinstance(run_id, str):
+            run_id=saved.get("run_id")
+            if not isinstance(run_id,str):
                 raise CycleError("missing verified training resume identity")
-            training_pause.clear_pause(self.root, run_id=run_id)
-            result = self._launch_existing(saved, resume=True)
-            return {**(result or {}), "resumed": True}
+            if saved.get("suspended_in_memory") is True:
+                pid,token=saved.get("worker_pid"),saved.get("worker_identity")
+                if (type(pid) is int and isinstance(token,str)
+                        and training_process_control.is_alive(pid,token)):
+                    if not _thaw_training_fit(self.root,saved):
+                        raise CycleError("suspended model worker identity changed")
+                    self._adopted_pid=pid if self._process is None else self._adopted_pid
+                    self._adopted_identity=token if self._process is None else self._adopted_identity
+                    self._suspended=False
+                    return {
+                        "resumed":True, "in_memory":True,"worker_pid":pid,
+                        "message":"Resumed the exact suspended model fit in memory.",
+                    }
+                if self._process is not None and self._process.poll() is None:
+                    raise CycleError("worker identity changed; refusing to start a duplicate")
+                self._adopted_pid=None
+                self._adopted_identity=None
+                self._suspended=False
+                _write_worker_state(
+                    self.root,stage="PAUSED",mode=saved["mode"],
+                    round_number=saved["round_number"],
+                    suspended_in_memory=False,
+                    error="Suspended process no longer exists; resuming last durable checkpoint.",
+                )
+            if self._tracked_pid() is not None:
+                raise CycleError("training is still active; wait for PAUSED acknowledgment")
+            training_pause.clear_pause(self.root,run_id=run_id)
+            result=self._launch_existing(saved,resume=True)
+            return {**(result or {}),"resumed":True,"in_memory":False}
 
     def recover(self) -> bool:
-        """Auto-resume only training interrupted by closing the application."""
+        """Auto-resume on reopen; honor manual pause across application close."""
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
+            if self._tracked_pid() is not None:
                 return False
-            saved = _run_state(self.root)
+            saved=_run_state(self.root)
             if not saved or saved.get("stage") not in ACTIVE_WORKER_STAGES | {"PAUSED"}:
                 return False
-            run_id = saved.get("run_id")
-            intent = training_pause.read_pause(self.root)
+            run_id=saved.get("run_id")
+            intent=training_pause.read_pause(self.root)
             if intent and intent.get("run_id") != run_id:
                 raise CycleError("saved pause request belongs to another training run")
+
+            if saved.get("suspended_in_memory") is True:
+                pid,token=saved.get("worker_pid"),saved.get("worker_identity")
+                if (type(pid) is int and isinstance(token,str)
+                        and training_process_control.is_alive(pid,token)):
+                    self._adopted_pid=pid
+                    self._adopted_identity=token
+                    self._suspended=True
+                    if intent.get("pause_requested") and intent.get("manual"):
+                        return False
+                    if saved.get("git_sha") != self._git_sha():
+                        _write_worker_state(
+                            self.root,stage="PAUSED",mode=saved["mode"],
+                            round_number=saved["round_number"],
+                            error="Version changed; suspended fit remains paused until "
+                                  "the original code version is restored.",
+                        )
+                        return False
+                    if _thaw_training_fit(self.root,saved):
+                        self._suspended=False
+                        return True
+                    return False
+                # If Windows closed the worker too, never touch a recycled PID.
+                # Existing disk-backed dataset/experiment checkpoints remain
+                # eligible for recovery, but a partial native fit must replay.
+                _write_worker_state(
+                    self.root,stage=saved["stage"],mode=saved["mode"],
+                    round_number=saved["round_number"],
+                    suspended_in_memory=False,worker_pid=None,
+                )
+                saved=_run_state(self.root) or saved
+
             if intent.get("pause_requested") and intent.get("manual"):
                 if saved.get("stage") != "PAUSED":
                     _save_paused_state(
-                        self.root, mode=saved["mode"], round_number=saved["round_number"],
-                        reason="manual",
+                        self.root,mode=saved["mode"],
+                        round_number=saved["round_number"],reason="manual",
                     )
                 return False
             if saved.get("git_sha") != self._git_sha():
                 _save_paused_state(
-                    self.root, mode=saved["mode"], round_number=saved["round_number"],
+                    self.root,mode=saved["mode"],round_number=saved["round_number"],
                     reason="update_blocked",
                 )
                 _write_worker_state(
-                    self.root, stage="PAUSED", mode=saved["mode"],
+                    self.root,stage="PAUSED",mode=saved["mode"],
                     round_number=saved["round_number"],
                     error="Git version changed since training started; cannot safely auto-resume",
                 )
                 return False
-            if not isinstance(run_id, str):
+            if not isinstance(run_id,str):
                 raise CycleError("old training state has no run ID; cannot safely auto-resume")
             if intent.get("pause_requested"):
-                training_pause.clear_pause(self.root, run_id=run_id)
-            self._launch_existing(saved, resume=True)
+                training_pause.clear_pause(self.root,run_id=run_id)
+            self._launch_existing(saved,resume=True)
             return True
 
     def stop(self) -> None:
         with self._lock:
-            process = self._process
+            process=self._process
+            pid=self._tracked_pid()
+            if pid is not None and not self._suspended:
+                run=_run_state(self.root) or {}
+                run_id=run.get("run_id")
+                intent=training_pause.read_pause(self.root)
+                manual=bool(
+                    isinstance(run_id,str) and
+                    intent.get("run_id")==run_id and
+                    intent.get("pause_requested") and intent.get("manual")
+                )
+                try:
+                    if _suspend_training_fit(self.root,run,manual=manual):
+                        self._suspended=True
+                except Exception:
+                    LOG.exception("Could not freeze training worker on application close")
+            if self._suspended:
+                # Leave verified frozen PID alive. A newly opened dashboard
+                # adopts it and can continue the identical in-memory fit.
+                self._process=None
+                self._adopted_pid=None
+                self._adopted_identity=None
+                self._suspended=False
+                if self._log_handle is not None:
+                    self._log_handle.close()
+                    self._log_handle=None
+                return
             if process is not None and process.poll() is None:
-                run = _run_state(self.root) or {}
-                run_id = run.get("run_id")
-                if isinstance(run_id, str):
-                    intent = training_pause.read_pause(self.root)
-                    if not (intent.get("run_id") == run_id
-                            and intent.get("pause_requested") and intent.get("manual")):
-                        training_pause.set_pause(self.root, run_id=run_id, manual=False)
-                # Cooperative dataset checkpoint is preferred; fit may be a
-                # non-interruptible sklearn operation and must replay on restart.
+                run=_run_state(self.root) or {}
+                run_id=run.get("run_id")
+                if isinstance(run_id,str):
+                    intent=training_pause.read_pause(self.root)
+                    if not (intent.get("run_id")==run_id and
+                            intent.get("pause_requested") and intent.get("manual")):
+                        training_pause.set_pause(self.root,run_id=run_id,manual=False)
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
@@ -1460,10 +1546,12 @@ class TrainingController:
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=5)
-            self._process = None
+            self._process=None
+            self._adopted_pid=None
+            self._adopted_identity=None
             if self._log_handle is not None:
                 self._log_handle.close()
-                self._log_handle = None
+                self._log_handle=None
 
 
 def main() -> int:
