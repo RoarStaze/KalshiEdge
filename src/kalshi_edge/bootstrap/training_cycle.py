@@ -1306,9 +1306,45 @@ class TrainingController:
             return False
         if dirty:
             return False
+
+        # This controller class runs only in the parent dashboard. Its code
+        # can change without replacing an already frozen training subprocess,
+        # provided every worker definition and import outside it is identical.
+        controller_module = "src/kalshi_edge/bootstrap/training_cycle.py"
+        if controller_module in diff:
+            def worker_region(contents: str) -> tuple[str, str] | None:
+                prefix, separator, remainder = contents.partition(
+                    "\nclass TrainingController:"
+                )
+                if not separator:
+                    return None
+                _parent_class, separator, suffix = remainder.partition(
+                    "\ndef main() -> int:"
+                )
+                if not separator:
+                    return None
+                return prefix, suffix
+
+            try:
+                original = subprocess.run(
+                    ["git", "show", f"{saved_sha}:{controller_module}"],
+                    cwd=self.project_root, check=True,
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                updated = subprocess.run(
+                    ["git", "show", f"{current_sha}:{controller_module}"],
+                    cwd=self.project_root, check=True,
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                return False
+            original_worker = worker_region(original)
+            if original_worker is None or original_worker != worker_region(updated):
+                return False
+
         return all(
             name.startswith(("docs/", "tests/", ".github/"))
-            or name in browser_only
+            or name in browser_only or name == controller_module
             for name in diff
         )
 
