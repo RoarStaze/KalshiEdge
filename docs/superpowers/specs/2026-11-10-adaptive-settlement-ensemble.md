@@ -1,0 +1,13 @@
+# Adaptive 480s settlement ensemble — design
+
+**Goal:** Introduce a prospective, read-only, walk-forward ensemble of the incumbent 480s probability and the settlement-native shadow from PR #122. Improve the evidence needed to decide whether a model might achieve both better 69% qualified accuracy and higher decision coverage, without changing live forecasts or AutoTrade.
+
+**Data and chronology:** Each settlement-native shadow is captured after the immutable final forecast and bound to its SHA-256. The new ensemble is captured only after that shadow exists. Its tuning data includes only separately verified official settlements with `fetched_ts_ns < current prediction_ts_ns`, settled close before the current checkpoint, an available, hash-validated research shadow, and a valid incumbent probability. Later outcomes, current-market labels, and reconstructing missing snapshots are forbidden.
+
+**Model:** Deterministically choose a blend weight for the settlement-native challenger from `[0, 0.25, 0.5, 0.75, 1]` and a probability-center shrink factor from `[0.75, 1]`. Minimize historical Brier on at most the most recent 300 eligible chronological observations, with a small fixed complexity preference for lower challenger weight when scores tie. At least 80 eligible prior settlements are required; otherwise write an explicit UNTRAINED research-only shadow. No in-sample performance is counted as forward performance. This is an evolving historical blend, not a claim of calibrated probabilities.
+
+**Evidence:** Save immutable, hash-bound ensemble forecasts referencing the incumbent final and settlement challenger. Include chosen weight, shrink, training count, SHA-256 of sorted pre-checkpoint training inputs, target forecast, and 69% gate. A separate CLI scores only settled, matched *prospectively saved ensemble* records against the same incumbent records, including Brier, log loss, ECE, and directional coverage/accuracy. Missing, invalid, immature and untrained records have separate denominators; all model-selection inputs precede the evaluated prediction.
+
+**Promotion review:** Report review eligibility only after at least 200 matched ensemble forecasts spanning at least 7 UTC days, strictly improved Brier/log loss, strictly increased 69% coverage and strictly increased qualified accuracy on the same paired cohort. No automatic promotion. These are necessary screening criteria, not sufficient proof of live returns or execution economics.
+
+**Safety constraints:** No changes to live decisions, coinflip veto, risk limits, orders, trade sizing or AutoTrade. Research paths never target canonical raw data. Research failures must be isolated from the live loop. No new dependencies.

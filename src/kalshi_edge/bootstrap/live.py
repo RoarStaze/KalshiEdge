@@ -677,6 +677,7 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     from .shadow_live_480 import Shadow480Writer, capture_research_shadow
     from .forward_feature_evidence_480 import Forward480FeatureWriter, capture_forward_480_feature
     from .settlement_challenger_480 import SettlementShadowWriter, capture_settlement_shadow
+    from .adaptive_ensemble_480 import AdaptiveEnsembleWriter, capture_adaptive_ensemble
 
     bundle, pipeline = load_default_model(bootstrap.bootstrap_dir)
     state = LiveFeatureState()
@@ -687,6 +688,7 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     forward_feature_writer = Forward480FeatureWriter(bootstrap.bootstrap_dir)
     # Unfitted causal settlement-window challenger: post-final research only.
     settlement_shadow_writer = SettlementShadowWriter(bootstrap.bootstrap_dir)
+    adaptive_ensemble_writer = AdaptiveEnsembleWriter(bootstrap.bootstrap_dir)
     # This optional local research artifact is NEVER the promoted predictor.
     shadow_model = None
     shadow_writer = None
@@ -772,6 +774,25 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
                 except Exception as exc:
                     print(
                         f"RESEARCH SETTLEMENT SHADOW FAILED: {type(exc).__name__}",
+                        flush=True,
+                    )
+            # Adapt only to independently fetched PRIOR settlements; this
+            # hash-bound ensemble is a nontrading, post-challenger research output.
+            # Never permit research errors to block live forecasts or orders.
+            if saved_path is not None:
+                try:
+                    ensemble_path = capture_adaptive_ensemble(
+                        root=bootstrap.bootstrap_dir,
+                        final=final, writer=adaptive_ensemble_writer,
+                    )
+                    if ensemble_path is not None:
+                        print(
+                            f"RESEARCH ADAPTIVE ENSEMBLE: {ensemble_path}",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    print(
+                        f"RESEARCH ADAPTIVE ENSEMBLE FAILED: {type(exc).__name__}",
                         flush=True,
                     )
             # Append immutable, LABEL-FREE causal feature evidence only AFTER
