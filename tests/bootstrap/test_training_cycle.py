@@ -90,7 +90,7 @@ def test_training_worker_persists_complete_state_even_if_model_not_promoted(tmp_
         "ready": True, "mode": "mistake", "round_number": 1,
     })
     calls = []
-    def fake_train(root, settings, *, git_sha, mistakes_only=False, correct_only=False):
+    def fake_train(root, settings, *, git_sha, mistakes_only=False, correct_only=False, progress=None):
         calls.append(("train", mistakes_only, correct_only))
         return SimpleNamespace(
             experiment_bundle_sha256="f" * 64,
