@@ -52,9 +52,11 @@ def test_three_markets_shows_immediately_when_disk_budget_allows(tmp_path, monke
     callback(1, 29865, "a", "markets")
     clock[0] = 1.
     callback(2, 29865, "b", "markets")
+    clock[0] = 1.30
     callback(3, 29865, "c", "markets")
+    clock[0] = 1.60
     callback(4, 29865, "d", "markets")
-    assert values == [1, 4]
+    assert values == [1, 2, 3, 4]
 
 
 def test_lightweight_progress_does_not_compute_training_readiness(tmp_path, monkeypatch):
