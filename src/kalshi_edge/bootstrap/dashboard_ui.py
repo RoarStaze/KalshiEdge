@@ -862,6 +862,33 @@ async function trainingControl(action){
   });
   const result=await response.json();
   if(!response.ok)throw Error(result.error||"HTTP "+response.status);
+  if(action==="pause"&&result.paused===true){
+   // Only claim PAUSED when the operating system froze the fit worker.
+   const previous=trainingStatus||{};
+   const run=previous.run||{};
+   trainingStatus={...previous,paused:true,pause_requested:true,running:false,
+    run:{...run,stage:"PAUSED",resume_stage:run.stage||"TRAINING",
+     suspended_in_memory:true}};
+   renderTrainingSession(trainingStatus.run,false);
+   updateTrainingPauseControls(trainingStatus);
+   text("training-headline","Model fitting paused instantly");
+   text("train-feedback","Paused immediately · same model fit is preserved in memory "+
+    "across KalshiEdge closing and reopening.");
+   saveTrainingSnapshot(trainingStatus);
+   return; // no expensive full readiness scan required to acknowledge pause
+  }
+  if(action==="resume"&&result.resumed===true&&result.in_memory===true){
+   const previous=trainingStatus||{};
+   const run=previous.run||{};
+   trainingStatus={...previous,paused:false,pause_requested:false,running:true,
+    run:{...run,stage:run.resume_stage||"TRAINING",suspended_in_memory:false}};
+   renderTrainingSession(trainingStatus.run,true);
+   updateTrainingPauseControls(trainingStatus);
+   text("training-headline","Training and evaluating…");
+   text("train-feedback","Resumed the same in-memory model fit.");
+   saveTrainingSnapshot(trainingStatus);
+   return;
+  }
   text("train-feedback",action==="pause"?
    "Pause requested · waiting for the worker's safe checkpoint.":
    "Saved session resumed. Verified dataset checkpoints and fitted artifacts will be reused.");
