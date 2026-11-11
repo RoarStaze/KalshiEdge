@@ -1266,6 +1266,88 @@ class TrainingController:
             raise CycleError("cannot verify installed repository Git SHA")
         return sha
 
+    def _compatible_frozen_source(self, saved_sha: str, current_sha: str) -> bool:
+        """Allow an existing frozen PID to thaw only after non-worker Git changes.
+
+        A Python process may lazily import modules after it resumes. Even an
+        exact suspended PID is NOT safe to thaw under modified training/runtime
+        source. Changes limited to documentation, tests, CI, and standalone
+        browser UI modules do not affect its training code. Fail closed if
+        repository history or the working tree cannot be verified.
+        """
+        if saved_sha == current_sha:
+            return True
+        if (not isinstance(saved_sha, str)
+                or re.fullmatch(r"[0-9a-f]{40}", saved_sha) is None):
+            return False
+        browser_only = frozenset({
+            "src/kalshi_edge/bootstrap/dashboard_ui.py",
+            "src/kalshi_edge/bootstrap/site_pages.py",
+            "src/kalshi_edge/bootstrap/site_motion.py",
+            "src/kalshi_edge/bootstrap/round_price_ui.py",
+            "src/kalshi_edge/bootstrap/manual_trade_ui.py",
+            "src/kalshi_edge/bootstrap/autotrader_ui.py",
+            "src/kalshi_edge/bootstrap/api_credentials_ui.py",
+            "src/kalshi_edge/bootstrap/preview_site.py",
+        })
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--no-renames", "--name-only",
+                 saved_sha, current_sha, "--"],
+                cwd=self.project_root, check=True,
+                capture_output=True, text=True, timeout=10,
+            ).stdout.splitlines()
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=self.project_root, check=True,
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if dirty:
+            return False
+
+        # This controller class runs only in the parent dashboard. Its code
+        # can change without replacing an already frozen training subprocess,
+        # provided every worker definition and import outside it is identical.
+        controller_module = "src/kalshi_edge/bootstrap/training_cycle.py"
+        if controller_module in diff:
+            def worker_region(contents: str) -> tuple[str, str] | None:
+                prefix, separator, remainder = contents.partition(
+                    "\nclass TrainingController:"
+                )
+                if not separator:
+                    return None
+                _parent_class, separator, suffix = remainder.partition(
+                    "\ndef main() -> int:"
+                )
+                if not separator:
+                    return None
+                return prefix, suffix
+
+            try:
+                original = subprocess.run(
+                    ["git", "show", f"{saved_sha}:{controller_module}"],
+                    cwd=self.project_root, check=True,
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                updated = subprocess.run(
+                    ["git", "show", f"{current_sha}:{controller_module}"],
+                    cwd=self.project_root, check=True,
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+            except (OSError, subprocess.SubprocessError):
+                return False
+            original_worker = worker_region(original)
+            if original_worker is None or original_worker != worker_region(updated):
+                return False
+
+        return all(
+            name.startswith(("docs/", "tests/", ".github/"))
+            or name in browser_only or name == controller_module
+            for name in diff
+        )
+
     def _launch_existing(self, saved: dict[str, Any], *, resume: bool) -> dict[str, Any]:
         """One subprocess launch path for explicit training and restart recovery."""
         mode = saved.get("mode")
@@ -1404,8 +1486,7 @@ class TrainingController:
             saved=_run_state(self.root) or {}
             if saved.get("stage") != "PAUSED":
                 raise CycleError("training is not paused")
-            if saved.get("git_sha") != self._git_sha():
-                raise CycleError("Git version changed since training paused; cannot safely resume")
+            current_git_sha=self._git_sha()
             run_id=saved.get("run_id")
             if not isinstance(run_id,str):
                 raise CycleError("missing verified training resume identity")
@@ -1413,6 +1494,12 @@ class TrainingController:
                 pid,token=saved.get("worker_pid"),saved.get("worker_identity")
                 if (type(pid) is int and isinstance(token,str)
                         and training_process_control.is_alive(pid,token)):
+                    if not self._compatible_frozen_source(saved.get("git_sha"), current_git_sha):
+                        raise CycleError(
+                            "Git version changed since training paused; frozen worker code "
+                            "is incompatible with this update. Restore the original "
+                            "training version before resuming."
+                        )
                     if not _thaw_training_fit(self.root,saved):
                         raise CycleError("suspended model worker identity changed")
                     self._adopted_pid=pid if self._process is None else self._adopted_pid
@@ -1432,6 +1519,11 @@ class TrainingController:
                     round_number=saved["round_number"],
                     suspended_in_memory=False,
                     error="Suspended process no longer exists; resuming last durable checkpoint.",
+                )
+            if saved.get("git_sha") != current_git_sha:
+                raise CycleError(
+                    "Git version changed since training paused; the original "
+                    "training version is required for a checkpoint restart."
                 )
             if self._tracked_pid() is not None:
                 raise CycleError("training is still active; wait for PAUSED acknowledgment")
