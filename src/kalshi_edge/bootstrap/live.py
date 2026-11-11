@@ -676,6 +676,7 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     from .frozen_specialist_480 import FILENAME, load_frozen_specialist
     from .shadow_live_480 import Shadow480Writer, capture_research_shadow
     from .forward_feature_evidence_480 import Forward480FeatureWriter, capture_forward_480_feature
+    from .settlement_challenger_480 import SettlementShadowWriter, capture_settlement_shadow
 
     bundle, pipeline = load_default_model(bootstrap.bootstrap_dir)
     state = LiveFeatureState()
@@ -684,6 +685,8 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
     final_gate = FinalForecastGate()
     final_writer = FinalForecastWriter(bootstrap.bootstrap_dir)
     forward_feature_writer = Forward480FeatureWriter(bootstrap.bootstrap_dir)
+    # Unfitted causal settlement-window challenger: post-final research only.
+    settlement_shadow_writer = SettlementShadowWriter(bootstrap.bootstrap_dir)
     # This optional local research artifact is NEVER the promoted predictor.
     shadow_model = None
     shadow_writer = None
@@ -749,6 +752,26 @@ async def _run_live_async(collector: CollectorSettings, bootstrap: BootstrapSett
                 except Exception as exc:
                     print(
                         f"RESEARCH 480S SHADOW FAILED: {type(exc).__name__}",
+                        flush=True,
+                    )
+            # Settlement-native 60-second BRTI-average research shadow.
+            # Run ONLY after the immutable final decision has been saved.
+            # Unavailable causal BRTI inputs become an explicit unavailable
+            # record; any exception remains isolated from predictions/orders.
+            if saved_path is not None:
+                try:
+                    settlement_shadow_path = capture_settlement_shadow(
+                        final=final, prediction=prediction,
+                        final_file=saved_path, writer=settlement_shadow_writer,
+                    )
+                    if settlement_shadow_path is not None:
+                        print(
+                            f"RESEARCH SETTLEMENT SHADOW: {settlement_shadow_path}",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    print(
+                        f"RESEARCH SETTLEMENT SHADOW FAILED: {type(exc).__name__}",
                         flush=True,
                     )
             # Append immutable, LABEL-FREE causal feature evidence only AFTER
