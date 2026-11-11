@@ -275,13 +275,13 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
  </div>
  <div class="training-live-panel" aria-label="Training session and validation results">
   <div class="training-live-head">
-   <div><div class="eyebrow">LIVE TRAINING SESSION</div><h3>Training progress</h3></div>
+   <div><div class="eyebrow">LIVE TRAINING SESSION</div><h3 id="training-stage-heading">Training progress</h3></div>
    <strong class="training-big-percent" id="training-worker-progress">—</strong>
   </div>
   <div class="training-bar training-worker-bar" role="progressbar" aria-label="Completed training milestones" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="training-worker-bar"><div id="training-worker-bar-fill"></div></div>
   <div class="training-stage-list" id="training-stage-list" aria-label="Model training milestones"></div>
   <div class="training-forward-note" id="dataset-build-detail">Dataset has not been built in this session yet.</div>
-  <div class="training-bar training-dataset-bar" role="progressbar" aria-label="Dataset markets processed" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dataset-build-bar"><div id="dataset-build-bar-fill"></div></div>
+  <div class="training-bar training-dataset-bar" role="progressbar" aria-label="Current training stage progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dataset-build-bar"><div id="dataset-build-bar-fill"></div></div>
   <div class="training-comparison" id="training-comparison" aria-label="Challenger versus current model"></div>
   <div id="training-outcome" class="training-outcome" role="status" aria-live="polite">No training run yet. Training results will appear here and remain after refreshing the page.</div>
   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
@@ -505,6 +505,86 @@ document.addEventListener("visibilitychange",()=>{
   datasetTicker.raf=requestAnimationFrame(tickVerifiedMarketCounter);
  }
 });
+function stageProgressState(run){
+ const stage=String(run.stage||"");
+ if(stage==="BUILDING_DATASET"){
+  return {mode:"dataset",label:"Create dataset",detail:"Preparing verified historical markets"};
+ }
+ if(stage==="FITTING"||stage==="TRAINING"){
+  const completed=Number(run.fit_steps_completed);
+  const total=Number(run.fit_steps_total);
+  const valid=run.fit_steps_completed!=null&&run.fit_steps_total!=null&&
+   Number.isInteger(completed)&&Number.isInteger(total)&&
+   total>0&&completed>=0&&completed<=total;
+  return {mode:"fit",label:"Fit model",completed:valid?completed:null,
+   total:valid?total:null,
+   detail:String(run.fit_step_detail||
+     "Fitting verified model candidates; waiting for the next completed operation")};
+ }
+ const labels={
+  STARTING:"Starting training",
+  VERIFYING:"Audit dataset",VERIFYING_DATASET:"Audit dataset",
+  SPLITTING:"Split markets",
+  EVALUATING:"Score holdout",SCORING:"Score holdout",
+  COMPARING:"Compare results",PROMOTION_GATE:"Deployment gate",
+  COMPLETE:"Training complete",FAILED:"Training failed",
+  INTERRUPTED:"Training interrupted",PAUSED:"Training paused",
+  RESUMING:"Resuming training"
+ };
+ const details={
+  STARTING:"Verifying training eligibility and model identity",
+  VERIFYING:"Checking saved dataset and partition integrity",
+  VERIFYING_DATASET:"Checking dataset source hashes and partition validity",
+  SPLITTING:"Preparing leakage-safe chronological market splits",
+  EVALUATING:"Loading the reserved independent holdout",
+  SCORING:"Scoring the candidate on untouched holdout markets",
+  COMPARING:"Comparing candidate and existing model probabilities",
+  PROMOTION_GATE:"Checking accuracy, coverage and promotion safeguards",
+  COMPLETE:"All verified stages finished",
+  FAILED:"Stopped; live model remains unchanged",
+  INTERRUPTED:"Worker interrupted; live model remains unchanged",
+  PAUSED:"Waiting for Resume; saved checkpoints remain available",
+  RESUMING:"Revalidating saved work before resuming"
+ };
+ return {mode:"stage",label:labels[stage]||stage.replaceAll("_"," ")||"Not started",
+  detail:details[stage]||"Checking current training worker status"};
+}
+function renderCurrentStageProgress(run,running,hasRun,failed){
+ const display=stageProgressState(run);
+ const bar=el("dataset-build-bar");
+ const mapped=run.stage==="TRAINING"?"FITTING":
+  run.stage==="EVALUATING"?"SCORING":
+  run.stage==="VERIFYING"?"VERIFYING_DATASET":run.stage;
+ const index=trainingStages.findIndex(([stage])=>stage===mapped);
+ text("training-stage-heading",hasRun&&index>=0?
+  "Stage "+(index+1)+" of 7 · "+display.label:
+  "Training progress · "+display.label);
+ if(display.mode==="dataset"){
+  bar.hidden=false;
+  bar.setAttribute("aria-label","Dataset preparation progress");
+  renderVerifiedMarketCounter(run,hasRun,failed,running);
+  return;
+ }
+ // Durable Stage 1 dataset fields are irrelevant after Stage 1.
+ if(datasetTicker.raf)cancelAnimationFrame(datasetTicker.raf);
+ datasetTicker.raf=0;
+ datasetTicker.active=false;
+ if(display.mode==="fit"&&display.total!==null){
+  const pct=100*display.completed/display.total;
+  bar.hidden=false;
+  bar.setAttribute("aria-label","Completed model fitting operations");
+  el("dataset-build-bar-fill").style.width=pct+"%";
+  bar.setAttribute("aria-valuenow",String(Math.round(pct)));
+  text("dataset-build-detail","Stage 4 · Fit model · "+
+   display.completed+" / "+display.total+" fitting operations completed ("+
+   formatDatasetPercent(display.completed,display.total)+"%) · "+display.detail);
+ }else{
+  // A stage without a trustworthy counter has no fabricated progress bar.
+  bar.hidden=true;
+  text("dataset-build-detail",display.label+" · "+display.detail+
+   (display.mode==="fit"?" · Waiting for confirmed fitting operations":""));
+ }
+}
 function renderTrainingSession(run,running){
  const events=Array.isArray(run.events)?run.events:[];
  const current=String(run.stage||"");
@@ -528,7 +608,7 @@ function renderTrainingSession(run,running){
   stageDiv.append(number,name);list.append(stageDiv);
  }
  const hasRun=!!run.stage;
- renderVerifiedMarketCounter(run,hasRun,failed,running);
+ renderCurrentStageProgress(run,running,hasRun,failed);
  const pct=hasRun?Math.max(0,Math.min(100,Number(run.progress_percent)||0)):0;
  text("training-worker-progress",hasRun?(failed?"FAILED":pct+"%"):"—");
  el("training-worker-bar-fill").style.width=pct+"%";
