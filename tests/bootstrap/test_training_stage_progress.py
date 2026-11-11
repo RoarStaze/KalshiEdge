@@ -96,3 +96,17 @@ def test_fast_progress_endpoint_and_stage_pages_share_stable_ids():
     assert 'id="dataset-build-bar"' in page
     assert 'id="train-pause"' in page
     assert 'id="train-resume"' in page
+
+
+def test_dashboard_full_javascript_remains_valid_after_stage_switch():
+    node = shutil.which("node")
+    if node is None:
+        return
+    scripts = re.findall(r"<script>(.*?)</script>", PAGE, re.S)
+    assert scripts
+    for script in scripts:
+        p = subprocess.run(
+            [node, "--check"], input=script, text=True,
+            capture_output=True, timeout=10,
+        )
+        assert p.returncode == 0, p.stderr
