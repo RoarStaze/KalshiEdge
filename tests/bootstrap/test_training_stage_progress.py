@@ -49,7 +49,7 @@ def test_fit_progress_refuses_fabricated_counts(tmp_path):
 def test_page_uses_active_stage_and_never_reuses_dataset_count_after_stage1():
     assert 'function stageProgressState(run)' in PAGE
     assert 'if(display.mode==="dataset")' in PAGE
-    assert 'if(display.mode==="fit")' in PAGE
+    assert 'if(display.mode==="fit"&&display.total!==null)' in PAGE
     assert 'id="dataset-build-detail"' in PAGE
     assert 'id="dataset-build-bar"' in PAGE
     assert 'run.fit_steps_completed' in PAGE
