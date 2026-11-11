@@ -84,4 +84,4 @@ def test_training_ui_displays_initial_values_and_refresh_failure_explicitly():
     assert "Training readiness unavailable" in html
     assert "run.progress_percent" in html
     assert "refreshTraining()" in html
-    assert 'setInterval(refreshTrainingProgress,750)' in html
+    assert 'setInterval(refreshTrainingProgress,250)' in html
