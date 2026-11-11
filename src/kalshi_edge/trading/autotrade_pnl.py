@@ -15,6 +15,7 @@ from .fill_reconciliation import validated_fill_unit_price
 
 
 MAX_PAGES = 5
+MAX_FILL_MARKET_TICKERS = 100  # Kalshi's documented comma-separated ticker cap.
 
 
 def _decimal(value: Any) -> Decimal:
@@ -153,7 +154,31 @@ def _calculate(contracts, stages, fills, result: str, ticker: str) -> str:
     return _exact(net_cash + contracts[winner])
 
 
-def enrich_history(entries: list[dict], client=None) -> list[dict]:
+def _settlement_position_matches(
+    contracts: dict[str, Decimal], settlement: dict, *, required: bool,
+) -> bool:
+    """Compare verified net AutoTrade holdings to exchange-settled holdings.
+
+    The recent-history UI accepts older mock/legacy settlement responses without
+    position fields, but an explicitly strict full-journal audit does not.
+    If either field is present, both must be valid and must match exactly.
+    """
+    names = ("yes_count_fp", "no_count_fp")
+    values = [settlement.get(name) for name in names]
+    if all(value is None for value in values):
+        return not required
+    if any(type(value) is not str for value in values):
+        return False
+    try:
+        return (_positive(values[0], zero=True) == contracts["UP"]
+                and _positive(values[1], zero=True) == contracts["DOWN"])
+    except (ValueError, KeyError):
+        return False
+
+
+def enrich_history(
+    entries: list[dict], client=None, *, require_settlement_counts: bool = False,
+) -> list[dict]:
     """Add max_payout_dollars and trustworthy realized_pnl_dollars per market.
 
     Settlement lookup and fill audit are read-only. Missing history, mixed
@@ -202,9 +227,14 @@ def enrich_history(entries: list[dict], client=None) -> list[dict]:
                     if record.get("market_result") in ("yes", "no")]
         if not selected:
             return result
-        fills = _pages(client, "/portfolio/fills",
-                       params={"ticker": ",".join(selected), "limit": 1000},
-                       field="fills")
+        # Kalshi's fill filter allows at most 100 comma-separated tickers.
+        # One truncated batch must invalidate the audit, never create fake P/L.
+        fills = []
+        for first in range(0, len(selected), MAX_FILL_MARKET_TICKERS):
+            batch = selected[first:first + MAX_FILL_MARKET_TICKERS]
+            fills.extend(_pages(client, "/portfolio/fills",
+                                params={"ticker": ",".join(batch), "limit": 1000},
+                                field="fills"))
         by_market = defaultdict(list)
         for item in fills:
             ticker = (item.get("market_ticker") or item.get("ticker")
@@ -214,6 +244,10 @@ def enrich_history(entries: list[dict], client=None) -> list[dict]:
         for ticker in selected:
             row, contracts, stages = candidates[ticker]
             try:
+                if not _settlement_position_matches(
+                    contracts, found[ticker], required=require_settlement_counts,
+                ):
+                    raise ValueError("Settlement holdings do not match AutoTrade fills")
                 row["realized_pnl_dollars"] = _calculate(
                     contracts, stages, by_market.get(ticker, []),
                     found[ticker]["market_result"], ticker)

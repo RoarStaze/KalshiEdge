@@ -240,3 +240,19 @@ class AutoTradeHistory:
                 item["status"] = "UNKNOWN"
             entries.append(item)
         return entries
+
+    def all_attempts(self) -> list[dict]:
+        """Read the entire local attempt ledger, without UI limits or DB writes."""
+        uri = f"file:{self.path.resolve().as_posix()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as db:
+            rows = db.execute("""
+                SELECT ticker, attempted_at_ns, outcome, amount, confidence,
+                       status, order_id, fill_count
+                FROM auto_trade_attempts
+                ORDER BY attempted_at_ns DESC, ticker DESC
+            """).fetchall()
+        return [
+            {**dict(zip(_FIELDS, row)),
+             "status": "UNKNOWN" if row[5] == "ATTEMPTED" else row[5]}
+            for row in rows
+        ]
