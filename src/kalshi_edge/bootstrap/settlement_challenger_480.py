@@ -141,6 +141,9 @@ class SettlementShadowRecord(BaseModel):
                 or not self.scheduled_ts_ns <= self.prediction_ts_ns
                 <= self.scheduled_ts_ns + MAX_CHECKPOINT_LATENESS_NS):
             raise ValueError("not an on-time 480s settlement checkpoint")
+        expected = _digest(self.model_dump(mode="json", exclude={"record_sha256"}))
+        if self.record_sha256 != expected:
+            raise ValueError("settlement shadow hash integrity failed")
         if self.status == "OK":
             if (self.reason is not None or any(x is None for x in (
                 self.brti_value, self.source_ts_ns, self.sigma_per_sqrt_second,
@@ -168,9 +171,6 @@ class SettlementShadowRecord(BaseModel):
                   self.sigma_observation_count,
               ))):
             raise ValueError("unavailable shadow must contain reason and no invented inputs")
-        expected = _digest(self.model_dump(mode="json", exclude={"record_sha256"}))
-        if self.record_sha256 != expected:
-            raise ValueError("settlement shadow hash integrity failed")
         return self
 
 
