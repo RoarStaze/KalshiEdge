@@ -201,3 +201,76 @@ def test_process_identity_rejects_invalid_and_recycled_pid(monkeypatch):
     with pytest.raises(control.ProcessControlError):
         control.suspend(0)
     assert control.is_alive(2147483001,"recycled") is False
+
+
+def test_resume_live_frozen_fit_even_if_repository_head_changed(tmp_path, monkeypatch):
+    """A thawed original process uses its original code, not newly installed source."""
+    controller, process = setup_controller(tmp_path)
+    monkeypatch.setattr(training_cycle.training_process_control, "suspend", lambda pid: None)
+    thawed = []
+    monkeypatch.setattr(training_cycle.training_process_control, "resume",
+                        lambda pid: thawed.append(pid))
+    assert controller.pause()["paused"] is True
+
+    # An unrelated git pull cannot alter already-loaded code in this exact PID.
+    monkeypatch.setattr(controller, "_git_sha", lambda: "b" * 40)
+    result = controller.resume()
+
+    assert result["resumed"] is True
+    assert result["in_memory"] is True
+    assert thawed == [process.pid]
+    assert controller.progress()["running"] is True
+    assert training_cycle._run_state(tmp_path)["git_sha"] == "a" * 40
+    assert training_pause.read_pause(tmp_path)["pause_requested"] is False
+
+
+def test_paused_disk_checkpoint_still_rejects_git_version_change(tmp_path, monkeypatch):
+    """Never restart an old on-disk experiment under newly changed code."""
+    controller = training_cycle.TrainingController(tmp_path, project_root=tmp_path)
+    training_cycle._write_worker_state(
+        tmp_path, stage="PAUSED", mode="baseline", round_number=0,
+        run_id="disk-run", git_sha="a" * 40,
+        resume_stage="BUILDING_DATASET", suspended_in_memory=False,
+    )
+    training_pause.set_pause(tmp_path, run_id="disk-run", manual=True)
+    monkeypatch.setattr(controller, "_git_sha", lambda: "b" * 40)
+    monkeypatch.setattr(controller, "_launch_existing",
+                        lambda *args, **kwargs: pytest.fail("must not launch changed code"))
+
+    with pytest.raises(training_cycle.CycleError, match="Git version changed"):
+        controller.resume()
+    assert training_pause.read_pause(tmp_path)["pause_requested"] is True
+
+
+def test_resume_failure_remains_visible_after_refresh():
+    """A rejected API resume must not appear to do nothing after the status GET."""
+    import shutil
+    import subprocess
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable for browser-control regression test")
+    start = PAGE.index("async function trainingControl(action){")
+    end = PAGE.index('\nel("train-pause").addEventListener', start)
+    function_source = PAGE[start:end]
+    script = (
+        "let trainingActionError='';let feedback='';let refreshes=0;\n"
+        "const button={disabled:false};\n"
+        "function el(id){if(id!=='train-resume')throw Error('bad button: '+id);return button;}\n"
+        "function text(id,value){if(id==='train-feedback')feedback=value;}\n"
+        "async function fetch(){return {ok:false,status:409,"
+        "json:async()=>({error:'Git version changed since training paused'})};}\n"
+        "async function refreshTraining(){refreshes++;"
+        "text('train-feedback','Paused at saved checkpoint; click Resume.');}\n"
+        + function_source + "\n"
+        + "(async()=>{await trainingControl('resume');"
+        "if(refreshes!==1)throw Error('status refresh skipped');"
+        "if(!feedback.includes('Git version changed'))"
+        "throw Error('API failure was erased: '+feedback);"
+        "})().catch(e=>{console.error(e);process.exitCode=1;});\n"
+    )
+    result = subprocess.run(
+        [node, "-"], input=script, text=True, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
