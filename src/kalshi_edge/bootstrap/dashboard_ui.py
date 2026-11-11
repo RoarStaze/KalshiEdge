@@ -410,6 +410,7 @@ async function refreshHistory(){try{const response=await fetch("/api/history",{c
 catch(err){text("history-status","Could not refresh: "+err.message)}}
 el("filter")?.addEventListener("change",()=>{if(history)renderHistory(history)});
 let trainingStatus=null;
+let trainingActionError="";
 const trainingStages=[
  ["BUILDING_DATASET","Create dataset"],
  ["VERIFYING_DATASET","Audit dataset"],
@@ -779,6 +780,9 @@ function renderTraining(info){
   text("train-feedback",ready?"Ready. Press Train Now to begin a recorded training session.":
    "The progress shown above is evidence readiness, not training time.");
  }
+ // An HTTP 409/403/500 must remain visible through the subsequent status GET
+ // and scheduled refreshes instead of making Resume appear to do nothing.
+ if(trainingActionError)text("train-feedback",trainingActionError);
 }
 async function refreshTraining(){
  try{
@@ -849,6 +853,7 @@ async function refreshTrainingProgress(){
  }
 }
 async function trainingControl(action){
+ trainingActionError="";
  const button=el(action==="pause"?"train-pause":"train-resume");
  button.disabled=true;
  text("train-feedback",action==="pause"?
@@ -893,9 +898,10 @@ async function trainingControl(action){
    "Pause requested · waiting for the worker's safe checkpoint.":
    "Saved session resumed. Verified dataset checkpoints and fitted artifacts will be reused.");
  }catch(err){
-  text("train-feedback","Could not "+action+" training: "+err.message);
+  trainingActionError="Could not "+action+" training: "+err.message;
  }
  await refreshTraining();
+ if(trainingActionError)text("train-feedback",trainingActionError);
 }
 el("train-pause").addEventListener("click",()=>trainingControl("pause"));
 el("train-resume").addEventListener("click",()=>trainingControl("resume"));
