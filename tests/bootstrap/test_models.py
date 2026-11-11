@@ -60,8 +60,16 @@ def test_candidate_training_is_seeded_and_never_scores_lockbox() -> None:
     rows = _rows()
     folds = _folds(rows)
 
-    first = models.train_candidate_models(rows, folds, seed=73115)
+    progress = []
+    first = models.train_candidate_models(
+        rows, folds, seed=73115,
+        progress=lambda completed, total, action:
+            progress.append((completed, total, action)),
+    )
     second = models.train_candidate_models(rows, folds, seed=73115)
+    expected = len(models.CANDIDATE_NAMES) * (len(folds) + 1)
+    assert [done for done, _, _ in progress] == list(range(expected + 1))
+    assert all(total == expected and action for _, total, action in progress)
 
     assert first.candidate_names == ("logistic", "hist_gradient_boosting", "xgboost")
     assert first.best_candidate in first.candidate_names
