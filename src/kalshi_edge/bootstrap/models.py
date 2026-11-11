@@ -293,6 +293,11 @@ def train_candidate_models(
         if not train_rows or not validation_rows:
             raise ModelError("walk-forward fold has empty train or validation rows")
         for name in CANDIDATE_NAMES:
+            if progress is not None:
+                progress(
+                    fitted_count, fit_total,
+                    f"Optimizing {name} for walk-forward fold {fold_number + 1}/{len(splits)}",
+                )
             params = _select_params(name, rows, groups, fold.train_indices, feature_names, seed + fold_number)
             selected[name].append(dict(params))
             fitted = _fit_candidate(
@@ -324,6 +329,8 @@ def train_candidate_models(
 
     final_models: dict[str, object] = {}
     for name in CANDIDATE_NAMES:
+        if progress is not None:
+            progress(fitted_count, fit_total, f"Fitting final {name} model")
         params = selected[name][-1]
         final_models[name] = _fit_candidate(
             name,
