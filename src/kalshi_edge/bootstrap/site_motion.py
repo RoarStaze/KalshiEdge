@@ -49,6 +49,13 @@ body[data-page] .site-nav{
 }
 body[data-page] :is(.site-nav,.forecast,.context>.manual-trade,.training-card,.history-view .card,.api-card).ke-neon-target{
  position:relative;
+ /* Only the border-box gradient paints the perimeter. Backdrop filtering
+    additionally composites a rectangular layer, which can leak a thin grey
+    horizontal seam past antialiased rounded corners in Chromium/WebView.
+    Retain translucency and the moving gradient without this second layer. */
+ isolation:isolate;
+ backdrop-filter:none!important;
+ -webkit-backdrop-filter:none!important;
  --ke-rainbow-panel:linear-gradient(155deg,rgba(3,17,23,.86),rgba(2,11,19,.91) 74%);
  border:2px solid transparent!important;
  /* Preserve the existing card-specific rounded corners. */
