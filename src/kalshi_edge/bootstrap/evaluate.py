@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
