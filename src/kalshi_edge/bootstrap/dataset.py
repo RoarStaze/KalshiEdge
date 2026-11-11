@@ -229,11 +229,19 @@ def _date_range(start_ns: int, end_ns: int) -> Iterable[date]:
         current += timedelta(days=1)
 
 
+def _file_signature(path: Path) -> tuple[int, int, int]:
+    """Cheap change detector; SHA-256 is still verified before first use."""
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 def _required_binance_day_available(
     root: Path,
     settings: BootstrapSettings,
     day: date,
     availability: BinanceAvailabilitySnapshot | None,
+    *,
+    verified_days: dict[date, tuple[tuple[int, int, int], tuple[int, int, int]]] | None = None,
 ) -> bool:
     stem = f"{settings.binance_symbol.upper()}-1s-{day.isoformat()}"
     normalized_path = root / "normalized" / "binance" / "1s" / f"{stem}.parquet"
@@ -243,8 +251,15 @@ def _required_binance_day_available(
     if normalized_exists != normalized_manifest_exists:
         raise DatasetBuildError(f"Binance normalized provenance is incomplete for {day}")
     if normalized_exists:
-        if not verify_artifact(normalized_path, normalized_manifest):
-            raise DatasetBuildError(f"Binance normalized provenance verification failed for {day}")
+        # One verified Binance day serves ~96 consecutive 15-minute markets.
+        # SHA-256-check it once per build and recheck whenever either file's
+        # size or timestamps change. Never cache a failed verification.
+        signature = (_file_signature(normalized_path), _file_signature(normalized_manifest))
+        if verified_days is None or verified_days.get(day) != signature:
+            if not verify_artifact(normalized_path, normalized_manifest):
+                raise DatasetBuildError(f"Binance normalized provenance verification failed for {day}")
+            if verified_days is not None:
+                verified_days[day] = signature
         return True
 
     raw_path = root / "raw" / "binance" / "archive" / f"{stem}.zip"
@@ -254,6 +269,8 @@ def _required_binance_day_available(
     if raw_exists != raw_manifest_exists:
         raise DatasetBuildError(f"Binance raw provenance is incomplete for {day}")
     if raw_exists:
+        if verified_days is not None:
+            verified_days.pop(day, None)
         if not verify_artifact(raw_path, raw_manifest):
             raise DatasetBuildError(f"Binance raw provenance verification failed for {day}")
         raise DatasetBuildError(f"Binance normalized history is missing for verified raw archive {day}")
@@ -448,6 +465,10 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
         return {}
     records: dict[str, dict[str, Any]] = {}
     valid_end = 0
+    # A daily source can appear in thousands of per-market checkpoints.
+    # Its SHA is still checked on each replay, but never redundantly hashed
+    # for each checkpoint record while its file identity is unchanged.
+    seen_hashes: dict[Path, tuple[tuple[int, int, int], str]] = {}
     for line in raw.splitlines(keepends=True):
         next_end = valid_end + len(line)
         try:
@@ -486,7 +507,17 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
             except ValueError:
                 path.unlink(missing_ok=True)
                 return {}
-            if not source.is_file() or sha256_file(source) != expected_sha:
+            if not source.is_file():
+                path.unlink(missing_ok=True)
+                return {}
+            signature = _file_signature(source)
+            cached = seen_hashes.get(source)
+            if cached is not None and cached[0] == signature:
+                actual_sha = cached[1]
+            else:
+                actual_sha = sha256_file(source)
+                seen_hashes[source] = signature, actual_sha
+            if actual_sha != expected_sha:
                 # Never reuse partial work against changed/missing source data.
                 path.unlink(missing_ok=True)
                 return {}
@@ -571,6 +602,7 @@ def build_dataset(
         provenance[availability.path.as_posix()] = availability.sha256
 
     btc_cache = _DailyBinanceCache(root, settings, provenance)
+    verified_binance_days: dict[date, tuple[tuple[int,int,int],tuple[int,int,int]]] = {}
     saved = _load_dataset_checkpoints(root, settings)
     for item in saved.values():
         provenance.update({str(key): str(value) for key, value in item["inputs"].items()})
@@ -605,7 +637,12 @@ def build_dataset(
                 label.close_ts_ns,
             )
         )
-        if not all(_required_binance_day_available(root, settings, day, availability) for day in required_days):
+        if not all(
+            _required_binance_day_available(
+                root, settings, day, availability,
+                verified_days=verified_binance_days,
+            ) for day in required_days
+        ):
             excluded.append(label.ticker)
             report_progress(market_index, label.ticker)
             continue
