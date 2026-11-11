@@ -74,7 +74,7 @@ def _spawn_service(args: list[str], root: Path, log: IO[bytes]) -> subprocess.Po
     )
 
 
-def _request_training_shutdown(data_root: Path, *, timeout_seconds: float = 1.0) -> None:
+def _request_training_shutdown(data_root: Path, *, timeout_seconds: float = 1.0) -> bool:
     """Allow the training worker to checkpoint before Windows kills child tree.
 
     Unexpected window/terminal termination cannot run this hook. Persistent
@@ -83,26 +83,39 @@ def _request_training_shutdown(data_root: Path, *, timeout_seconds: float = 1.0)
     try:
         from .bootstrap import training_cycle, training_pause
         run = training_cycle._run_state(data_root)
-        if not run or run.get("stage") not in training_cycle.ACTIVE_WORKER_STAGES:
-            return
+        if not run:
+            return False
+        if run.get("stage") == "PAUSED" and run.get("suspended_in_memory") is True:
+            pid, token = run.get("worker_pid"), run.get("worker_identity")
+            from .bootstrap import training_process_control
+            return (type(pid) is int and isinstance(token, str)
+                    and training_process_control.is_alive(pid, token))
+        if run.get("stage") not in training_cycle.ACTIVE_WORKER_STAGES:
+            return False
         run_id = run.get("run_id")
         if not isinstance(run_id, str):
-            return
+            return False
         intent = training_pause.read_pause(data_root)
-        if intent.get("run_id") == run_id and intent.get("pause_requested") and intent.get("manual"):
-            return  # A user requested manual pause; never silently change intent.
+        manual = bool(intent.get("run_id") == run_id
+                      and intent.get("pause_requested") and intent.get("manual"))
+        if run.get("stage") in ("TRAINING", "FITTING"):
+            if training_cycle._suspend_training_fit(data_root, run, manual=manual):
+                return True  # Leave only the verified suspended worker alive.
+        if manual:
+            return False  # Never silently change explicit manual pause intent.
         training_pause.set_pause(data_root, run_id=run_id, manual=False)
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         while time.monotonic() < deadline:
             run = training_cycle._run_state(data_root)
             if run is None or run.get("stage") in ("PAUSED", "COMPLETE", "FAILED"):
-                return
+                return False
             time.sleep(0.05)
     except Exception:
         LOG.exception("Could not request graceful training checkpoint at shutdown")
+    return False
 
 
-def _stop(service: subprocess.Popen | None) -> None:
+def _stop(service: subprocess.Popen | None, *, preserve_children: bool = False) -> None:
     if service is None or service.poll() is not None:
         return
     # The dashboard can own a long-running Train Now child process. Stopping
@@ -111,7 +124,9 @@ def _stop(service: subprocess.Popen | None) -> None:
     if os.name == "nt":
         try:
             result = subprocess.run(
-                ["taskkill", "/PID", str(service.pid), "/T", "/F"],
+                (["taskkill", "/PID", str(service.pid), "/F"]
+                 if preserve_children else
+                 ["taskkill", "/PID", str(service.pid), "/T", "/F"]),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 check=False, timeout=15,
             )
@@ -120,7 +135,7 @@ def _stop(service: subprocess.Popen | None) -> None:
                 return
         except (OSError, subprocess.SubprocessError):
             pass
-    else:
+    elif not preserve_children:
         import signal
         try:
             os.killpg(service.pid, signal.SIGTERM)
@@ -278,10 +293,11 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
         # When this launcher owns the history service, request a durable
         # checkpoint before the Windows /T /F process-tree fallback.
         # If the dashboard was reused, it belongs to another launcher.
-        if history is not None:
+        preserve_training_worker = bool(
             _request_training_shutdown(data_root)
+        ) if history is not None else False
         _stop(predictor)
-        _stop(history)
+        _stop(history, preserve_children=preserve_training_worker)
 
 
 def main(argv: list[str] | None = None) -> int:
