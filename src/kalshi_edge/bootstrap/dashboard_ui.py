@@ -419,6 +419,84 @@ const trainingStages=[
  ["PROMOTION_GATE","Deployment gate"]
 ];
 function trainPercent(n){return typeof n==="number"&&Number.isFinite(n)?(100*n).toFixed(1)+"%":"—"}
+// Source progress is authoritative. The animation never exceeds a verified
+// market count and never increases filesystem writes or model workload.
+const datasetTicker={
+ runId:null,phase:null,total:0,shown:0,target:0,raf:0,active:false,
+ valid:false,hasRun:false,prefix:"",action:""
+};
+function advanceVerifiedMarketCounter(shown,verified){
+ return shown<verified?shown+1:verified;
+}
+function paintVerifiedMarketCounter(){
+ const ticker=datasetTicker;
+ const pct=ticker.valid?
+  Math.min(100,Math.max(0,100*ticker.shown/ticker.total)):0;
+ const counts=ticker.valid?
+  " · "+ticker.shown+" / "+ticker.total+
+  (ticker.phase==="labels"?" market files verified (":" markets checked (")+
+  pct.toFixed(1)+"%)":
+  (ticker.hasRun&&ticker.active?" · counting verified market files…":"");
+ el("dataset-build-bar-fill").style.width=pct+"%";
+ el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(pct)));
+ text("dataset-build-detail",ticker.hasRun?
+  ticker.prefix+counts+" · "+ticker.action:
+  "Dataset creation begins when you press Train Now; it uses only verified source data.");
+}
+function tickVerifiedMarketCounter(){
+ datasetTicker.raf=0;
+ if(document.hidden||!datasetTicker.active)return;
+ datasetTicker.shown=advanceVerifiedMarketCounter(
+  datasetTicker.shown,datasetTicker.target);
+ paintVerifiedMarketCounter();
+ if(datasetTicker.shown<datasetTicker.target){
+  datasetTicker.raf=requestAnimationFrame(tickVerifiedMarketCounter);
+ }
+}
+function renderVerifiedMarketCounter(run,hasRun,failed,running){
+ const completed=Number(run.dataset_markets_completed);
+ const total=Number(run.dataset_markets_total);
+ const valid=Number.isFinite(completed)&&Number.isFinite(total)&&
+  Number.isInteger(completed)&&Number.isInteger(total)&&total>0&&completed>=0;
+ const phase=run.dataset_progress_phase==="labels"?"labels":"markets";
+ const runId=String(run.run_id||run.started_utc||"unknown");
+ const changed=runId!==datasetTicker.runId||
+  phase!==datasetTicker.phase||total!==datasetTicker.total;
+ const active=!!running&&run.stage==="BUILDING_DATASET"&&valid;
+ const count=valid?Math.min(completed,total):0;
+ if(changed||!active||document.hidden){
+  if(datasetTicker.raf)cancelAnimationFrame(datasetTicker.raf);
+  datasetTicker.raf=0;
+  datasetTicker.shown=count;
+  datasetTicker.target=count;
+ }else{
+  // Ignore stale full-status snapshots. Never animate above confirmed count.
+  datasetTicker.target=Math.max(datasetTicker.target,count);
+ }
+ datasetTicker.runId=runId;
+ datasetTicker.phase=phase;
+ datasetTicker.total=total;
+ datasetTicker.valid=valid;
+ datasetTicker.active=active;
+ datasetTicker.hasRun=hasRun;
+ datasetTicker.prefix=run.dataset_verified?"Dataset verified":
+  failed?"Dataset build stopped":"Dataset processing";
+ datasetTicker.action=run.dataset_action||
+  "Checking official settlement and source integrity";
+ paintVerifiedMarketCounter();
+ if(active&&!document.hidden&&datasetTicker.shown<datasetTicker.target&&
+   !datasetTicker.raf){
+  datasetTicker.raf=requestAnimationFrame(tickVerifiedMarketCounter);
+ }
+}
+document.addEventListener("visibilitychange",()=>{
+ if(document.hidden&&datasetTicker.raf){
+  cancelAnimationFrame(datasetTicker.raf);datasetTicker.raf=0;
+ }else if(!document.hidden&&datasetTicker.active&&
+          datasetTicker.shown<datasetTicker.target&&!datasetTicker.raf){
+  datasetTicker.raf=requestAnimationFrame(tickVerifiedMarketCounter);
+ }
+});
 function renderTrainingSession(run,running){
  const events=Array.isArray(run.events)?run.events:[];
  const current=String(run.stage||"");
@@ -442,23 +520,7 @@ function renderTrainingSession(run,running){
   stageDiv.append(number,name);list.append(stageDiv);
  }
  const hasRun=!!run.stage;
- const completed=Number(run.dataset_markets_completed);
- const total=Number(run.dataset_markets_total);
- const validCounts=Number.isFinite(completed)&&Number.isFinite(total)&&total>0;
- const datasetPct=validCounts?
-  Math.min(100,Math.max(0,100*completed/total)):(run.dataset_verified?100:0);
- const checkingFiles=run.dataset_progress_phase==="labels";
- const counts=validCounts?
-  " · "+Math.min(completed,total)+" / "+total+
-  (checkingFiles?" market files verified (":" markets checked (")+
-  datasetPct.toFixed(1)+"%)":
-  (hasRun&&current==="BUILDING_DATASET"?" · counting verified market files…":"");
- el("dataset-build-bar-fill").style.width=datasetPct+"%";
- el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(datasetPct)));
- text("dataset-build-detail",hasRun?
-  (run.dataset_verified?"Dataset verified":failed?"Dataset build stopped":"Dataset processing")+
-  counts+" · "+(run.dataset_action||"Checking official settlement and source integrity"):
-  "Dataset creation begins when you press Train Now; it uses only verified source data.");
+ renderVerifiedMarketCounter(run,hasRun,failed,running);
  const pct=hasRun?Math.max(0,Math.min(100,Number(run.progress_percent)||0)):0;
  text("training-worker-progress",hasRun?(failed?"FAILED":pct+"%"):"—");
  el("training-worker-bar-fill").style.width=pct+"%";
