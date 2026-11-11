@@ -454,7 +454,10 @@ def _dataset_checkpoint_path(root: Path) -> Path:
     return root / "checkpoints" / "dataset-build.jsonl"
 
 
-def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[str, dict[str, Any]]:
+def _load_dataset_checkpoints(
+    root: Path, settings: BootstrapSettings, *,
+    progress_callback: Callable[[int, int, str, str], None] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Load durable per-market rows only when every recorded input still matches."""
     path = _dataset_checkpoint_path(root)
     if not path.exists():
@@ -469,7 +472,10 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
     # Its SHA is still checked on each replay, but never redundantly hashed
     # for each checkpoint record while its file identity is unchanged.
     seen_hashes: dict[Path, tuple[tuple[int, int, int], str]] = {}
-    for line in raw.splitlines(keepends=True):
+    lines = raw.splitlines(keepends=True)
+    if progress_callback is not None and lines:
+        progress_callback(0, len(lines), "Verifying saved dataset checkpoints", "checkpoints")
+    for index, line in enumerate(lines, start=1):
         next_end = valid_end + len(line)
         try:
             item = json.loads(line)
@@ -523,6 +529,8 @@ def _load_dataset_checkpoints(root: Path, settings: BootstrapSettings) -> dict[s
                 return {}
         records[item["ticker"]] = item
         valid_end = next_end
+        if progress_callback is not None:
+            progress_callback(index, len(lines), item["ticker"], "checkpoints")
     return records
 
 
@@ -603,7 +611,9 @@ def build_dataset(
 
     btc_cache = _DailyBinanceCache(root, settings, provenance)
     verified_binance_days: dict[date, tuple[tuple[int,int,int],tuple[int,int,int]]] = {}
-    saved = _load_dataset_checkpoints(root, settings)
+    saved = _load_dataset_checkpoints(
+        root, settings, progress_callback=progress_callback,
+    )
     for item in saved.values():
         provenance.update({str(key): str(value) for key, value in item["inputs"].items()})
     rows: list[FeatureRow] = [
