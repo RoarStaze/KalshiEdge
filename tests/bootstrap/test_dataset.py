@@ -353,8 +353,14 @@ def test_checkpoint_replay_hashes_shared_sources_once(tmp_path: Path, monkeypatc
         seen.append(path)
         return original(path)
     monkeypatch.setattr(module,"sha256_file",counted)
-    saved=_load_dataset_checkpoints(tmp_path,settings)
+    progress=[]
+    saved=_load_dataset_checkpoints(
+        tmp_path,settings,
+        progress_callback=lambda done,total,ticker,phase:
+            progress.append((done,total,phase)))
     assert len(saved)==8
+    assert progress[0]==(0,8,"checkpoints")
+    assert progress[-1]==(8,8,"checkpoints")
     assert seen.count(source)==1
     # Each replay independently hashes source bytes; corruption is rejected.
     source.write_text('{"stable":false}',encoding="utf-8")
