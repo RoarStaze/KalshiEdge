@@ -109,7 +109,7 @@ def test_binance_backfill_can_request_only_one_verified_enrolled_day(tmp_path, m
     from kalshi_edge.bootstrap import backfill as bf
     from kalshi_edge.bootstrap.provenance import write_raw_artifact
     monkeypatch.setattr(bf, "_dates_for_valid_kalshi_markets",
-                        lambda root: [date(2026,10,26),date(2026,10,27)])
+                        lambda root, *, stop_after=None: [date(2026,10,26),date(2026,10,27)])
     class FakeClient:
         def __init__(self): self.urls=[]
         def download_and_verify(self, url, checksum_url, root):
@@ -138,7 +138,7 @@ def test_binance_backfill_can_request_only_one_verified_enrolled_day(tmp_path, m
 def test_binance_backfill_rejects_unenrolled_requested_day(tmp_path, monkeypatch):
     import pytest
     monkeypatch.setattr(backfill, "_dates_for_valid_kalshi_markets",
-                        lambda root: [date(2026,10,26)])
+                        lambda root, *, stop_after=None: [date(2026,10,26)])
     with pytest.raises(Exception, match="verified|required|market|enrolled"):
         backfill.backfill_binance(
             BootstrapSettings(bootstrap_dir=tmp_path),
@@ -154,3 +154,48 @@ def test_failed_training_ui_distinguishes_stopped_run_from_active_progress():
     assert 'run.stage==="FAILED"?"Previous training stopped' in PAGE
     assert 'snapshot.status.run?.stage==="FAILED"' in TRAIN_STATUS_SESSION_HELPERS
     assert "Previous training failed" in TRAIN_STATUS_SESSION_HELPERS
+
+
+def test_targeted_binance_repair_stops_market_scan_after_verified_required_date(tmp_path, monkeypatch):
+    """Repair near newest markets shouldn't rescan all 30k historical records."""
+    import json
+    from kalshi_edge.bootstrap import backfill as bf
+    from kalshi_edge.bootstrap.provenance import write_raw_artifact
+
+    root=tmp_path/"data/bootstrap"
+    valid={
+        "market":{
+            "ticker":"KXBTC15M-ZZZ-RECENT","event_ticker":"KXBTC15M-EVENT",
+            "market_type":"binary","open_time":"2026-10-31T12:00:00Z",
+            "close_time":"2026-10-31T12:15:00Z",
+            "settlement_ts":"2026-10-31T12:16:00Z","status":"finalized",
+            "result":"yes","settlement_value_dollars":"74100.0",
+            "strike_type":"greater","floor_strike":74000.0,
+            "rules_primary":"above strike","rules_secondary":"verified",
+            "is_provisional":False
+        }
+    }
+    write_raw_artifact(root=root,source="kalshi",
+        logical_name="markets/KXBTC15M-ZZZ-RECENT.json",
+        content=json.dumps(valid).encode(),metadata={})
+    bad_market=root/"raw/kalshi/markets/KXBTC15M-AAA-OLD.json"
+    bad_market.write_text("corrupt",encoding="utf-8")
+    checks=[]
+    monkeypatch.setattr(bf, "_required_kalshi_history_available",
+                        lambda root, ticker: True)
+    real_verify=bf.verify_artifact
+    def observed(*args):
+        checks.append(args[0].name)
+        return real_verify(*args)
+    monkeypatch.setattr(bf,"verify_artifact",observed)
+
+    required=bf._dates_for_valid_kalshi_markets(
+        root,stop_after={date(2026,10,31)})
+    assert date(2026,10,31) in required
+    assert checks==["KXBTC15M-ZZZ-RECENT.json"]
+
+    # The full-archive path still performs strict verification of every
+    # source and rejects the deliberately corrupted unrelated market.
+    import pytest
+    with pytest.raises(Exception,match="provenance verification"):
+        bf._dates_for_valid_kalshi_markets(root)

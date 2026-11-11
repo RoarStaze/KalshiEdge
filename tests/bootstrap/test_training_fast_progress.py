@@ -268,3 +268,28 @@ def test_train_polls_verified_progress_four_times_a_second():
         ), "train")
     assert "setInterval(refreshTrainingProgress,250)" in p
     assert "setInterval(refreshTrainingProgress,750)" not in p
+
+
+def test_saved_checkpoint_validation_has_own_throttled_progress_phase(tmp_path, monkeypatch):
+    writes = []
+    now = [0.0]
+    monkeypatch.setattr(training_cycle, "_write_worker_state",
+        lambda root, **kw: writes.append(kw))
+    callback=training_cycle._market_progress_reporter(
+        tmp_path,mode="baseline",round_number=0,clock=lambda:now[0],
+    )
+    callback(0,100,"Opening saved checkpoints","checkpoints")
+    for completed in range(1,100):
+        now[0] += .04
+        callback(completed,100,"ticker","checkpoints")
+    callback(100,100,"Last saved record","checkpoints")
+    assert writes[0]["dataset_progress_phase"] == "checkpoints"
+    assert writes[0]["dataset_markets_completed"] == 0
+    assert "checkpoint" in writes[0]["dataset_action"].lower()
+    assert writes[-1]["dataset_markets_completed"] == 100
+    assert len(writes) < 100
+
+    callback(0,29865,"New feature pass","markets")
+    assert writes[-1]["dataset_progress_phase"] == "markets"
+    assert writes[-1]["dataset_markets_completed"] == 0
+    assert "feature" in writes[-1]["dataset_action"].lower()

@@ -476,13 +476,13 @@ def _market_progress_reporter(
         nonlocal last_count, last_time, last_phase, resume_skip_active
         if total <= 0 or not 0 <= completed <= total:
             raise ValueError("invalid dataset progress count")
-        if run_id is not None and stage != "labels":
+        if run_id is not None and stage not in ("labels", "checkpoints"):
             # Feature-row processing continues to honor every market's
             # safe pause boundary, including the checkpointed replay loop.
             training_pause.check_pause(root, run_id)
 
-        phase = "labels" if stage == "labels" else "markets"
-        if phase == "labels":
+        phase = stage if stage in ("labels", "checkpoints") else "markets"
+        if phase in ("labels", "checkpoints"):
             # Replayed checkpoints are counted as verified again during a
             # new scan. Old feature cursors cannot suppress these updates.
             resume_skip_active = False
@@ -495,7 +495,7 @@ def _market_progress_reporter(
             last_count = -1
             last_time = float("-inf")
 
-        terminal = completed == total or stage not in ("labels", "markets")
+        terminal = completed == total or stage not in ("labels", "checkpoints", "markets")
         now = clock()
         first = last_count < 0
         if not first and not terminal:
@@ -506,7 +506,7 @@ def _market_progress_reporter(
         if not first and completed == last_count and not terminal:
             return
 
-        if run_id is not None and stage == "labels":
+        if run_id is not None and stage in ("labels", "checkpoints"):
             # The preliminary verification pass has no row checkpoint to
             # protect; checking pause on its bounded progress writes avoids
             # a redundant disk read for every market JSON file.
@@ -514,9 +514,11 @@ def _market_progress_reporter(
 
         action = (
             "Finalizing dataset: validating leakage and writing artifacts"
-            if stage not in ("labels", "markets") else
+            if stage not in ("labels", "checkpoints", "markets") else
             "Verifying market files against official source manifests"
             if phase_changed and phase == "labels" else
+            "Validating saved dataset checkpoints and source SHA-256"
+            if phase_changed and phase == "checkpoints" else
             "Building verified historical market feature rows"
             if phase_changed and phase == "markets" else None
         )

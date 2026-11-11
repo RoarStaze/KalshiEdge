@@ -274,7 +274,7 @@ def backfill_kalshi(
             history.close()
 
 
-def _dates_for_valid_kalshi_markets(root: Path) -> list[date]:
+def _dates_for_valid_kalshi_markets(root: Path, *, stop_after: set[date] | None = None) -> list[date]:
     market_root = root / "raw" / "kalshi" / "markets"
     manifest_root = root / "manifests" / "kalshi" / "markets"
     if not market_root.exists():
@@ -282,7 +282,12 @@ def _dates_for_valid_kalshi_markets(root: Path) -> list[date]:
 
     dates: set[date] = set()
     valid_markets = 0
-    for market_path in sorted(market_root.glob("*.json")):
+    # Targeted single-day recovery only needs proof that its date is
+    # enrolled in a verified settled market. Visit newest market tickers
+    # first and stop once all requested dates are proved; full backfill
+    # retains its original exhaustive scan and fail-closed verification.
+    paths = sorted(market_root.glob("*.json"), reverse=stop_after is not None)
+    for market_path in paths:
         manifest_path = manifest_root / f"{market_path.name}.manifest.json"
         if not manifest_path.exists() or not verify_artifact(market_path, manifest_path):
             raise BinanceDataError(f"Kalshi market artifact failed provenance verification: {market_path.name}")
@@ -303,6 +308,8 @@ def _dates_for_valid_kalshi_markets(root: Path) -> list[date]:
         while current <= last:
             dates.add(current)
             current += timedelta(days=1)
+        if stop_after is not None and stop_after.issubset(dates):
+            break
 
     if valid_markets == 0 or not dates:
         raise BinanceDataError("Kalshi bootstrap history contains no valid settled markets for Binance date derivation")
@@ -392,13 +399,13 @@ def backfill_binance(
     effective_as_of = effective_as_of.astimezone(timezone.utc)
     availability = record_daily_availability_snapshot(root, effective_as_of.date())
 
-    dates = _dates_for_valid_kalshi_markets(root)
     if required_dates is not None:
         requested = set(required_dates)
         # Repair only verified dates already required by settled Kalshi
         # market history. Never download arbitrary/unrelated dates.
         if not requested or not all(type(day) is date for day in requested):
             raise BinanceDataError("Binance repair requires valid UTC dates")
+        dates = _dates_for_valid_kalshi_markets(root, stop_after=requested)
         unverified = requested.difference(dates)
         if unverified:
             raise BinanceDataError(
@@ -406,6 +413,8 @@ def backfill_binance(
                 + ", ".join(day.isoformat() for day in sorted(unverified))
             )
         dates = sorted(requested)
+    else:
+        dates = _dates_for_valid_kalshi_markets(root)
     available_dates = [day for day in dates if day <= availability.available_through_date]
     unavailable_dates = [day for day in dates if day > availability.available_through_date]
     urls = archive_urls(bootstrap.binance_symbol, available_dates, dataset="klines", interval="1s")

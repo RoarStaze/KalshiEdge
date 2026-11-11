@@ -296,3 +296,93 @@ def test_market_verification_count_streams_before_feature_build(tmp_path: Path) 
     assert feature_events[0]==(0,2,"markets")
     assert feature_events[-1]==(2,2,"markets")
     assert events.index((2,2,"labels"))<events.index((0,2,"markets"))
+
+
+def test_binance_day_sha_is_verified_once_per_unchanged_day(tmp_path: Path, monkeypatch) -> None:
+    """Many 15m markets share one 1s archive: do not hash it per market."""
+    from datetime import date
+    from kalshi_edge.bootstrap import dataset as module
+    root = tmp_path / "data/bootstrap"
+    _seed(root)
+    settings=BootstrapSettings(bootstrap_dir=root)
+    day=date(2026,8,1)
+    cache = {}
+    seen=[]
+    original=module.verify_artifact
+
+    def counted(path, manifest):
+        if "BTCUSDT-1s" in str(path):
+            seen.append(str(path))
+        return original(path,manifest)
+    monkeypatch.setattr(module,"verify_artifact",counted)
+    for index in range(12):
+        assert module._required_binance_day_available(
+            root, settings, day, None, verified_days=cache)
+    assert len(seen)==1
+
+    # Preserve fail-closed behavior: if the bytes change during the build,
+    # the next check must rehash and reject them.
+    normalized=root/"normalized/binance/1s/BTCUSDT-1s-2026-08-01.parquet"
+    normalized.write_bytes(normalized.read_bytes()+b"invalid")
+    with pytest.raises(DatasetBuildError,match="provenance verification failed"):
+        module._required_binance_day_available(
+            root, settings, day, None, verified_days=cache)
+    assert len(seen)==2
+
+
+def test_checkpoint_replay_hashes_shared_sources_once(tmp_path: Path, monkeypatch) -> None:
+    """Resume still checks SHA-256 but identical saved sources are not rehashed."""
+    from kalshi_edge.bootstrap import dataset as module
+    settings=BootstrapSettings(bootstrap_dir=tmp_path)
+    source=tmp_path/"raw"/"sample.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"stable":true}',encoding="utf-8")
+    expected=sha256_file(source)
+    for idx in range(8):
+        ticker=f"KXBTC15M-CHECKPOINT-{idx}"
+        row=FeatureRow(
+            market_ticker=ticker,market_date="2026-08-01",
+            split_group_id=ticker,checkpoint_ts_ns=1785585900000000000,
+            label_yes=1,features={"btc_close":100.0},
+            source_max_ts_ns={"binance":1785585900000000000})
+        _append_dataset_checkpoint(tmp_path,settings,ticker,[row],
+                                    {"raw/sample.json":expected})
+    seen=[]
+    original=module.sha256_file
+    def counted(path):
+        seen.append(path)
+        return original(path)
+    monkeypatch.setattr(module,"sha256_file",counted)
+    progress=[]
+    saved=_load_dataset_checkpoints(
+        tmp_path,settings,
+        progress_callback=lambda done,total,ticker,phase:
+            progress.append((done,total,phase)))
+    assert len(saved)==8
+    assert progress[0]==(0,8,"checkpoints")
+    assert progress[-1]==(8,8,"checkpoints")
+    assert seen.count(source)==1
+    # Each replay independently hashes source bytes; corruption is rejected.
+    source.write_text('{"stable":false}',encoding="utf-8")
+    assert _load_dataset_checkpoints(tmp_path,settings)=={}
+    assert not (tmp_path/"checkpoints"/"dataset-build.jsonl").exists()
+
+
+def test_dataset_percent_stays_under_100_until_final_market() -> None:
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    import re, shutil, subprocess
+    assert "function formatDatasetPercent(" in PAGE
+    node=shutil.which("node")
+    if not node: return
+    match=re.search(r"function formatDatasetPercent\([^)]*\)\{[^}]*\}",PAGE)
+    assert match
+    code=match.group(0)+"""
+if(formatDatasetPercent(29855,29865)!=="99.9")
+ throw Error("rounded to 100 before finishing");
+if(formatDatasetPercent(29865,29865)!=="100.0")
+ throw Error("final market did not show 100");
+if(formatDatasetPercent(5,10)!=="50.0")
+ throw Error("middle progress wrong");
+"""
+    result=subprocess.run([node,"-"],input=code,text=True,capture_output=True,timeout=10)
+    assert result.returncode==0,result.stderr
