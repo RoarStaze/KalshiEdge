@@ -199,6 +199,62 @@ body[data-page="train"] .training-card{display:block}
  .kpi-num{font-size:26px}
  .context>.manual-trade{min-height:540px}
 }
+/* Train: fit the two actual dashboard surfaces within one desktop viewport.
+   The previous full-width vertical stack was taller than the screen even at
+   1080p. Keep all seven stages and action buttons visible without page scroll.
+   Narrow/short viewports retain natural scrolling rather than clipping UI. */
+@media(min-width:1101px) and (min-height:761px){
+ body[data-page="train"]{height:100dvh;overflow:hidden}
+ body[data-page="train"] .shell{display:flex;flex-direction:column;height:100dvh;
+  max-height:100dvh;padding-bottom:12px}
+ body[data-page="train"] .site-header{flex:none;padding:10px 0}
+ body[data-page="train"] .training-card{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);
+  grid-template-rows:auto minmax(0,1fr);gap:12px;flex:1;min-height:0;
+  margin:0;padding:14px 16px;overflow:hidden;align-content:stretch}
+ body[data-page="train"] .training-head{grid-column:1/-1;grid-row:1;min-height:0;gap:12px}
+ body[data-page="train"] .training-head h2{font-size:20px;margin:3px 0}
+ body[data-page="train"] .training-head .subtitle{font-size:11px;line-height:1.25}
+ body[data-page="train"] .training-head-controls{gap:8px}
+ body[data-page="train"] .training-model-identity{min-width:128px;padding:5px 9px}
+ body[data-page="train"] .training-model-identity strong{font-size:18px}
+ body[data-page="train"] .training-model-identity small{font-size:9px;line-height:1.2}
+ body[data-page="train"] .training-forward{grid-column:1;grid-row:2;min-height:0;min-width:0;
+  margin:0;padding:13px 15px;overflow:hidden;align-self:stretch}
+ body[data-page="train"] .training-live-panel{grid-column:2;grid-row:2;min-height:0;min-width:0;
+  margin:0;padding:13px 15px;overflow:hidden;align-self:stretch}
+ body[data-page="train"] .training-forward-head{gap:7px}
+ body[data-page="train"] .training-forward-numbers{margin-top:5px;font-size:11px}
+ body[data-page="train"] .training-big-percent{font-size:22px}
+ body[data-page="train"] .training-bar{margin:9px 0 7px}
+ body[data-page="train"] .training-forward-note{font-size:11px;line-height:1.35;margin:6px 0;overflow-wrap:anywhere}
+ body[data-page="train"] .training-launch{gap:10px;margin-top:10px;padding-top:10px}
+ body[data-page="train"] .training-launch h3{font-size:15px}
+ body[data-page="train"] .training-launch p{font-size:11px;line-height:1.35}
+ body[data-page="train"] .training-actions{gap:6px}
+ body[data-page="train"] .training-actions button{padding:9px 11px;font-size:11px}
+ body[data-page="train"] .training-launch .train-button{min-width:94px;padding:9px 11px}
+ body[data-page="train"] .training-live-head h3{font-size:16px;margin:2px 0 0}
+ body[data-page="train"] .training-worker-bar{margin-top:9px}
+ body[data-page="train"] .training-stage-list{grid-template-columns:repeat(7,minmax(0,1fr));
+  gap:5px;margin-top:9px}
+ body[data-page="train"] .training-stage{padding:8px 5px;min-height:56px;overflow-wrap:anywhere}
+ body[data-page="train"] .training-stage .step-id{font-size:8px;letter-spacing:0}
+ body[data-page="train"] .training-stage .step-name{font-size:10px;line-height:1.2;margin-top:5px}
+ body[data-page="train"] .training-dataset-bar{margin:5px 0 7px}
+ body[data-page="train"] .training-comparison{gap:7px;margin-top:8px}
+ body[data-page="train"] .training-metric{padding:8px}
+ body[data-page="train"] .training-metric strong{font-size:18px;margin-top:4px}
+ body[data-page="train"] .training-metric small{font-size:10px;line-height:1.25}
+ body[data-page="train"] .training-outcome{padding:9px 10px;margin-top:8px;
+  font-size:11px;line-height:1.35;max-height:15vh;overflow-y:auto;overflow-wrap:anywhere}
+ body[data-page="train"] .train-feedback{font-size:11px;line-height:1.3;margin-top:5px;overflow-wrap:anywhere}
+ body[data-page="train"] footer{display:none!important}
+}
+@media(max-width:1100px), (max-height:760px){
+ body[data-page="train"]{height:auto;overflow-y:auto}
+ body[data-page="train"] .shell{height:auto;max-height:none}
+ body[data-page="train"] .training-card{display:block;overflow:visible}
+}
 /* Trade page: zero unnecessary vertical scrolling on desktop. On small
    viewports the page can scroll rather than clip actions or key figures. */
 body[data-page="trade"] .section-intro{display:none!important}
