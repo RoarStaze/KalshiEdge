@@ -139,11 +139,7 @@ def test_missing_or_stale_reference_is_explicitly_unavailable(tmp_path):
         assert item.status=="UNAVAILABLE"
         assert item.p_yes is None
         assert item.reason
-        assert SettlementShadowWriter(tmp_path).save(item) is not None or True
         # No invalid value is ever silently replaced with Binance spot.
-        break
-    for altered in (stale,missing,mismatch):
-        assert build_settlement_shadow(final,altered,path).p_yes is None
 
 
 def test_causal_shadow_detects_tampered_snapshot_and_changed_final(tmp_path):
