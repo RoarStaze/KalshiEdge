@@ -178,3 +178,39 @@ def test_launcher_shutdown_preserves_explicit_manual_pause(tmp_path,monkeypatch)
     training_pause.set_pause(tmp_path,run_id="manually-paused",manual=True)
     launcher._request_training_shutdown(tmp_path,timeout_seconds=0)
     assert training_pause.read_pause(tmp_path)["manual"] is True
+
+
+def test_launcher_shutdown_preserves_frozen_stage4_child_for_reopen(tmp_path,monkeypatch):
+    """Killing the dashboard process tree would kill our safely frozen worker."""
+    from kalshi_edge.bootstrap import training_cycle, training_pause
+    training_cycle._write_worker_state(
+        tmp_path,stage="TRAINING",mode="baseline",round_number=0,
+        run_id="close-run",git_sha="a"*40,worker_pid=44282,
+        worker_identity="start-44282",
+    )
+    training_pause.reset_pause(tmp_path,run_id="close-run")
+    observed=[]
+    def freeze(root,run,*,manual):
+        observed.append((run["worker_pid"],manual))
+        training_pause.set_pause(root,run_id="close-run",manual=manual)
+        training_cycle._write_worker_state(
+            root,stage="PAUSED",mode="baseline",round_number=0,
+            resume_stage="TRAINING",suspended_in_memory=True,
+        )
+        return True
+    monkeypatch.setattr(training_cycle,"_suspend_training_fit",freeze)
+    assert launcher._request_training_shutdown(tmp_path,timeout_seconds=0) is True
+    assert observed==[(44282,False)]
+    assert training_pause.read_pause(tmp_path)["manual"] is False
+    assert training_cycle._run_state(tmp_path)["suspended_in_memory"] is True
+
+
+def test_preserving_suspended_worker_stops_only_dashboard_not_children(monkeypatch):
+    process=FakeProcess(13001)
+    calls=[]
+    monkeypatch.setattr(launcher.os,"killpg",
+                        lambda *args:calls.append("killpg") or
+                        pytest.fail("must not terminate frozen worker's process group"))
+    launcher._stop(process,preserve_children=True)
+    assert process.stopped
+    assert calls==[]
