@@ -380,6 +380,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "dataset_progress_phase", "dataset_last_market", "dataset_action", "dataset_row_count",
                 "dataset_market_count", "dataset_verified", "experiment_path",
                 "experiment_sha256", "resume_stage", "run_id", "git_sha",
+                "fit_steps_completed", "fit_steps_total", "fit_step_detail",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
@@ -830,6 +831,30 @@ def _build_dataset_with_binance_repair(
             )
 
 
+
+def _fit_progress_reporter(
+    root: Path, *, mode: str, round_number: int,
+) -> Callable[[int, int, str], None]:
+    """Publish completed model operations, never elapsed-time estimates.
+
+    The small worker-state file is read by the existing 250 ms progress
+    endpoint; no expensive readiness check or model scoring is added.
+    """
+    def report(completed: int, total: int, detail: str) -> None:
+        if (isinstance(completed, bool) or isinstance(total, bool)
+                or not isinstance(completed, int) or not isinstance(total, int)
+                or total <= 0 or not 0 <= completed <= total):
+            raise ValueError("invalid completed fitting operation count")
+        if not isinstance(detail, str) or not detail.strip():
+            raise ValueError("fitting progress requires a named operation")
+        _write_worker_state(
+            root, stage="TRAINING", mode=mode, round_number=round_number,
+            fit_steps_completed=completed, fit_steps_total=total,
+            fit_step_detail=detail[:180],
+        )
+    return report
+
+
 def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: str) -> int:
     """Long-running, explicitly user-triggered train + one-time evaluation."""
 
@@ -945,10 +970,14 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
                 )
             else:
                 _pause_boundary(root, stage="TRAINING", mode=mode, round_number=round_number)
+                on_fit_progress = _fit_progress_reporter(
+                    root, mode=mode, round_number=round_number,
+                )
                 experiment = train_experiment(
                     root, settings, git_sha=git_sha,
                     mistakes_only=mode == "mistake",
                     correct_only=mode == "correct",
+                    progress=on_fit_progress,
                 )
                 _pause_boundary(
                     root, stage="EVALUATING", mode=mode, round_number=round_number,
