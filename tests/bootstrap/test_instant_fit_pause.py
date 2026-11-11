@@ -194,8 +194,10 @@ def test_stale_pid_is_not_suspended_or_adopted_on_reopen(tmp_path,monkeypatch):
 
 def test_process_identity_rejects_invalid_and_recycled_pid(monkeypatch):
     from kalshi_edge.bootstrap import training_process_control as control
+    # The fixture stubs OS identity for the fake worker; validate PID
+    # rejection through the unchanged low-level PID gate.
     with pytest.raises(control.ProcessControlError):
-        control.identity(0)
+        control._pid(0)
     with pytest.raises(control.ProcessControlError):
         control.suspend(0)
     assert control.is_alive(2147483001,"recycled") is False
