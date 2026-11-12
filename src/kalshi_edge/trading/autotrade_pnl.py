@@ -176,24 +176,39 @@ def _settlement_position_matches(
         return False
 
 
+def _journal_reason(row: dict, stages: list[dict]) -> str:
+    """Classify incomplete local evidence without inferring exchange outcomes."""
+    states = [s.get("status") for s in stages if isinstance(s, dict)]
+    if (row.get("status") == "NO_FILL"
+            and not any(s in ("FILLED", "PARTIAL") for s in states)):
+        return "NO_FILL"
+    if (row.get("status") in ("UNKNOWN", "ATTEMPTED")
+            or any(s in ("UNKNOWN", "ATTEMPTED") for s in states)):
+        return "ORDER_OUTCOME_UNKNOWN"
+    if (row.get("status") == "NOT_SUBMITTED"
+            or "NOT_SUBMITTED" in states):
+        return "ORDER_NOT_SUBMITTED"
+    if not stages:
+        return "JOURNAL_STAGE_MISSING"
+    return "JOURNAL_STAGE_INCOMPLETE_OR_INVALID"
+
+
 def enrich_history(
     entries: list[dict], client=None, *, require_settlement_counts: bool = False,
 ) -> list[dict]:
-    """Add max_payout_dollars and trustworthy realized_pnl_dollars per market.
+    """Read-only realized P/L with evidence reason codes.
 
-    Settlement lookup and fill audit are read-only. Missing history, mixed
-    manual orders, incomplete pages and API failures never generate fake P/L.
+    Each market gets a conservative reason, including when exchange evidence
+    is unavailable. Reason codes are diagnostics, not automatic trade signals.
     """
     result = []
     candidates = {}
     for original in entries:
         row = dict(original)
         row.update(max_payout_dollars=None, realized_pnl_dollars=None,
-                   pnl_status="UNAVAILABLE", execution_quality=None)
+                   pnl_status="UNAVAILABLE", pnl_reason=None,
+                   execution_quality=None)
         stages = _stages(row)
-        # A market may first buy UP, sell it on reversal, then buy DOWN,
-        # or have a zero-fill first attempt followed by a successful retry.
-        # Display the latest confirmed BUY, not the immutable first attempt.
         last_buy = next((stage for stage in reversed(stages)
                          if stage.get("stage") != "REVERSAL_SELL"
                          and stage.get("status") in ("FILLED", "PARTIAL")),
@@ -203,15 +218,33 @@ def enrich_history(
             row["status"] = last_buy["status"]
             row["fill_count"] = last_buy["fill_count"]
             row["order_id"] = last_buy["order_id"]
-        plan = _plan(row)
+        try:
+            plan = _plan(row)
+        except (ValueError, TypeError, KeyError, InvalidOperation):
+            plan = None
+            row["pnl_reason"] = "JOURNAL_STAGE_INCOMPLETE_OR_INVALID"
         if plan is not None:
-            contracts, stages = plan
+            contracts, confirmed_stages = plan
             row["max_payout_dollars"] = _four(max(contracts.values()))
             row["pnl_status"] = "PENDING"
-            candidates[row["ticker"]] = (row, contracts, stages)
+            row["pnl_reason"] = "SETTLEMENT_NOT_VERIFIED"
+            candidates[row["ticker"]] = (row, contracts, confirmed_stages)
+        elif row["pnl_reason"] is None:
+            row["pnl_reason"] = _journal_reason(row, stages)
         result.append(row)
-    if not candidates or client is None or not callable(getattr(client, "get", None)):
+
+    if not candidates:
         return result
+    if client is None:
+        for row, _, _ in candidates.values():
+            row["pnl_reason"] = "EXCHANGE_NOT_QUERIED"
+        return result
+    if not callable(getattr(client, "get", None)):
+        for row, _, _ in candidates.values():
+            row["pnl_status"] = "UNAVAILABLE"
+            row["pnl_reason"] = "EXCHANGE_EVIDENCE_UNAVAILABLE"
+        return result
+
     try:
         settled = _pages(client, "/portfolio/settlements",
                          params={"limit": 1000}, field="settlements")
@@ -223,12 +256,25 @@ def enrich_history(
             if ticker in found:
                 raise ValueError("Duplicate market settlement")
             found[ticker] = market
-        selected = [ticker for ticker, record in found.items()
-                    if record.get("market_result") in ("yes", "no")]
+
+        # Absent settlement is NOT synonymous with a losing or archived trade.
+        # The live endpoint excludes some archived accounts/markets.
+        selected = []
+        for ticker, (row, _, _) in candidates.items():
+            market = found.get(ticker)
+            if market is None:
+                row["pnl_reason"] = "SETTLEMENT_NOT_IN_LIVE_API"
+            elif market.get("market_result") not in ("yes", "no"):
+                row["pnl_reason"] = "SETTLEMENT_NOT_FINAL"
+            else:
+                row["pnl_reason"] = "FILL_EVIDENCE_PENDING"
+                selected.append(ticker)
+
         if not selected:
             return result
-        # Kalshi's fill filter allows at most 100 comma-separated tickers.
-        # One truncated batch must invalidate the audit, never create fake P/L.
+
+        # The Kalshi fill filter accepts at most 100 market tickers at once.
+        # Never trust incomplete pagination as evidence of no fills.
         fills = []
         for first in range(0, len(selected), MAX_FILL_MARKET_TICKERS):
             batch = selected[first:first + MAX_FILL_MARKET_TICKERS]
@@ -241,31 +287,52 @@ def enrich_history(
                       if isinstance(item, dict) else None)
             if ticker in candidates:
                 by_market[ticker].append(item)
+
         for ticker in selected:
             row, contracts, stages = candidates[ticker]
+            market = found[ticker]
+            counts = (market.get("yes_count_fp"), market.get("no_count_fp"))
+            if require_settlement_counts and any(v is None for v in counts):
+                row["pnl_reason"] = "SETTLEMENT_POSITION_FIELDS_MISSING"
+                continue
+            if not _settlement_position_matches(
+                contracts, market, required=require_settlement_counts,
+            ):
+                row["pnl_reason"] = "SETTLEMENT_POSITION_MISMATCH"
+                continue
+
             try:
-                if not _settlement_position_matches(
-                    contracts, found[ticker], required=require_settlement_counts,
-                ):
-                    raise ValueError("Settlement holdings do not match AutoTrade fills")
-                row["realized_pnl_dollars"] = _calculate(
+                profit = _calculate(
                     contracts, stages, by_market.get(ticker, []),
-                    found[ticker]["market_result"], ticker)
-                row["pnl_status"] = "SETTLED"
-                # Only after the exchange fills and official settlement have
-                # fully reconciled may archived pretrade quotes be compared
-                # with real fill prices/fees. Historical absent quotes stay
-                # MISSING_QUOTE; no extra exchange requests or order changes.
-                row["execution_quality"] = measure_execution_quality(
+                    market["market_result"], ticker,
+                )
+                quality = measure_execution_quality(
                     _stages(row), by_market.get(ticker, []), ticker,
                 )
             except RuntimeError as exc:
                 row["pnl_status"] = "MIXED" if str(exc) == "MIXED" else "UNAVAILABLE"
-            except (ValueError, InvalidOperation, TypeError, KeyError):
+                row["pnl_reason"] = (
+                    "OTHER_ACCOUNT_FILL_IN_MARKET" if str(exc) == "MIXED"
+                    else "EXCHANGE_FILL_INVALID"
+                )
+            except (ValueError, InvalidOperation, TypeError, KeyError) as exc:
                 row["pnl_status"] = "UNAVAILABLE"
+                row["pnl_reason"] = (
+                    "FILL_QUANTITY_UNRECONCILED"
+                    if "Fill quantity does not reconcile with journal" in str(exc)
+                    else "EXCHANGE_FILL_INVALID"
+                )
+            else:
+                # Publish financial fields only once BOTH P/L and quality
+                # computation have completed without validation exceptions.
+                row["realized_pnl_dollars"] = profit
+                row["execution_quality"] = quality
+                row["pnl_status"] = "SETTLED"
+                row["pnl_reason"] = "VERIFIED"
     except Exception:
-        # Keep the journal visible, but never replace unavailable P/L with $0.
+        # Keep journal rows visible; a failed GET never equals zero realized P/L.
         for row in result:
             if row["pnl_status"] == "PENDING":
                 row["pnl_status"] = "UNAVAILABLE"
+                row["pnl_reason"] = "EXCHANGE_EVIDENCE_UNAVAILABLE"
     return result

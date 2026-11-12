@@ -8,7 +8,7 @@ markets remain UNVERIFIED rather than being assigned an invented P/L.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import closing
 import json
 from pathlib import Path
@@ -67,7 +67,7 @@ def _load_journal_readonly(path: Path) -> list[dict]:
     return results
 
 
-def audit_autotrade_profit(root: Path, *, client=None) -> dict[str, Any]:
+def audit_autotrade_profit(root: Path, *, client=None, details: bool = False) -> dict[str, Any]:
     """Audit *every* local market, preserving unknown and archived outcomes."""
     root = Path(root).resolve()
     entries = _load_journal_readonly(
@@ -78,6 +78,7 @@ def audit_autotrade_profit(root: Path, *, client=None) -> dict[str, Any]:
         entries, client=client, require_settlement_counts=True
     )
     score = summarize_autotrade_performance(reconciled)
+    reasons = Counter(row.get("pnl_reason", "UNCLASSIFIED") for row in reconciled)
     verified = score["verified_settled_markets"]
     no_fill = score["no_fill_markets"]
     complete = (
@@ -86,7 +87,7 @@ def audit_autotrade_profit(root: Path, *, client=None) -> dict[str, Any]:
         and score["other_unverified_markets"] == 0
         and score["duplicate_records_excluded"] == 0
     )
-    return {
+    report = {
         "report": "KALSHIEDGE_FULL_AUTOTRADE_NET_PROFIT_AUDIT_V1",
         "scope": (
             "LOCAL_AUTOTRADE_JOURNAL_WITH_LIVE_SETTLEMENT_EVIDENCE"
@@ -94,6 +95,7 @@ def audit_autotrade_profit(root: Path, *, client=None) -> dict[str, Any]:
         ),
         "status": "COMPLETE_FOR_LOCAL_JOURNAL" if complete else "PARTIAL_OR_UNVERIFIED",
         "journal_market_count": len(entries),
+        "evidence_reason_counts": dict(sorted(reasons.items())),
         "verified_settled_markets": verified,
         "unverified_filled_markets": score["unverified_filled_markets"],
         "other_unverified_markets": score["other_unverified_markets"],
@@ -115,6 +117,31 @@ def audit_autotrade_profit(root: Path, *, client=None) -> dict[str, Any]:
             "contribute to verified net P/L. No future profitability implied."
         ),
     }
+    if details:
+        # Safelist only evidence fields. Order IDs, client IDs, preview tokens,
+        # account identifiers, API credentials and raw fills must never appear.
+        report["market_details"] = [
+            {
+                "ticker": row.get("ticker"),
+                "outcome": row.get("outcome"),
+                "execution_status": row.get("status"),
+                "pnl_status": row.get("pnl_status"),
+                "pnl_reason": row.get("pnl_reason"),
+                "realized_pnl_dollars": row.get("realized_pnl_dollars"),
+                "confidence": row.get("confidence"),
+                "quoted_unit_price_dollars": next(
+                    (
+                        stage.get("quoted_unit_price_dollars")
+                        for stage in reversed(row.get("stages") or [])
+                        if stage.get("stage") != "REVERSAL_SELL"
+                        and stage.get("status") in ("FILLED", "PARTIAL")
+                    ),
+                    None,
+                ),
+            }
+            for row in reconciled
+        ]
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -127,11 +154,15 @@ def main(argv: list[str] | None = None) -> int:
         "--live", action="store_true",
         help="Explicitly allow signed GET settlement/fill reads only (never trade)",
     )
+    parser.add_argument(
+        "--details", action="store_true",
+        help="Include per-market evidence reason and verified net P/L; no order IDs",
+    )
     args = parser.parse_args(argv)
 
     # Default mode does not load secrets and does not contact Kalshi.
     if not args.live:
-        report = audit_autotrade_profit(args.root)
+        report = audit_autotrade_profit(args.root, details=args.details)
     else:
         from .manual_trade import KalshiOrderClient
         from .vault import CredentialVault
@@ -145,7 +176,9 @@ def main(argv: list[str] | None = None) -> int:
                         raise ValueError("Non-audit account access blocked")
                     return source.get(path, params=params)
 
-            report = audit_autotrade_profit(args.root, client=ReadOnlyAccount())
+            report = audit_autotrade_profit(
+                args.root, client=ReadOnlyAccount(), details=args.details,
+            )
         finally:
             source.close()
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
