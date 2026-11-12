@@ -18,6 +18,44 @@ MAX_PAGES = 5
 MAX_FILL_MARKET_TICKERS = 100  # Kalshi's documented comma-separated ticker cap.
 
 
+class FillAuditError(ValueError):
+    """A safe, enumerated cause; never render raw exchange payloads."""
+
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+def _fill_price_failure_code(exc: ValueError) -> str:
+    """Classify only messages emitted by our known fill-identity validator."""
+    message = str(exc)
+    if message == "Exchange YES/NO fill prices are inconsistent":
+        return "FILL_PRICE_INCONSISTENT"
+    if message in (
+        "No exchange ticker",
+        "Missing exchange market",
+        "Exchange fill ticker does not match AutoTrade",
+    ):
+        return "FILL_MARKET_MISMATCH"
+    if message == "Exchange fill conflicts with journaled direction":
+        return "FILL_DIRECTION_CONFLICT"
+    if message == "No verifiable exchange fill action/side":
+        return "FILL_IDENTITY_MISSING"
+    if message in (
+        "Incomplete or invalid V2 book identity",
+        "Incomplete or invalid legacy fill identity",
+    ):
+        return "FILL_IDENTITY_INVALID"
+    if message in (
+        "Missing actual exchange fill price",
+        "Missing, invalid or boolean exchange price",
+        "Invalid exchange price",
+        "Exchange price outside [0,1]",
+    ):
+        return "FILL_PRICE_INVALID"
+    return "EXCHANGE_FILL_INVALID"
+
+
 def _decimal(value: Any) -> Decimal:
     try:
         result = Decimal(str(value))
@@ -122,14 +160,14 @@ def _calculate(contracts, stages, fills, result: str, ticker: str) -> str:
     fill_ids = set()
     for item in fills:
         if not isinstance(item, dict):
-            raise ValueError("Invalid exchange fill")
+            raise FillAuditError("FILL_RECORD_INVALID")
         order = item.get("order_id")
         if order not in orders:
             raise RuntimeError("MIXED")
         identity = item.get("fill_id")
         if identity:
             if identity in fill_ids:
-                raise ValueError("Duplicate exchange fill")
+                raise FillAuditError("FILL_ID_DUPLICATE")
             fill_ids.add(identity)
         grouped[order].append(item)
 
@@ -140,11 +178,20 @@ def _calculate(contracts, stages, fills, result: str, ticker: str) -> str:
             # Exchange order IDs are not a substitute for confirming the fill
             # belongs to the expected action, contract side, and market.
             # The Kalshi fill API documents action=buy/sell and side=yes/no.
-            price = validated_fill_unit_price(
-                item, ticker=ticker, action=action, outcome=side,
-            )
-            qty = _positive(item.get("count_fp"))
-            fee = _positive(item.get("fee_cost"), zero=True)
+            try:
+                price = validated_fill_unit_price(
+                    item, ticker=ticker, action=action, outcome=side,
+                )
+            except ValueError as exc:
+                raise FillAuditError(_fill_price_failure_code(exc)) from exc
+            try:
+                qty = _positive(item.get("count_fp"))
+            except ValueError as exc:
+                raise FillAuditError("FILL_QUANTITY_INVALID") from exc
+            try:
+                fee = _positive(item.get("fee_cost"), zero=True)
+            except ValueError as exc:
+                raise FillAuditError("FILL_FEE_INVALID") from exc
             total_count += qty
             principal = qty * price
             net_cash += ((-principal if action == "BUY" else principal) - fee)
@@ -309,6 +356,9 @@ def enrich_history(
                 quality = measure_execution_quality(
                     _stages(row), by_market.get(ticker, []), ticker,
                 )
+            except FillAuditError as exc:
+                row["pnl_status"] = "UNAVAILABLE"
+                row["pnl_reason"] = exc.code
             except RuntimeError as exc:
                 row["pnl_status"] = "MIXED" if str(exc) == "MIXED" else "UNAVAILABLE"
                 row["pnl_reason"] = (
