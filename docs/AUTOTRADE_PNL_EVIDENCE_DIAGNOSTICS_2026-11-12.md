@@ -61,3 +61,39 @@ References:
 - https://docs.kalshi.com/api-reference/portfolio/get-settlements
 - https://docs.kalshi.com/api-reference/portfolio/get-fills
 - https://docs.kalshi.com/getting_started/historical_data
+
+## Diagnostic refinement: exact fill-validation class
+
+A generic `EXCHANGE_FILL_INVALID` can cover several different causes. The
+read-only audit now emits the following safe, allowlisted reason codes:
+
+- `FILL_PRICE_INCONSISTENT`: authenticated YES and NO prices do not sum to $1.
+- `FILL_PRICE_INVALID`: missing or invalid authenticated execution price.
+- `FILL_FEE_INVALID`: missing, negative, or non-finite actual fill fee.
+- `FILL_QUANTITY_INVALID`: missing, zero, negative, or non-finite fill quantity.
+- `FILL_DIRECTION_CONFLICT`: economic YES/NO exposure disagrees with the
+  immutable journal side.
+- `FILL_MARKET_MISMATCH`: fill's market identifiers disagree with the journal.
+- `FILL_IDENTITY_MISSING` or `FILL_IDENTITY_INVALID`: the exchange fill
+  lacks a verifiable action/side pair or has inconsistent identity fields.
+- `FILL_ID_DUPLICATE`: duplicate exchange fill ID in the account response.
+- `FILL_RECORD_INVALID`: fill response contains a non-object.
+- `EXCHANGE_FILL_INVALID`: a remaining unknown validation failure.
+
+None of these error codes authorizes an AutoTrade retry, changes execution,
+or assumes the missing trade's P/L was zero. A schema or direction failure
+must be investigated before treating the affected market as verified.
+
+**Run (read-only):**
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = ".\.venv\Scripts\python.exe"
+$r = & $py -m kalshi_edge.trading.autotrade_profit_audit --live --details |
+    ConvertFrom-Json
+$r.evidence_reason_counts | Format-List
+$r.market_details |
+    Where-Object { $_.pnl_reason -notin @("VERIFIED", "NO_FILL") } |
+    Select-Object ticker,outcome,pnl_reason |
+    Format-Table -AutoSize
+```
