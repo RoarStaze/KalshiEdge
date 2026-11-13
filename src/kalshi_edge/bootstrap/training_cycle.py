@@ -381,7 +381,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "dataset_market_count", "dataset_verified", "experiment_path",
                 "experiment_sha256", "resume_stage", "run_id", "git_sha",
                 "fit_steps_completed", "fit_steps_total", "fit_step_detail",
-                "worker_identity", "suspended_in_memory",
+                "worker_identity", "suspended_in_memory", "origin_git_sha",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
@@ -1289,6 +1289,10 @@ class TrainingController:
             "src/kalshi_edge/bootstrap/autotrader_ui.py",
             "src/kalshi_edge/bootstrap/api_credentials_ui.py",
             "src/kalshi_edge/bootstrap/preview_site.py",
+            # Accounting/reporting changes do not enter the training worker.
+            "src/kalshi_edge/trading/autotrade_history.py",
+            "src/kalshi_edge/trading/autotrade_pnl.py",
+            "src/kalshi_edge/trading/autotrade_profit_audit.py",
         })
         try:
             diff = subprocess.run(
@@ -1323,6 +1327,13 @@ class TrainingController:
                 )
                 if not separator:
                     return None
+                # Adding original-commit retention is only audit metadata:
+                # normalize this exact, known tuple extension when comparing
+                # old paused worker code with the upgraded controller.
+                prefix = prefix.replace(
+                    '"worker_identity", "suspended_in_memory", "origin_git_sha",',
+                    '"worker_identity", "suspended_in_memory",',
+                )
                 return prefix, suffix
 
             try:
@@ -1347,6 +1358,32 @@ class TrainingController:
             or name in browser_only or name == controller_module
             for name in diff
         )
+
+    def _prepare_checkpoint_resume(self, saved: dict[str, Any],
+                                   current_sha: str) -> dict[str, Any]:
+        """Rebase a stopped worker only if its training code is unchanged.
+
+        Preserve the first commit in the run history; the resumed process
+        always receives the actual installed commit in --git-sha. Completed
+        authenticated dataset/artifact checkpoints and the run ID are kept.
+        """
+        prior_sha = saved.get("git_sha")
+        if prior_sha == current_sha:
+            return saved
+        if not self._compatible_frozen_source(prior_sha, current_sha):
+            raise CycleError(
+                "Git version changed since training paused; training worker code "
+                "or dependencies changed (or Git has uncommitted files). "
+                "Restore the original training version to resume safely."
+            )
+        origin = saved.get("origin_git_sha") or prior_sha
+        _write_worker_state(
+            self.root, stage=saved["stage"], mode=saved["mode"],
+            round_number=saved["round_number"],
+            git_sha=current_sha, origin_git_sha=origin, error=None,
+        )
+        return _run_state(self.root) or {**saved, "git_sha": current_sha,
+                                         "origin_git_sha": origin}
 
     def _launch_existing(self, saved: dict[str, Any], *, resume: bool) -> dict[str, Any]:
         """One subprocess launch path for explicit training and restart recovery."""
@@ -1520,13 +1557,9 @@ class TrainingController:
                     suspended_in_memory=False,
                     error="Suspended process no longer exists; resuming last durable checkpoint.",
                 )
-            if saved.get("git_sha") != current_git_sha:
-                raise CycleError(
-                    "Git version changed since training paused; the original "
-                    "training version is required for a checkpoint restart."
-                )
             if self._tracked_pid() is not None:
                 raise CycleError("training is still active; wait for PAUSED acknowledgment")
+            saved=self._prepare_checkpoint_resume(saved,current_git_sha)
             training_pause.clear_pause(self.root,run_id=run_id)
             result=self._launch_existing(saved,resume=True)
             return {**(result or {}),"resumed":True,"in_memory":False}
@@ -1553,12 +1586,12 @@ class TrainingController:
                     self._suspended=True
                     if intent.get("pause_requested") and intent.get("manual"):
                         return False
-                    if saved.get("git_sha") != self._git_sha():
+                    if not self._compatible_frozen_source(saved.get("git_sha"), self._git_sha()):
                         _write_worker_state(
                             self.root,stage="PAUSED",mode=saved["mode"],
                             round_number=saved["round_number"],
-                            error="Version changed; suspended fit remains paused until "
-                                  "the original code version is restored.",
+                            error="Training worker source changed; suspended fit remains "
+                                  "paused until the original code version is restored.",
                         )
                         return False
                     if _thaw_training_fit(self.root,saved):
@@ -1582,15 +1615,16 @@ class TrainingController:
                         round_number=saved["round_number"],reason="manual",
                     )
                 return False
-            if saved.get("git_sha") != self._git_sha():
+            try:
+                saved=self._prepare_checkpoint_resume(saved,self._git_sha())
+            except CycleError as exc:
                 _save_paused_state(
                     self.root,mode=saved["mode"],round_number=saved["round_number"],
                     reason="update_blocked",
                 )
                 _write_worker_state(
                     self.root,stage="PAUSED",mode=saved["mode"],
-                    round_number=saved["round_number"],
-                    error="Git version changed since training started; cannot safely auto-resume",
+                    round_number=saved["round_number"], error=str(exc),
                 )
                 return False
             if not isinstance(run_id,str):
