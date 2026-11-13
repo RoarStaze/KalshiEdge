@@ -8,10 +8,8 @@ from __future__ import annotations
 import json
 
 from kalshi_edge.trading.autotrade_history import AutoTradeHistory
-from kalshi_edge.trading.autotrade_pnl import (
-    _safe_direction_evidence,
-    enrich_history,
-)
+import kalshi_edge.trading.autotrade_pnl as pnl
+from kalshi_edge.trading.autotrade_pnl import enrich_history
 from kalshi_edge.trading.autotrade_profit_audit import audit_autotrade_profit
 
 TICKER = "KXBTC15M-DIRECTION-EVIDENCE"
@@ -111,7 +109,7 @@ def test_evidence_is_allowlisted_capped_and_omits_secrets():
     entries = [_fill(fill_id=f"sensitive-fill-{i}") for i in range(15)]
     entries[0]["side"] = "user-secret:9381"
     entries[1]["book_side"] = "unexpected-private-value"
-    evidence = _safe_direction_evidence(stage, entries)
+    evidence = pnl._safe_direction_evidence(stage, entries)
     assert len(evidence) == 8
     assert evidence[0]["legacy_side"] == "INVALID"
     assert evidence[1]["book_side"] == "INVALID"
