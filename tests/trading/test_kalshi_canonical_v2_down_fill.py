@@ -6,6 +6,7 @@ All exchange responses are synthetic and no orders or credentials are used.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 import pytest
 
 from kalshi_edge.trading.fill_reconciliation import (
@@ -49,7 +50,7 @@ def test_realistic_down_fill_can_validate_with_consistent_legacy_aliases(
     }
     assert validated_fill_unit_price(
         fill, ticker=TICKER, action="BUY", outcome="DOWN",
-    ) == 0.8
+    ) == Decimal("0.8000")
 
 
 @pytest.mark.parametrize("legacy_side,legacy_action", [
