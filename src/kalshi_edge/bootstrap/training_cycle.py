@@ -1805,10 +1805,12 @@ class TrainingController:
             process=self._process
             pid=self._tracked_pid()
             saved=_run_state(self.root) or {}
+            frozen_pid=saved.get("worker_pid")
             if (pid is not None and saved.get("stage")=="PAUSED"
                     and saved.get("suspended_in_memory") is True
+                    and type(frozen_pid) is int
                     and training_process_control.is_alive(
-                        pid,saved.get("worker_identity") or "")):
+                        frozen_pid,saved.get("worker_identity") or "")):
                 # Launcher may have frozen the worker BEFORE the dashboard
                 # shutdown hook runs. Don't suspend twice or terminate it.
                 self._suspended=True
