@@ -184,3 +184,29 @@ def test_manual_pause_is_not_automatically_resumed_on_reopen_even_after_update(t
     assert controller.recover() is False
     assert launches == []
     assert training_pause.read_pause(root)["manual"] is True
+
+
+def test_updating_state_provenance_retention_does_not_invalidate_old_checkpoint(tmp_path, monkeypatch):
+    """This fix itself must be compatible with a paused pre-fix checkpoint."""
+    old_code = (
+        'def _write_worker_state():\n'
+        '    fields = ("worker_identity", "suspended_in_memory",)\n\n'
+        + WORKER_CODE
+    )
+    new_code = old_code.replace(
+        '"worker_identity", "suspended_in_memory",',
+        '"worker_identity", "suspended_in_memory", "origin_git_sha",',
+    )
+    repo = tmp_path / "code"
+    old_sha = _commit(repo, {
+        "src/kalshi_edge/bootstrap/training_cycle.py": old_code,
+    }, "before checkpoint-resume fix")
+    controller, root = _controller(tmp_path, repo, old_sha)
+    launched = _capture_launch(controller, monkeypatch)
+    new_sha = _commit(repo, {
+        "src/kalshi_edge/bootstrap/training_cycle.py": new_code,
+    }, "add safe origin commit retention")
+
+    assert controller.resume()["resumed"] is True
+    assert launched[0][0]["git_sha"] == new_sha
+    assert training_cycle._run_state(root)["origin_git_sha"] == old_sha
