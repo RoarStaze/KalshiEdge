@@ -1327,6 +1327,13 @@ class TrainingController:
                 )
                 if not separator:
                     return None
+                # Adding original-commit retention is only audit metadata:
+                # normalize this exact, known tuple extension when comparing
+                # old paused worker code with the upgraded controller.
+                prefix = prefix.replace(
+                    '"worker_identity", "suspended_in_memory", "origin_git_sha",',
+                    '"worker_identity", "suspended_in_memory",',
+                )
                 return prefix, suffix
 
             try:
