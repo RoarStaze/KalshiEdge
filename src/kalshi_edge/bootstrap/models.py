@@ -172,7 +172,7 @@ def _fit_candidate(name: str, params: Mapping[str, Any], x: Sequence[Sequence[fl
         from . import cuda_training
 
         backend_device = cuda_training.xgboost_device()
-        return XGBClassifier(
+        estimator = XGBClassifier(
             n_estimators=48,
             max_depth=int(params["max_depth"]),
             learning_rate=float(params["learning_rate"]),
@@ -187,7 +187,25 @@ def _fit_candidate(name: str, params: Mapping[str, Any], x: Sequence[Sequence[fl
             n_jobs=1,
             random_state=seed,
             verbosity=0,
-        ).fit(x, y)
+        )
+        try:
+            fitted = estimator.fit(x, y)
+        except Exception:
+            if backend_device != "cuda" or cuda_training.gpu_mode() == "on":
+                raise
+            # Auto mode: GPU OOM/driver errors must not poison the whole
+            # training experiment. Retry this complete candidate on CPU,
+            # retaining the same model parameters and chronological split.
+            import logging
+            logging.getLogger(__name__).exception(
+                "XGBoost CUDA fitting unavailable; retrying identical candidate on CPU"
+            )
+            fitted = estimator.set_params(device="cpu").fit(x, y)
+        if backend_device == "cuda":
+            # The GPU trained the trees, but inference is CPU-portable.
+            # Avoid requiring NVIDIA on the live forecast process.
+            fitted.set_params(device="cpu")
+        return fitted
     raise ModelError(f"unknown candidate: {name}")
 
 
