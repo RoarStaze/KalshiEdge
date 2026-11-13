@@ -382,6 +382,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "experiment_sha256", "resume_stage", "run_id", "git_sha",
                 "fit_steps_completed", "fit_steps_total", "fit_step_detail",
                 "worker_identity", "suspended_in_memory", "origin_git_sha",
+                "forked_from_run_id", "forked_from_git_sha", "recovery_kind",
             ) if key in prior
         }
     now = datetime.now(timezone.utc).isoformat()
@@ -1359,6 +1360,110 @@ class TrainingController:
             for name in diff
         )
 
+    def _fork_unfinished_fit_after_update(self, saved: dict[str, Any],
+                                          current_sha: str) -> dict[str, Any]:
+        """Start a NEW fit attempt only from an authenticated pre-evaluation checkpoint.
+
+        A partially trained model cannot continue under changed Python code.
+        The new worker verifies dataset hashes, schema, inputs and partitions
+        before fitting; earlier artifacts and the original run are archived.
+        """
+        def blocked(detail: str) -> None:
+            raise CycleError(
+                "Git version changed since training paused; cannot safely restart "
+                "the unfinished fit: " + detail
+            )
+
+        old_sha = saved.get("git_sha")
+        old_id = saved.get("run_id")
+        checkpoint = saved.get("resume_stage") or saved.get("stage")
+        if (saved.get("mode") != BASELINE_MODE
+                or checkpoint not in ("TRAINING", "FITTING")
+                or saved.get("stage") not in ("PAUSED", "TRAINING", "FITTING")
+                or saved.get("dataset_verified") is not True
+                or saved.get("experiment_path") or saved.get("experiment_sha256")
+                or saved.get("evaluation_report") or saved.get("promoted")
+                or not isinstance(old_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,100}", old_id) is None
+                or not isinstance(old_sha, str)
+                or re.fullmatch(r"[0-9a-f]{40}", old_sha) is None):
+            blocked("only an unfinished, verified Stage-4 full-model fit can be retried")
+        # The actual worker validates source manifests and provenance again.
+        dataset_paths = (
+            self.root / "derived" / "features.parquet",
+            self.root / "derived" / "features.provenance.json",
+            self.root / "manifests" / "dataset" / "features.parquet.manifest.json",
+        )
+        if not all(path.is_file() for path in dataset_paths):
+            blocked("one or more saved dataset or provenance files are missing")
+
+        try:
+            clean = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=self.project_root, check=True, capture_output=True,
+                text=True, timeout=10,
+            ).stdout
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", old_sha, current_sha],
+                cwd=self.project_root, check=False, capture_output=True, timeout=10,
+            )
+            changed = subprocess.run(
+                ["git", "diff", "--no-renames", "--name-only",
+                 old_sha, current_sha, "--"],
+                cwd=self.project_root, check=True, capture_output=True,
+                text=True, timeout=10,
+            ).stdout.splitlines()
+        except (OSError, subprocess.SubprocessError):
+            blocked("the saved Git revision and working tree cannot be verified")
+        if clean:
+            blocked("the Git working tree has uncommitted or untracked files")
+        if ancestor.returncode != 0:
+            blocked("the saved commit is not in the installed commit history")
+        dependency_files = {"requirements.lock", "requirements.research.lock",
+                            "pyproject.toml"}
+        if dependency_files.intersection(changed):
+            blocked("the dependency lockfiles changed; restore the original environment")
+
+        recovery = self.root / "training_runs" / "recovery" / f"{old_id}.json"
+        if not recovery.exists():
+            _atomic_state(recovery, saved)
+        new_id = uuid.uuid4().hex
+        _write_worker_state(
+            self.root, stage="PAUSED", mode=saved["mode"],
+            round_number=saved["round_number"],
+            run_id=new_id, git_sha=current_sha,
+            origin_git_sha=saved.get("origin_git_sha") or old_sha,
+            forked_from_run_id=old_id, forked_from_git_sha=old_sha,
+            recovery_kind="RETRY_UNFINISHED_FIT_AFTER_UPDATE",
+            resume_stage="TRAINING", worker_pid=None, worker_identity=None,
+            suspended_in_memory=False, error=None,
+            fit_steps_completed=0, fit_steps_total=0,
+            fit_step_detail="Verifying saved dataset before fitting with updated code",
+        )
+        return _run_state(self.root) or {}
+
+    def _launch_resumed_checkpoint(self, old: dict[str, Any],
+                                   saved: dict[str, Any], *,
+                                   manual: bool) -> dict[str, Any]:
+        """A spawn failure must never consume the original manual pause."""
+        forked = old.get("run_id") != saved.get("run_id")
+        run_id = saved.get("run_id")
+        if not isinstance(run_id, str):
+            raise CycleError("missing verified training resume identity")
+        if forked:
+            training_pause.reset_pause(self.root, run_id=run_id)
+        else:
+            training_pause.clear_pause(self.root, run_id=run_id)
+        try:
+            return self._launch_existing(saved, resume=True)
+        except Exception:
+            if forked and self._process is None and self._adopted_pid is None:
+                _atomic_state(_state_path(self.root), old)
+                training_pause.set_pause(
+                    self.root, run_id=old["run_id"], manual=manual,
+                )
+            raise
+
     def _prepare_checkpoint_resume(self, saved: dict[str, Any],
                                    current_sha: str) -> dict[str, Any]:
         """Rebase a stopped worker only if its training code is unchanged.
@@ -1371,11 +1476,7 @@ class TrainingController:
         if prior_sha == current_sha:
             return saved
         if not self._compatible_frozen_source(prior_sha, current_sha):
-            raise CycleError(
-                "Git version changed since training paused; training worker code "
-                "or dependencies changed (or Git has uncommitted files). "
-                "Restore the original training version to resume safely."
-            )
+            return self._fork_unfinished_fit_after_update(saved, current_sha)
         origin = saved.get("origin_git_sha") or prior_sha
         _write_worker_state(
             self.root, stage=saved["stage"], mode=saved["mode"],
@@ -1559,10 +1660,15 @@ class TrainingController:
                 )
             if self._tracked_pid() is not None:
                 raise CycleError("training is still active; wait for PAUSED acknowledgment")
+            original=saved
             saved=self._prepare_checkpoint_resume(saved,current_git_sha)
-            training_pause.clear_pause(self.root,run_id=run_id)
-            result=self._launch_existing(saved,resume=True)
-            return {**(result or {}),"resumed":True,"in_memory":False}
+            result=self._launch_resumed_checkpoint(original,saved,manual=True)
+            return {
+                **(result or {}),"resumed":True,"in_memory":False,
+                "restarted_fit_after_update": (
+                    original.get("run_id") != saved.get("run_id")
+                ),
+            }
 
     def recover(self) -> bool:
         """Auto-resume on reopen; honor manual pause across application close."""
@@ -1629,9 +1735,13 @@ class TrainingController:
                 return False
             if not isinstance(run_id,str):
                 raise CycleError("old training state has no run ID; cannot safely auto-resume")
-            if intent.get("pause_requested"):
-                training_pause.clear_pause(self.root,run_id=run_id)
-            self._launch_existing(saved,resume=True)
+            original=_run_state(self.root) or saved
+            if saved.get("forked_from_run_id"):
+                archive=self.root / "training_runs" / "recovery" / (
+                    str(saved["forked_from_run_id"]) + ".json"
+                )
+                original=json.loads(archive.read_text(encoding="utf-8"))
+            self._launch_resumed_checkpoint(original,saved,manual=False)
             return True
 
     def stop(self) -> None:
