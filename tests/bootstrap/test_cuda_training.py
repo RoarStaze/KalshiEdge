@@ -263,3 +263,17 @@ def test_xgboost_cuda_runtime_probe_can_prevent_false_gpu_reporting(monkeypatch)
     monkeypatch.setenv("KALSHI_TRAIN_GPU", "on")
     with pytest.raises(cuda_training.CUDATrainingError, match="CUDA"):
         cuda_training.xgboost_device()
+
+
+def test_cuda_self_check_reports_cpu_fallback_without_gpu(monkeypatch, capsys):
+    import json
+    monkeypatch.setenv("KALSHI_TRAIN_GPU", "off")
+    monkeypatch.setattr(cuda_training, "cuda_device_available", lambda: False)
+    monkeypatch.setattr(cuda_training, "_xgboost_cuda_build", lambda: False)
+    monkeypatch.setattr(sys, "argv", ["cuda_training", "--check"])
+    assert cuda_training.main() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["cuda_available"] is False
+    assert report["structural_backend"] == "cpu"
+    assert report["xgboost_backend"] == "cpu"
+    assert report["mode"] == "off"
