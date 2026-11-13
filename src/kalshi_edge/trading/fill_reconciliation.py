@@ -47,7 +47,13 @@ def _scheme_exposure(side:str|None, direction:str|None, *,
     if flavor=="v2":
         if side not in ("yes","no") or direction not in ("bid","ask"):
             raise ValueError("Incomplete or invalid V2 book identity")
-        return 1 if (side,direction) in (("yes","bid"),("no","ask")) else -1
+        # Official Kalshi V2 mapping: bid == yes, ask == no, always.
+        # The former code incorrectly assigned +1 to (no, ask), which
+        # caused valid journaled BUY DOWN fills to be rejected.
+        # Do not accept contradictory pairs such as yes/ask or no/bid.
+        if (side, direction) not in (("yes", "bid"), ("no", "ask")):
+            raise ValueError("Conflicting V2 outcome/book sides")
+        return 1 if side == "yes" else -1
     raise ValueError("Unsupported fill identity scheme")
 
 
