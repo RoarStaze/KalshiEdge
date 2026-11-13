@@ -129,6 +129,10 @@ def audit_autotrade_profit(root: Path, *, client=None, details: bool = False) ->
                 "pnl_reason": row.get("pnl_reason"),
                 "realized_pnl_dollars": row.get("realized_pnl_dollars"),
                 "confidence": row.get("confidence"),
+                **(
+                    {"direction_evidence": row["direction_evidence"]}
+                    if "direction_evidence" in row else {}
+                ),
                 "quoted_unit_price_dollars": next(
                     (
                         stage.get("quoted_unit_price_dollars")
