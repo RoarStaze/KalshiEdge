@@ -6,8 +6,9 @@ import json
 import math
 import os
 import random
+from concurrent.futures import Executor
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Callable, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -348,12 +349,58 @@ def _group_id(row: FeatureRow) -> str:
     return row.split_group_id or row.market_ticker
 
 
+def _predict_structural_chunk(
+    task: tuple[StructuralModel, tuple[StructuralState, ...]],
+) -> tuple[float, ...]:
+    """Top-level function is picklable by the Windows spawn executor."""
+    model, rows = task
+    return tuple(model.predict_proba(row) for row in rows)
+
+
+def predict_probabilities(
+    model: StructuralModel,
+    states: Sequence[StructuralState],
+    *,
+    executor: Executor | None = None,
+    progress: Callable[[int, int], None] | None = None,
+    chunk_size: int = 32,
+) -> list[float]:
+    """Compute independent Monte Carlo rows on multiple CPU cores.
+
+    Each row uses the existing seeded StructuralModel.predict_proba and
+    the ordered executor.map result, so CPU process count never changes
+    model probabilities, selected candidate, or reproducibility.
+    """
+    if chunk_size < 1:
+        raise ValueError("structural chunk_size must be positive")
+    total = len(states)
+    out: list[float] = []
+    if executor is None or total < 16:
+        for i, state in enumerate(states, start=1):
+            out.append(model.predict_proba(state))
+            if progress is not None and (i % chunk_size == 0 or i == total):
+                progress(i, total)
+        return out
+
+    tasks = (
+        (model, tuple(states[i:i + chunk_size]))
+        for i in range(0, total, chunk_size)
+    )
+    for values in executor.map(_predict_structural_chunk, tasks):
+        out.extend(values)
+        if progress is not None:
+            progress(len(out), total)
+    return out
+
+
 def select_structural_model(
     training_rows: Sequence[FeatureRow],
     validation_rows: Sequence[FeatureRow],
     *,
     seed: int = 73115,
     simulations: int = 4096,
+    executor: Executor | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> StructuralSelection:
     if not training_rows or not validation_rows:
         raise StructuralDataError("structural selection requires non-empty training and validation rows")
@@ -377,6 +424,7 @@ def select_structural_model(
     models: dict[CandidateName, StructuralModel] = {}
     metrics: list[StructuralCandidateMetrics] = []
     labels = [row.label_yes for row in evaluable]
+    states = tuple(structural_state_from_row(row) for row in evaluable)
     for candidate in ("diffusion", "empirical_residual"):
         model = StructuralModel.fit(
             training_rows,
@@ -384,7 +432,14 @@ def select_structural_model(
             seed=seed,
             simulations=simulations,
         )
-        probabilities = [model.predict_proba(structural_state_from_row(row)) for row in evaluable]
+        if progress is not None:
+            progress(f"Evaluating {candidate} structural model on {len(states)} saved rows")
+        probabilities = predict_probabilities(
+            model, states, executor=executor,
+            progress=(lambda completed, total, name=candidate: progress(
+                f"Structural {name}: {completed}/{total} rows validated"
+            )) if progress is not None else None,
+        )
         models[candidate] = model
         metrics.append(_candidate_metrics(candidate, probabilities, labels))
 
