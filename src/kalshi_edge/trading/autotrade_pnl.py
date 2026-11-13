@@ -243,6 +243,50 @@ def _journal_reason(row: dict, stages: list[dict]) -> str:
     return "JOURNAL_STAGE_INCOMPLETE_OR_INVALID"
 
 
+def _safe_direction_evidence(stages: list[tuple], fills: list[dict]) -> list[dict]:
+    """Only enum direction fields from fills matching known journaled orders.
+
+    No raw exchange strings, order IDs, fill IDs, account IDs, money or keys
+    can escape. Bound output even for unusually fragmented fills.
+    """
+    if not isinstance(stages, (list, tuple)) or not isinstance(fills, list):
+        return []
+    expected = {
+        order_id: (action, outcome)
+        for order_id, action, outcome, _quantity in stages
+        if type(order_id) is str
+        and action in ("BUY", "SELL")
+        and outcome in ("UP", "DOWN")
+    }
+
+    def safe_enum(value, allowed: tuple[str, ...]) -> str:
+        if value is None:
+            return "MISSING"
+        if type(value) is str and value in allowed:
+            return value
+        return "INVALID"
+
+    result = []
+    for fill in fills:
+        if not isinstance(fill, dict):
+            continue
+        order_id = fill.get("order_id")
+        if type(order_id) is not str or order_id not in expected:
+            continue
+        action, outcome = expected[order_id]
+        result.append({
+            "journal_action": action,
+            "journal_outcome": outcome,
+            "outcome_side": safe_enum(fill.get("outcome_side"), ("yes", "no")),
+            "book_side": safe_enum(fill.get("book_side"), ("bid", "ask")),
+            "legacy_side": safe_enum(fill.get("side"), ("yes", "no")),
+            "legacy_action": safe_enum(fill.get("action"), ("buy", "sell")),
+        })
+        if len(result) == 8:
+            break
+    return result
+
+
 def enrich_history(
     entries: list[dict], client=None, *, require_settlement_counts: bool = False,
 ) -> list[dict]:
@@ -362,6 +406,10 @@ def enrich_history(
             except FillAuditError as exc:
                 row["pnl_status"] = "UNAVAILABLE"
                 row["pnl_reason"] = exc.code
+                if require_settlement_counts and exc.code == "FILL_DIRECTION_CONFLICT":
+                    row["direction_evidence"] = _safe_direction_evidence(
+                        stages, by_market.get(ticker, []),
+                    )
             except RuntimeError as exc:
                 row["pnl_status"] = "MIXED" if str(exc) == "MIXED" else "UNAVAILABLE"
                 row["pnl_reason"] = (
