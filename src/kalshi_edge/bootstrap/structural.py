@@ -364,6 +364,7 @@ def predict_probabilities(
     executor: Executor | None = None,
     progress: Callable[[int, int], None] | None = None,
     chunk_size: int = 32,
+    gpu_backend: object | None = None,
 ) -> list[float]:
     """Compute independent Monte Carlo rows on multiple CPU cores.
 
@@ -373,6 +374,20 @@ def predict_probabilities(
     """
     if chunk_size < 1:
         raise ValueError("structural chunk_size must be positive")
+    if gpu_backend is not None:
+        try:
+            return gpu_backend.predict_probabilities(
+                model, states, progress=progress, chunk_size=chunk_size,
+            )
+        except Exception:
+            from . import cuda_training
+            if cuda_training.gpu_mode() == "on":
+                raise  # forced CUDA must expose any hardware failure
+            import logging
+            logging.getLogger(__name__).exception(
+                "CUDA execution failed; recomputing entire structural batch on CPU"
+            )
+            # Never reuse partial CUDA predictions after a hardware error.
     total = len(states)
     out: list[float] = []
     if executor is None or total < 16:
@@ -401,6 +416,7 @@ def select_structural_model(
     simulations: int = 4096,
     executor: Executor | None = None,
     progress: Callable[[str], None] | None = None,
+    gpu_backend: object | None = None,
 ) -> StructuralSelection:
     if not training_rows or not validation_rows:
         raise StructuralDataError("structural selection requires non-empty training and validation rows")
@@ -435,7 +451,7 @@ def select_structural_model(
         if progress is not None:
             progress(f"Evaluating {candidate} structural model on {len(states)} saved rows")
         probabilities = predict_probabilities(
-            model, states, executor=executor,
+            model, states, executor=executor, gpu_backend=gpu_backend,
             progress=(lambda completed, total, name=candidate: progress(
                 f"Structural {name}: {completed}/{total} rows validated"
             )) if progress is not None else None,
