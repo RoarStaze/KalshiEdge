@@ -11,9 +11,11 @@ silently decide a close contract.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
+from functools import lru_cache
 import random
 import time
 from typing import Any, Callable, Sequence, TYPE_CHECKING
@@ -90,6 +92,34 @@ def _xgboost_cuda_build() -> bool:
         return False
 
 
+@lru_cache(maxsize=1)
+def _xgboost_cuda_runtime_ready() -> bool:
+    """A CUDA-enabled wheel is insufficient: confirm a real GPU fit occurred."""
+    if not _xgboost_cuda_build():
+        return False
+    try:
+        import warnings
+        import numpy as np
+        from xgboost import XGBClassifier
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            probe = XGBClassifier(
+                n_estimators=2, max_depth=1, learning_rate=0.1,
+                tree_method="hist", device="cuda", n_jobs=1,
+                objective="binary:logistic",
+            ).fit(
+                np.asarray([[0.0], [1.0], [0.2], [0.8]], dtype=np.float32),
+                np.asarray([0, 1, 0, 1], dtype=np.int32),
+            )
+        configuration = json.loads(probe.get_booster().save_config())
+        device = str(configuration["learner"]["generic_param"]["device"]).lower()
+        return device.startswith("cuda")
+    except Exception as exc:
+        LOG.warning("XGBoost CUDA smoke fit failed; CPU fallback: %s", exc)
+        return False
+
+
 def xgboost_device() -> str:
     """Select CUDA only if both runtime hardware and full GPU XGBoost exist."""
     mode = gpu_mode()
@@ -97,7 +127,8 @@ def xgboost_device() -> str:
         return "cpu"
     available = _cuda_hardware_ready()
     built = _xgboost_cuda_build() if available else False
-    if available and built:
+    verified = _xgboost_cuda_runtime_ready() if built else False
+    if available and built and verified:
         return "cuda"
     if mode == "on":
         raise CUDATrainingError(
