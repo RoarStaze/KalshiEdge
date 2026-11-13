@@ -82,6 +82,7 @@ def test_xgboost_uses_cuda_only_with_eligible_build_and_device(monkeypatch):
     monkeypatch.setenv("KALSHI_TRAIN_GPU", "auto")
     monkeypatch.setattr(cuda_training, "_cuda_hardware_ready", lambda: True)
     monkeypatch.setattr(cuda_training, "_xgboost_cuda_build", lambda: True)
+    monkeypatch.setattr(cuda_training, "_xgboost_cuda_runtime_ready", lambda: True)
     assert cuda_training.xgboost_device() == "cuda"
     monkeypatch.setattr(cuda_training, "_xgboost_cuda_build", lambda: False)
     assert cuda_training.xgboost_device() == "cpu"
@@ -250,3 +251,15 @@ def test_gpu_xgboost_training_serializes_cpu_portable_estimator(monkeypatch):
     )
     assert constructed[0].initial_device == "cuda"
     assert fitted.device == "cpu"
+
+
+def test_xgboost_cuda_runtime_probe_can_prevent_false_gpu_reporting(monkeypatch):
+    monkeypatch.setenv("KALSHI_TRAIN_GPU", "auto")
+    monkeypatch.setattr(cuda_training, "_cuda_hardware_ready", lambda: True)
+    monkeypatch.setattr(cuda_training, "_xgboost_cuda_build", lambda: True)
+    monkeypatch.setattr(cuda_training, "_xgboost_cuda_runtime_ready", lambda: False)
+    assert cuda_training.xgboost_device() == "cpu"
+
+    monkeypatch.setenv("KALSHI_TRAIN_GPU", "on")
+    with pytest.raises(cuda_training.CUDATrainingError, match="CUDA"):
+        cuda_training.xgboost_device()
