@@ -21,7 +21,7 @@ def history(side="DOWN", qty="0.11", *, quote=None):
              "stages":[stage]}]
 
 
-def v2_fill(*, outcome_side="yes", book_side="ask", yes="0.2000", no="0.8000",
+def v2_fill(*, outcome_side="no", book_side="ask", yes="0.2000", no="0.8000",
             qty="0.11", fee="0.0020", order="order-no-1", **overrides):
     f={
         "fill_id":"fill-no-1","ticker":TICKER,"order_id":order,
@@ -53,9 +53,9 @@ class Client:
     ("no","0.02"),
     ("yes","-0.09"),
 ])
-def test_down_buy_as_yes_ask_reconciles_realized_fees_for_both_outcomes(result,expected):
+def test_down_buy_as_no_ask_reconciles_realized_fees_for_both_outcomes(result,expected):
     f=v2_fill(yes="0.2000",no="0.8000",fee="0.0020")
-    # DOWN BUY is an ASK on YES, not always a legacy BUY on NO.
+    # Canonical V2 DOWN is outcome_side=no and book_side=ask.
     row=enrich_history(history(),Client([f],result))[0]
     assert row["status"]=="FILLED"
     assert row["outcome"]=="DOWN"
@@ -63,12 +63,13 @@ def test_down_buy_as_yes_ask_reconciles_realized_fees_for_both_outcomes(result,e
     assert row["realized_pnl_dollars"]==expected
 
 
-def test_down_buy_no_bid_is_same_economic_action():
-    # Some V2 representations may express BUY NO as NO/BID.
+def test_down_no_bid_is_inconsistent_v2_direction_not_verified():
+    # Official contract: no == ask, never no == bid.
     f=v2_fill(outcome_side="no",book_side="bid")
     row=enrich_history(history(),Client([f],"no"))[0]
-    assert row["realized_pnl_dollars"]=="0.02"
-    assert row["pnl_status"]=="SETTLED"
+    assert row["realized_pnl_dollars"] is None
+    assert row["pnl_status"]=="UNAVAILABLE"
+    assert row["pnl_reason"]=="FILL_DIRECTION_CONFLICT"
 
 
 def test_down_legacy_yes_sell_is_accepted_only_when_equivalent():
@@ -100,8 +101,10 @@ def test_can_reconcile_with_only_one_authentic_binary_price(missing_field):
 
 @pytest.mark.parametrize("patch",[
     {"outcome_side":"yes","book_side":"bid"},    # BUY UP != BUY DOWN
-    {"outcome_side":"yes","book_side":"ask","side":"yes","action":"buy"},
-    {"outcome_side":"yes","book_side":"ask","side":"no","action":"sell"},
+    {"outcome_side":"yes","book_side":"ask"},    # Canonical pair contradicts itself
+    {"outcome_side":"no","book_side":"bid"},     # Canonical pair contradicts itself
+    {"outcome_side":"no","book_side":"ask","side":"yes","action":"buy"},
+    {"outcome_side":"no","book_side":"ask","side":"no","action":"sell"},
     {"outcome_side":"invalid"},
     {"book_side":"invalid"},
     {"outcome_side":None},

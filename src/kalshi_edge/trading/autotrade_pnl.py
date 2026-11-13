@@ -37,7 +37,10 @@ def _fill_price_failure_code(exc: ValueError) -> str:
         "Exchange fill ticker does not match AutoTrade",
     ):
         return "FILL_MARKET_MISMATCH"
-    if message == "Exchange fill conflicts with journaled direction":
+    if message in (
+        "Exchange fill conflicts with journaled direction",
+        "Conflicting V2 outcome/book sides",
+    ):
         return "FILL_DIRECTION_CONFLICT"
     if message == "No verifiable exchange fill action/side":
         return "FILL_IDENTITY_MISSING"
