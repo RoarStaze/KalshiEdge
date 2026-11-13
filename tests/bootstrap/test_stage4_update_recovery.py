@@ -179,3 +179,105 @@ def test_stage4_recovery_uses_current_code_not_legacy_frozen_execution(tmp_path,
     assert training_cycle._run_state(root)["git_sha"] == old
     assert training_pause.read_pause(root)["manual"] is True
     assert (root / "training_runs" / "recovery" / "old-run.json").is_file()
+
+def _seed_tracked_generated_metadata(repo, root):
+    """The user's editable install changes tracked dist-info files without touching code."""
+    sha = commit(repo, {
+        "src/kalshi_edge.egg-info/SOURCES.txt": "original sources\n",
+        "src/kalshi_edge.egg-info/dependency_links.txt": "original deps\n",
+        "src/kalshi_edge.egg-info/entry_points.txt": "original entries\n",
+        "src/kalshi_edge.egg-info/requires.txt": "original requirements\n",
+        "src/kalshi_edge.egg-info/top_level.txt": "original top levels\n",
+    }, "tracked editable package metadata")
+    training_cycle._write_worker_state(
+        root, stage="PAUSED", mode="baseline", round_number=0, git_sha=sha,
+    )
+    return sha
+
+
+def _add_user_nonruntime_files(repo):
+    metadata = repo / "src" / "kalshi_edge.egg-info"
+    for path in metadata.glob("*.txt"):
+        path.write_text("modified editable package metadata\n", encoding="utf-8")
+    backups = {
+        "src/kalshi_edge/bootstrap/live.py.v61-preintegration-20261030-040201.bak": "backup\n",
+        "src/kalshi_edge/bootstrap/volatility_upgrade.py.20261028-144143-906559.bak": "backup\n",
+        "tests/bootstrap/test_v61_shadow_risk.py.before-import-fix.bak": "backup\n",
+        "tools/user_notes.py": "notes = 'not imported by runtime'\n",
+    }
+    for name, content in backups.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+
+def test_resume_stage4_ignores_only_known_nonruntime_local_files(tmp_path, monkeypatch):
+    """Exactly the dirty-file categories from the real user report must not block recovery."""
+    controller, repo, root, _initial = setup(tmp_path)
+    original_sha = _seed_tracked_generated_metadata(repo, root)
+    calls = recorded_launch(controller, monkeypatch)
+    new_sha = commit(repo, {
+        "src/kalshi_edge/bootstrap/training_cycle.py": "def model(): return 2\n",
+    }, "updated worker code")
+    _add_user_nonruntime_files(repo)
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--short"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert " M src/kalshi_edge.egg-info/SOURCES.txt" in status
+    assert "?? tools/" in status
+
+    resumed = controller.resume()
+    assert resumed["resumed"] is True
+    assert resumed["restarted_fit_after_update"] is True
+    assert len(calls) == 1
+    assert calls[0][0]["git_sha"] == new_sha
+    assert calls[0][0]["forked_from_git_sha"] == original_sha
+    assert calls[0][0]["dataset_markets_completed"] == 515
+    assert (repo / "tools" / "user_notes.py").exists()
+    assert (repo / "src" / "kalshi_edge.egg-info" / "SOURCES.txt").read_text() == (
+        "modified editable package metadata\n"
+    )
+
+
+def test_frozen_compatibility_accepts_only_nonruntime_dirty_paths(tmp_path):
+    """Doc-only updates do not become incompatible due to editable-install metadata."""
+    controller, repo, root, _initial = setup(tmp_path)
+    old_sha = _seed_tracked_generated_metadata(repo, root)
+    new_sha = commit(repo, {"docs/readme.md": "updated docs\n"}, "docs update")
+    _add_user_nonruntime_files(repo)
+    assert controller._compatible_frozen_source(old_sha, new_sha) is True
+
+
+def test_stage4_recovery_still_rejects_untracked_runtime_python(tmp_path, monkeypatch):
+    """An untracked importable module is not equivalent to an inert .bak file."""
+    controller, repo, root, _initial = setup(tmp_path)
+    old_sha = _seed_tracked_generated_metadata(repo, root)
+    calls = recorded_launch(controller, monkeypatch)
+    commit(repo, {"src/kalshi_edge/bootstrap/training_cycle.py":
+                  "def model(): return 2\n"}, "worker update")
+    _add_user_nonruntime_files(repo)
+    unsafe = repo / "src" / "kalshi_edge" / "bootstrap" / "new_runtime.py"
+    unsafe.write_text("RUN=1\n", encoding="utf-8")
+
+    with pytest.raises(training_cycle.CycleError, match="Git version changed"):
+        controller.resume()
+    assert calls == []
+    assert training_cycle._run_state(root)["git_sha"] == old_sha
+    assert training_pause.read_pause(root)["pause_requested"] is True
+
+
+def test_stage4_recovery_rejects_dirty_dependency_manifest(tmp_path, monkeypatch):
+    """A changed dependency declaration remains unsafe even with benign backup files."""
+    controller, repo, root, _initial = setup(tmp_path)
+    old_sha = _seed_tracked_generated_metadata(repo, root)
+    calls = recorded_launch(controller, monkeypatch)
+    commit(repo, {"src/kalshi_edge/bootstrap/training_cycle.py":
+                  "def model(): return 2\n"}, "worker update")
+    _add_user_nonruntime_files(repo)
+    (repo / "requirements.lock").write_text("local dependency override\n",
+                                             encoding="utf-8")
+    with pytest.raises(training_cycle.CycleError, match="Git version changed"):
+        controller.resume()
+    assert calls == []
+    assert training_cycle._run_state(root)["git_sha"] == old_sha
