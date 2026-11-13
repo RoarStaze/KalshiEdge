@@ -169,10 +169,13 @@ def test_stage4_recovery_uses_current_code_not_legacy_frozen_execution(tmp_path,
     controller, repo, root, old = setup(tmp_path)
     new = commit(repo, {"src/kalshi_edge/bootstrap/training_cycle.py": "def model(): return 2\n"},
                  "new training")
-    monkeypatch.setattr(training_cycle.subprocess, "Popen", lambda *a, **kw:
-                        (_ for _ in ()).throw(OSError("do not spawn in offline test")))
-    # Test result above is a protected subprocess failure, not an old-code fallback.
-    with pytest.raises(OSError, match="do not spawn"):
+    def fail_launch(*args, **kwargs):
+        raise OSError("simulated subprocess launch error")
+    monkeypatch.setattr(controller, "_launch_existing", fail_launch)
+    with pytest.raises(OSError, match="simulated subprocess launch error"):
         controller.resume()
-    assert training_cycle._run_state(root)["git_sha"] == new
-    assert training_cycle._run_state(root)["origin_git_sha"] == old
+    # A failed subprocess spawn MUST NOT consume the user's original pause.
+    assert training_cycle._run_state(root)["run_id"] == "old-run"
+    assert training_cycle._run_state(root)["git_sha"] == old
+    assert training_pause.read_pause(root)["manual"] is True
+    assert (root / "training_runs" / "recovery" / "old-run.json").is_file()
