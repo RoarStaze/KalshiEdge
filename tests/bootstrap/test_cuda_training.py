@@ -117,3 +117,108 @@ def test_real_cuda_kernel_matches_original_cpu_monte_carlo(candidate):
     assert backend.predict_probabilities(model, states) == [
         model.predict_proba(state) for state in states
     ]
+
+
+class _CPUEmulatedKernel:
+    """Run the exact CUDA kernel interface with CPU math to validate wiring."""
+    def compile(self):
+        return None
+
+    def __call__(self, grid, blocks, args):
+        import math
+        shocks, starts, drifts, sigmas, averages, steps, simulations, count = args
+        for row in range(int(count)):
+            for simulation in range(int(simulations)):
+                value = float(starts[row])
+                total = 0.0
+                for step in range(int(steps)):
+                    value *= math.exp(
+                        float(drifts[row])
+                        + float(sigmas[row]) * float(shocks[simulation * int(steps) + step])
+                    )
+                    if step >= int(steps) - 60:
+                        total += value
+                averages[row * int(simulations) + simulation] = total / 60.0
+
+
+class _CPUEmulatedCuPy:
+    """CI lacks NVIDIA GPU; this exercises batching and exact shock stream."""
+    import numpy as np
+    float64 = np.float64
+
+    def RawKernel(self, source, name):
+        assert "structural_paths" in source
+        return _CPUEmulatedKernel()
+
+    def asarray(self, values, *, dtype):
+        return self.np.asarray(values, dtype=dtype)
+
+    def empty(self, n, *, dtype):
+        return self.np.empty(n, dtype=dtype)
+
+    def asnumpy(self, values):
+        return values
+
+
+@pytest.mark.parametrize("candidate", ["diffusion", "empirical_residual"])
+def test_cuda_kernel_interface_replays_cpu_probabilities_with_seeded_shocks(candidate):
+    backend = cuda_training.CUDAStructuralBackend(_CPUEmulatedCuPy())
+    model = _reference_model(candidate)
+    states = _reference_states()
+    notices = []
+    got = backend.predict_probabilities(
+        model, states, progress=lambda done, total: notices.append((done, total)),
+        chunk_size=3,
+    )
+    expected = [model.predict_proba(state) for state in states]
+    assert got == expected
+    assert notices[-1] == (len(states), len(states))
+    assert len(notices) >= 4
+
+
+def test_structural_predict_probabilities_uses_verified_gpu_backend():
+    backend = _CPUEmulatedCuPy()
+    gpu = cuda_training.CUDAStructuralBackend(backend)
+    model = _reference_model()
+    states = _reference_states()
+    assert structural.predict_probabilities(model, states, gpu_backend=gpu) == [
+        model.predict_proba(state) for state in states
+    ]
+
+
+def test_gpu_invalid_numerics_replay_entire_original_cpu_state():
+    class BadKernel(_CPUEmulatedKernel):
+        def __call__(self, grid, block, args):
+            args[4][:] = float("nan")
+    class BadCuPy(_CPUEmulatedCuPy):
+        def RawKernel(self, source, name):
+            return BadKernel()
+    backend = cuda_training.CUDAStructuralBackend(BadCuPy())
+    model = _reference_model()
+    states = _reference_states()
+    assert backend.predict_probabilities(model, states) == [
+        model.predict_proba(state) for state in states
+    ]
+
+
+def test_gpu_cuda_runtime_error_replays_cpu_batch_in_auto_mode(monkeypatch):
+    class FailedBackend:
+        def predict_probabilities(self, *args, **kwargs):
+            raise RuntimeError("device reset")
+    monkeypatch.setenv("KALSHI_TRAIN_GPU", "auto")
+    model = _reference_model()
+    states = _reference_states()
+    assert structural.predict_probabilities(model, states, gpu_backend=FailedBackend()) == [
+        model.predict_proba(state) for state in states
+    ]
+
+
+def test_gpu_cuda_runtime_error_is_exposed_when_gpu_is_forced(monkeypatch):
+    class FailedBackend:
+        def predict_probabilities(self, *args, **kwargs):
+            raise RuntimeError("device reset")
+    monkeypatch.setenv("KALSHI_TRAIN_GPU", "on")
+    with pytest.raises(RuntimeError, match="device reset"):
+        structural.predict_probabilities(
+            _reference_model(), _reference_states(), gpu_backend=FailedBackend(),
+        )
