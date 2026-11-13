@@ -45,7 +45,8 @@ def test_worker_main_records_interpreter_identity(monkeypatch, tmp_path):
         assert training_cycle.main() == 0
         assert observed == [(os.getpid(), f"pid-start:{os.getpid()}")]
     finally:
-        monkeypatch.setattr(training_cycle, "_active_interpreter_identity", previous)
+        # Direct assignment avoids monkeypatch teardown restoring the fake PID.
+        training_cycle._active_interpreter_identity = previous
 
 
 def test_cpu_structural_worker_count_auto_and_override(monkeypatch):
