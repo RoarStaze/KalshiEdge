@@ -124,3 +124,31 @@ def test_pause_targets_actual_interpreter_even_if_parent_is_venv_redirector(tmp_
     assert outcome["paused"] is True
     assert frozen == [13556]
     assert training_cycle._run_state(tmp_path)["suspended_in_memory"] is True
+
+
+def test_shutdown_preserves_verified_frozen_interpreter_behind_launcher(tmp_path, monkeypatch):
+    """Close must not terminate a launcher while its child fit is frozen in RAM."""
+    class Launcher:
+        pid = 13868
+        def poll(self):
+            return None
+        def wait(self, timeout=None):
+            raise AssertionError("already-frozen interpreter must not be killed")
+        def terminate(self):
+            raise AssertionError("launcher must be preserved with frozen interpreter")
+    controller = training_cycle.TrainingController(tmp_path, project_root=tmp_path)
+    controller._process = Launcher()
+    training_cycle._write_worker_state(
+        tmp_path, stage="PAUSED", mode="baseline", round_number=0,
+        run_id="session", git_sha="a" * 40, resume_stage="TRAINING",
+        worker_pid=13556, worker_identity="win:13556:verified",
+        suspended_in_memory=True,
+    )
+    monkeypatch.setattr(training_cycle.training_process_control, "is_alive",
+                        lambda pid, token: pid == 13556 and token == "win:13556:verified")
+    controller.stop()
+    assert controller._process is None
+    state = training_cycle._run_state(tmp_path)
+    assert state["stage"] == "PAUSED"
+    assert state["worker_pid"] == 13556
+    assert state["suspended_in_memory"] is True
