@@ -222,3 +222,31 @@ def test_gpu_cuda_runtime_error_is_exposed_when_gpu_is_forced(monkeypatch):
         structural.predict_probabilities(
             _reference_model(), _reference_states(), gpu_backend=FailedBackend(),
         )
+
+
+def test_gpu_xgboost_training_serializes_cpu_portable_estimator(monkeypatch):
+    """CUDA fit must not require CUDA for later live-forecast inference."""
+    from types import SimpleNamespace
+
+    constructed = []
+    class FakeXGBClassifier:
+        def __init__(self, **kwargs):
+            self.initial_device = kwargs["device"]
+            self.device = kwargs["device"]
+            constructed.append(self)
+        def fit(self, x, y):
+            return self
+        def set_params(self, **kwargs):
+            self.device = kwargs["device"]
+            return self
+
+    monkeypatch.setitem(sys.modules, "xgboost", SimpleNamespace(
+        XGBClassifier=FakeXGBClassifier,
+    ))
+    monkeypatch.setattr(cuda_training, "xgboost_device", lambda: "cuda")
+    fitted = models._fit_candidate(
+        "xgboost", {"max_depth": 2, "learning_rate": 0.05},
+        [[0.0], [1.0], [0.2], [0.8]], [0, 1, 0, 1], 123,
+    )
+    assert constructed[0].initial_device == "cuda"
+    assert fitted.device == "cpu"
