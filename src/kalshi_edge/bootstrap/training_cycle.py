@@ -1267,6 +1267,52 @@ class TrainingController:
             raise CycleError("cannot verify installed repository Git SHA")
         return sha
 
+    def _unsafe_worktree_changes(self) -> list[str]:
+        """Identify only dirty paths capable of changing the training runtime.
+
+        Editable installs rewrite tracked egg-info metadata; local backup
+        snapshots and separate, untracked tools are not imported by the model
+        worker. Retain those files but fail closed for new/modified source,
+        installed dependencies, ambiguous Git status or staging operations.
+        """
+        status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z",
+             "--untracked-files=all"],
+            cwd=self.project_root, check=True, capture_output=True,
+            text=True, timeout=10,
+        ).stdout
+        if not status:
+            return []
+        records = status.split("\0")
+        if records[-1] != "":
+            return ["invalid Git status framing"]
+        nonruntime_metadata = frozenset({
+            "src/kalshi_edge.egg-info/PKG-INFO",
+            "src/kalshi_edge.egg-info/SOURCES.txt",
+            "src/kalshi_edge.egg-info/dependency_links.txt",
+            "src/kalshi_edge.egg-info/entry_points.txt",
+            "src/kalshi_edge.egg-info/requires.txt",
+            "src/kalshi_edge.egg-info/top_level.txt",
+        })
+        unsafe: list[str] = []
+        for item in records[:-1]:
+            if len(item) < 4 or item[2] != " ":
+                unsafe.append("unrecognized Git status record")
+                continue
+            flags, name = item[:2], item[3:]
+            if flags in (" M", "M ", "MM", "??") and name in nonruntime_metadata:
+                continue
+            if flags == "??" and name.startswith("tools/"):
+                # Untracked utilities are outside the installed kalshi_edge
+                # package and must not erase an independently verified dataset.
+                continue
+            if (flags == "??" and name.endswith(".bak")
+                    and name.startswith(("src/kalshi_edge/bootstrap/",
+                                         "tests/bootstrap/"))):
+                continue
+            unsafe.append(f"{flags} {name}")
+        return unsafe
+
     def _compatible_frozen_source(self, saved_sha: str, current_sha: str) -> bool:
         """Allow an existing frozen PID to thaw only after non-worker Git changes.
 
@@ -1302,11 +1348,7 @@ class TrainingController:
                 cwd=self.project_root, check=True,
                 capture_output=True, text=True, timeout=10,
             ).stdout.splitlines()
-            dirty = subprocess.run(
-                ["git", "status", "--porcelain", "--untracked-files=all"],
-                cwd=self.project_root, check=True,
-                capture_output=True, text=True, timeout=10,
-            ).stdout
+            dirty = self._unsafe_worktree_changes()
         except (OSError, subprocess.SubprocessError):
             return False
         if dirty:
@@ -1398,11 +1440,7 @@ class TrainingController:
             blocked("one or more saved dataset or provenance files are missing")
 
         try:
-            clean = subprocess.run(
-                ["git", "status", "--porcelain", "--untracked-files=all"],
-                cwd=self.project_root, check=True, capture_output=True,
-                text=True, timeout=10,
-            ).stdout
+            unsafe = self._unsafe_worktree_changes()
             ancestor = subprocess.run(
                 ["git", "merge-base", "--is-ancestor", old_sha, current_sha],
                 cwd=self.project_root, check=False, capture_output=True, timeout=10,
@@ -1415,8 +1453,9 @@ class TrainingController:
             ).stdout.splitlines()
         except (OSError, subprocess.SubprocessError):
             blocked("the saved Git revision and working tree cannot be verified")
-        if clean:
-            blocked("the Git working tree has uncommitted or untracked files")
+        if unsafe:
+            blocked("the working tree contains runtime/dependency changes: "
+                    + ", ".join(unsafe[:5]))
         if ancestor.returncode != 0:
             blocked("the saved commit is not in the installed commit history")
         dependency_files = {"requirements.lock", "requirements.research.lock",
