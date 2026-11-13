@@ -787,9 +787,31 @@ def _structural_training(
         pivot = len(selector_groups) - 1
     selector_train = _fold_group_rows(development_rows, development_groups, selector_groups[:pivot])
     selector_validation = _fold_group_rows(development_rows, development_groups, selector_groups[pivot:])
-    workers = _structural_worker_count()
+
+    # Probe the actual history and exact simulation settings before selecting
+    # CUDA. No CUDA dependency is loaded on CPU-only installations.
+    from . import cuda_training
+    probe_model = structural.StructuralModel.fit(
+        selector_train, candidate="diffusion", seed=seed,
+        simulations=STRUCTURAL_SIMULATIONS,
+    )
+    probe_rows = [
+        row for row in selector_validation
+        if is_evaluation_row(row)
+    ][:24]
+    probe_states = tuple(
+        structural.structural_state_from_row(row) for row in probe_rows
+    )
+    gpu_backend = cuda_training.choose_structural_gpu_backend(
+        probe_model, probe_states,
+    )
+    workers = 0 if gpu_backend is not None else _structural_worker_count()
     if progress is not None:
-        progress(f"Structural fitting: {workers} CPU worker(s), verified original model settings")
+        if gpu_backend is not None:
+            progress("CUDA GPU verified against CPU on historical BTC paths; "
+                     "fitting structural models on NVIDIA GPU")
+        else:
+            progress(f"Structural fitting: {workers} CPU worker(s), verified original model settings")
     # Keep one pool for candidate selection and all walk-forward folds; creating
     # a new Windows spawn pool for every fold would waste seconds each time.
     pool = (
@@ -802,7 +824,7 @@ def _structural_training(
         selection = structural.select_structural_model(
             selector_train, selector_validation, seed=seed,
             simulations=STRUCTURAL_SIMULATIONS,
-            executor=executor, progress=progress,
+            executor=executor, progress=progress, gpu_backend=gpu_backend,
         )
         candidate = selection.evidence.chosen_candidate
         if progress is not None:
@@ -824,7 +846,7 @@ def _structural_training(
                 progress(f"Structural walk-forward fold {fold_number + 1}/{len(splits)}: "
                          f"{len(states)} rows")
             probabilities = structural.predict_probabilities(
-                fitted, states, executor=executor,
+                fitted, states, executor=executor, gpu_backend=gpu_backend,
                 progress=(
                     lambda done, total, fold_idx=fold_number: progress(
                         f"Structural fold {fold_idx + 1}/{len(splits)}: "
