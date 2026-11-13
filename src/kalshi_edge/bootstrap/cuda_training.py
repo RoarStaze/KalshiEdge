@@ -170,10 +170,13 @@ class CUDAStructuralBackend:
                 averages = cp.empty(n * model.simulations, dtype=cp.float64)
                 threads = 128
                 blocks = (n * model.simulations + threads - 1) // threads
+                # RawKernel C declarations are int32, not Python's
+                # platform-dependent machine-sized integer scalars.
+                from numpy import int32
                 self.kernel(
                     (blocks,), (threads,),
                     (shocks, starts, drifts, sigmas, averages,
-                     steps, model.simulations, n),
+                     int32(steps), int32(model.simulations), int32(n)),
                 )
                 # Synchronizes GPU; expose ordinary host numeric outputs to
                 # the normal scorer with no live CuPy GPU dependencies.
@@ -274,3 +277,68 @@ def choose_structural_gpu_backend(
             ) from exc
         LOG.warning("CUDA unavailable or failed verification; using multi-core CPU: %s", exc)
         return None
+
+
+
+def main() -> int:
+    """Read-only on-device benchmark: python -m kalshi_edge.bootstrap.cuda_training --check."""
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="KalshiEdge NVIDIA CUDA training self-check")
+    parser.add_argument("--check", action="store_true",
+                        help="test CUDA initialization, parity and benchmark before training")
+    args = parser.parse_args()
+    if not args.check:
+        parser.print_help()
+        return 0
+
+    from . import structural
+    report: dict[str, Any] = {
+        "mode": gpu_mode(),
+        "cuda_available": cuda_device_available(),
+        "xgboost_cuda_build": _xgboost_cuda_build(),
+        "structural_backend": "cpu",
+        "xgboost_backend": "cpu",
+    }
+    if report["cuda_available"]:
+        try:
+            cp = load_cupy()
+            device = cp.cuda.runtime.getDeviceProperties(0).get("name", "NVIDIA CUDA GPU")
+            report["gpu_name"] = (
+                device.decode("utf-8", errors="replace")
+                if isinstance(device, bytes) else str(device)
+            )
+        except Exception as exc:
+            report["gpu_name_error"] = str(exc)
+
+    model = structural.StructuralModel(
+        candidate="diffusion", seed=73115, simulations=512,
+        drift_per_second=0.000001, drift_cap_per_second=0.00005,
+        residuals=(-1.0, 0.0, 1.0),
+    )
+    states = tuple(
+        structural.StructuralState(
+            current_value=100_000.0 + index * 8.0,
+            strike=100_075.0, seconds_remaining=480,
+            volatility_per_second=0.0005,
+            recent_return_5s=0.00001,
+        ) for index in range(24)
+    )
+    try:
+        gpu = choose_structural_gpu_backend(model, states)
+        if gpu is not None:
+            report["structural_backend"] = "cuda"
+            report["structural_parity_verified"] = True
+        else:
+            report["structural_parity_verified"] = False
+        report["xgboost_backend"] = xgboost_device()
+    except Exception as exc:
+        report["error"] = f"{type(exc).__name__}: {exc}"
+
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 2 if report.get("error") else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
