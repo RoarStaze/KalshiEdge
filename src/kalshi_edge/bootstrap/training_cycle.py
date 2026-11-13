@@ -52,6 +52,8 @@ WORKER_STAGE_PROGRESS = {
 FORWARD_MODE = "forward_480"
 BASELINE_MODE = "baseline"
 MIN_RETRAIN_LOCKBOX_MARKETS = 80
+_active_interpreter_identity: tuple[int, str | None] | None = None
+
 ACTIVE_WORKER_STAGES = frozenset({
     "STARTING", "BUILDING_DATASET", "VERIFYING_DATASET",
     "VERIFYING", "SPLITTING", "FITTING", "TRAINING",
@@ -395,6 +397,12 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
     if not events or events[-1].get("stage") != stage:
         events.append({"stage": stage, "at_utc": now, "progress_percent": percent})
     retained.setdefault("started_utc", now)
+    payload_values = dict(values)
+    if _active_interpreter_identity is not None:
+        # The Windows .venv python.exe is a waiting launcher. Only the true
+        # interpreter can safely be inspected or suspended during fitting.
+        real_pid, real_identity = _active_interpreter_identity
+        payload_values.update(worker_pid=real_pid, worker_identity=real_identity)
     _atomic_state(_state_path(root), {
         **retained,
         "stage": stage,
@@ -403,7 +411,7 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
         "progress_percent": percent,
         "events": events[-32:],
         "updated_utc": now,
-        **values,
+        **payload_values,
     })
 
 
@@ -1642,7 +1650,16 @@ class TrainingController:
             if run.get("stage") not in ACTIVE_WORKER_STAGES:
                 raise CycleError("training is not in a pausable stage")
             if run.get("worker_pid") != pid:
-                raise CycleError("training worker PID does not match active run")
+                real_pid = run.get("worker_pid")
+                token = run.get("worker_identity")
+                # The Popen-owned process may only be a Windows venv
+                # redirector waiting for a distinct, verified interpreter.
+                if not (self._process is not None
+                        and self._process.pid == pid
+                        and type(real_pid) is int
+                        and isinstance(token, str)
+                        and training_process_control.is_alive(real_pid, token)):
+                    raise CycleError("training worker PID does not match active run")
             if not isinstance(run.get("run_id"),str):
                 raise CycleError("training session predates pause support; update and restart")
             immediate=_suspend_training_fit(self.root,run,manual=True)
@@ -1788,11 +1805,12 @@ class TrainingController:
             process=self._process
             pid=self._tracked_pid()
             saved=_run_state(self.root) or {}
+            frozen_pid=saved.get("worker_pid")
             if (pid is not None and saved.get("stage")=="PAUSED"
                     and saved.get("suspended_in_memory") is True
-                    and saved.get("worker_pid")==pid
+                    and type(frozen_pid) is int
                     and training_process_control.is_alive(
-                        pid,saved.get("worker_identity") or "")):
+                        frozen_pid,saved.get("worker_identity") or "")):
                 # Launcher may have frozen the worker BEFORE the dashboard
                 # shutdown hook runs. Don't suspend twice or terminate it.
                 self._suspended=True
@@ -1847,6 +1865,7 @@ class TrainingController:
 
 
 def main() -> int:
+    global _active_interpreter_identity
     import argparse
     parser = argparse.ArgumentParser(description="Internal supervised KalshiEdge learning-cycle worker")
     parser.add_argument("--worker", action="store_true", required=True)
@@ -1855,6 +1874,15 @@ def main() -> int:
     parser.add_argument("--round-number", type=int, required=True)
     parser.add_argument("--git-sha", required=True)
     args = parser.parse_args()
+    # This entrypoint runs INSIDE the real interpreter, not the parent
+    # venv python.exe redirector held by subprocess.Popen on Windows.
+    # If OS inspection is unavailable, retaining the PID with no identity
+    # disables instant suspension safely rather than aborting training.
+    try:
+        token = training_process_control.identity(os.getpid())
+    except (OSError, training_process_control.ProcessControlError):
+        token = None
+    _active_interpreter_identity = (os.getpid(), token)
     if args.mode == FORWARD_MODE:
         if args.round_number != 0:
             raise CycleError("invalid forward-training round identity")

@@ -13,8 +13,10 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import pickle
 import platform
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -723,13 +725,59 @@ def _fold_group_rows(rows: Sequence[FeatureRow], group_order: Sequence[str], ind
     return _rows_for_groups(rows, groups)
 
 
+def _structural_worker_count(
+    *, platform: str | None = None, cpu_count: int | None = None,
+) -> int:
+    """Keep RAM/thermal headroom on consumer laptops.
+
+    The Windows venv worker uses three *CPU* processes when there are at
+    least eight logical CPUs. An explicit environment override (1-4) is
+    available for benchmarking and low-memory systems. GPU training is NOT
+    inferred just because a CUDA device exists.
+    """
+    system = sys.platform if platform is None else platform
+    cpus = os.cpu_count() if cpu_count is None else cpu_count
+    cpus = max(1, cpus or 1)
+    configured = os.environ.get("KALSHI_TRAIN_STRUCTURAL_WORKERS", "").strip()
+    maximum = min(4, cpus)
+    if configured and configured.lower() != "auto":
+        try:
+            requested = int(configured)
+        except ValueError as exc:
+            raise TrainingError(
+                "KALSHI_TRAIN_STRUCTURAL_WORKERS must be 1-4 or auto"
+            ) from exc
+        if requested < 1:
+            raise TrainingError("KALSHI_TRAIN_STRUCTURAL_WORKERS must be positive")
+        return min(requested, maximum)
+    if system != "win32":
+        return 1  # unchanged behavior in CI and headless research runs
+    return min(maximum, 3 if cpus >= 8 else 2 if cpus >= 4 else 1)
+
+
+def _structural_operation_progress(
+    *, progress: Callable[[int, int, str], None] | None,
+    completed_operations: int, total_operations: int,
+) -> Callable[[str], None]:
+    """Report real inner steps while the main operation remains at 38/44."""
+    def report(detail: str) -> None:
+        if progress is not None:
+            progress(completed_operations, total_operations, detail)
+    return report
+
+
 def _structural_training(
     development_rows: Sequence[FeatureRow],
     development_groups: Sequence[str],
     splits: Sequence[WalkForwardSplit],
     *,
     seed: int,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[structural.StructuralModel, dict[int, float], str]:
+    from concurrent.futures import ProcessPoolExecutor
+    from contextlib import nullcontext
+    import multiprocessing
+
     first_fold = splits[0]
     selector_groups = tuple(first_fold.train_indices)
     if len(selector_groups) < 4:
@@ -739,39 +787,60 @@ def _structural_training(
         pivot = len(selector_groups) - 1
     selector_train = _fold_group_rows(development_rows, development_groups, selector_groups[:pivot])
     selector_validation = _fold_group_rows(development_rows, development_groups, selector_groups[pivot:])
-    selection = structural.select_structural_model(
-        selector_train,
-        selector_validation,
-        seed=seed,
-        simulations=STRUCTURAL_SIMULATIONS,
+    workers = _structural_worker_count()
+    if progress is not None:
+        progress(f"Structural fitting: {workers} CPU worker(s), verified original model settings")
+    # Keep one pool for candidate selection and all walk-forward folds; creating
+    # a new Windows spawn pool for every fold would waste seconds each time.
+    pool = (
+        ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) if workers > 1 else nullcontext(None)
     )
-    candidate = selection.evidence.chosen_candidate
-
-    oof: dict[int, float] = {}
-    group_to_position = {group: position for position, group in enumerate(development_groups)}
-    for fold_number, fold in enumerate(splits):
-        training = _fold_group_rows(development_rows, development_groups, fold.train_indices)
-        fitted = structural.StructuralModel.fit(
-            training,
-            candidate=candidate,
-            seed=seed + fold_number,
+    with pool as executor:
+        selection = structural.select_structural_model(
+            selector_train, selector_validation, seed=seed,
+            simulations=STRUCTURAL_SIMULATIONS,
+            executor=executor, progress=progress,
+        )
+        candidate = selection.evidence.chosen_candidate
+        if progress is not None:
+            progress(f"Structural model selected: {candidate}; fitting chronological folds")
+        oof: dict[int, float] = {}
+        for fold_number, fold in enumerate(splits):
+            training = _fold_group_rows(development_rows, development_groups, fold.train_indices)
+            fitted = structural.StructuralModel.fit(
+                training, candidate=candidate, seed=seed + fold_number,
+                simulations=STRUCTURAL_SIMULATIONS,
+            )
+            validation_groups = {development_groups[index] for index in fold.validation_indices}
+            eligible = [
+                (index, row) for index, row in enumerate(development_rows)
+                if _group(row) in validation_groups and is_evaluation_row(row)
+            ]
+            states = tuple(structural.structural_state_from_row(row) for _, row in eligible)
+            if progress is not None:
+                progress(f"Structural walk-forward fold {fold_number + 1}/{len(splits)}: "
+                         f"{len(states)} rows")
+            probabilities = structural.predict_probabilities(
+                fitted, states, executor=executor,
+                progress=(
+                    lambda done, total, fold_idx=fold_number: progress(
+                        f"Structural fold {fold_idx + 1}/{len(splits)}: "
+                        f"{done}/{total} rows"
+                    )
+                ) if progress is not None else None,
+            )
+            for (index, _row), probability in zip(eligible, probabilities):
+                oof[index] = probability
+        if progress is not None:
+            progress("Fitting final structural model after chronological validation")
+        final_model = structural.StructuralModel.fit(
+            development_rows, candidate=candidate, seed=seed,
             simulations=STRUCTURAL_SIMULATIONS,
         )
-        validation_groups = {development_groups[index] for index in fold.validation_indices}
-        for index, row in enumerate(development_rows):
-            if _group(row) not in validation_groups or not is_evaluation_row(row):
-                continue
-            oof[index] = fitted.predict_proba(structural.structural_state_from_row(row))
-
-    final_model = structural.StructuralModel.fit(
-        development_rows,
-        candidate=candidate,
-        seed=seed,
-        simulations=STRUCTURAL_SIMULATIONS,
-    )
-    del group_to_position
     return final_model, oof, candidate
-
 
 def _disabled_residual(width: int) -> models.ResidualModel:
     return models.ResidualModel(
@@ -1080,6 +1149,11 @@ def build_experiment_bundle(
         context.plan.development_groups,
         splits,
         seed=settings.random_seed,
+        progress=_structural_operation_progress(
+            progress=progress,
+            completed_operations=fit_completed,
+            total_operations=fit_total,
+        ),
     )
     mark("Fitted structural model and out-of-fold predictions")
     residual_oof = _residual_oof(
