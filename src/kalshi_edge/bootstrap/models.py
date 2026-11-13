@@ -169,7 +169,9 @@ def _fit_candidate(name: str, params: Mapping[str, Any], x: Sequence[Sequence[fl
         ).fit(x, y)
     if name == "xgboost":
         from xgboost import XGBClassifier
+        from . import cuda_training
 
+        backend_device = cuda_training.xgboost_device()
         return XGBClassifier(
             n_estimators=48,
             max_depth=int(params["max_depth"]),
@@ -181,7 +183,7 @@ def _fit_candidate(name: str, params: Mapping[str, Any], x: Sequence[Sequence[fl
             objective="binary:logistic",
             eval_metric="logloss",
             tree_method="hist",
-            device="cpu",
+            device=backend_device,
             n_jobs=1,
             random_state=seed,
             verbosity=0,
