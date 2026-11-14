@@ -230,6 +230,23 @@ def _predict_model(model: object, x: Sequence[Sequence[float]]) -> list[float]:
     return [min(1.0, max(0.0, float(value))) for value in raw]
 
 
+def _inner_tuning_group_indices(
+    ordered_train_groups: Sequence[int],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Chronological, bounded tuning tail, never a one/two-market large-data sample.
+
+    The groups are already restricted to the outer fold's development train
+    indices. Reserve the latest 20%, at most 512 markets, and always leave at
+    least two complete markets for fitting. No inner validation market enters
+    the fit or any parameter/feature selection outside its intended score.
+    """
+    groups = tuple(ordered_train_groups)
+    if len(groups) < 3:
+        raise ModelError("inner hyperparameter search requires at least three training markets")
+    validation_count = min(max(1, len(groups) // 5), 512, len(groups) - 2)
+    return groups[:-validation_count], groups[-validation_count:]
+
+
 def _select_params(
     name: str,
     rows: Sequence[FeatureRow],
@@ -237,34 +254,51 @@ def _select_params(
     train_group_indices: Sequence[int],
     feature_names: Sequence[str],
     seed: int,
+    *,
+    matrix: Sequence[Sequence[float]],
+    labels: Sequence[int],
 ) -> dict[str, Any]:
+    """Score candidate hyperparameters on the inner development tail only.
+
+    The live product's eight-minute forecast is the research objective, so
+    use exact 480-second snapshots for parameter selection when they exist.
+    Older single-checkpoint datasets without 480s rows use all available
+    checkpoint rows for backwards compatibility. Never touch external
+    calibration or the independently sealed final lockbox.
+    """
     if len(train_group_indices) < 3:
         return dict(_candidate_grid(name)[0])
-    inner_validation_groups = max(1, min(2, len(train_group_indices) // 3))
-    inner_train_groups = tuple(train_group_indices[:-inner_validation_groups])
-    inner_validation = tuple(train_group_indices[-inner_validation_groups:])
+    del feature_names  # Shared matrix was constructed once by the caller.
+    if len(matrix) != len(rows) or len(labels) != len(rows):
+        raise ModelError("cached candidate feature matrix is not aligned with training rows")
+    inner_train_groups, inner_validation = _inner_tuning_group_indices(train_group_indices)
     train_rows = _rows_for_group_indices(rows, groups, inner_train_groups)
     validation_rows = _rows_for_group_indices(rows, groups, inner_validation)
     if not train_rows or not validation_rows:
         return dict(_candidate_grid(name)[0])
 
-    all_x = _row_matrix(rows, feature_names)
-    labels = [row.label_yes for row in rows]
+    exact_480 = [
+        index for index in validation_rows
+        if rows[index].features.get("seconds_remaining") == 480.0
+    ]
+    if exact_480:
+        validation_rows = exact_480
+
+    training_matrix = [matrix[index] for index in train_rows]
+    training_labels = [labels[index] for index in train_rows]
+    validation_matrix = [matrix[index] for index in validation_rows]
+    validation_labels = [labels[index] for index in validation_rows]
     best_params: dict[str, Any] | None = None
     best_key: tuple[float, float] | None = None
     for params in _candidate_grid(name):
         try:
             fitted = _fit_candidate(
-                name,
-                params,
-                [all_x[index] for index in train_rows],
-                [labels[index] for index in train_rows],
-                seed,
+                name, params, training_matrix, training_labels, seed,
             )
         except ModelError:
             continue
-        probabilities = _predict_model(fitted, [all_x[index] for index in validation_rows])
-        score = probability_metrics([labels[index] for index in validation_rows], probabilities)
+        probabilities = _predict_model(fitted, validation_matrix)
+        score = probability_metrics(validation_labels, probabilities)
         key = (score.log_loss, score.brier)
         if best_key is None or key < best_key:
             best_key = key
@@ -318,7 +352,10 @@ def train_candidate_models(
                     fitted_count, fit_total,
                     f"Optimizing {name} for walk-forward fold {fold_number + 1}/{len(splits)}",
                 )
-            params = _select_params(name, rows, groups, fold.train_indices, feature_names, seed + fold_number)
+            params = _select_params(
+                name, rows, groups, fold.train_indices, feature_names,
+                seed + fold_number, matrix=x, labels=y,
+            )
             selected[name].append(dict(params))
             fitted = _fit_candidate(
                 name,
