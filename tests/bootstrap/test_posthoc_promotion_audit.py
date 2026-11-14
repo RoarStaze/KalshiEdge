@@ -13,7 +13,7 @@ def test_paired_outcome_counts_and_qualifying_overlap_are_matched_by_market():
     tickers = ("m1", "m2", "m3", "m4", "m5")
     labels = (1, 0, 1, 0, 0)
     candidate = (.95, .05, .2, .9, .95)
-    incumbent = (.95, .95, .95, .05, .9)
+    incumbent = (.95, .95, .95, .2, .9)
     audit = promotion_audit.paired_480_evidence(
         tickers, labels, candidate, incumbent, resamples=300, seed=42,
     )
