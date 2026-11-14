@@ -100,3 +100,87 @@ def test_full_model_import_is_not_required_for_inference_and_license_gate_preced
     with pytest.raises(ValueError, match="license"):
         mod.run_infer(Path("no-input.json"), Path("no-output.json"),
                       accepted_noncommercial_license=False)
+
+
+def test_prepare_rejects_no_out_of_fit_cohort_by_default_but_accepts_explicit_biased_diagnostic():
+    mod = pilot()
+    groups = [(f"KXBTC15M-{i:04d}", 1000 + 10 * i, 1009 + 10 * i)
+              for i in range(40)]
+    development = {ticker for ticker, _, _ in groups[:32]}
+    with pytest.raises(ValueError, match="--allow-incumbent-training-overlap"):
+        mod.select_research_markets(
+            groups, development, incumbent_calibration_end_ns=1800,
+            next_calibration_start_ns=1400,
+            allow_incumbent_training_overlap=False,
+        )
+    chosen, scope = mod.select_research_markets(
+        groups, development, incumbent_calibration_end_ns=1800,
+        next_calibration_start_ns=1400,
+        allow_incumbent_training_overlap=True,
+    )
+    assert scope == "INCUMBENT_TRAINING_OVERLAP"
+    assert len(chosen) == 32
+    assert set(chosen) == development
+    assert all("KXBTC15M-00" in ticker for ticker in chosen)
+
+
+def test_prepare_prefers_out_of_fit_dev_groups_without_biased_flag():
+    mod = pilot()
+    groups = [(f"m{i}", 1000 + 20 * i, 1010 + 20 * i) for i in range(25)]
+    development = {ticker for ticker, _, _ in groups[:20]}
+    chosen, scope = mod.select_research_markets(
+        groups, development, incumbent_calibration_end_ns=1210,
+        next_calibration_start_ns=1400,
+        allow_incumbent_training_overlap=False,
+    )
+    assert scope == "POST_INCUMBENT_CALIBRATION"
+    assert chosen == tuple(f"m{i}" for i in range(11, 20))
+
+
+def test_prepare_never_allows_locked_or_calibration_groups_even_with_explicit_overlap():
+    mod = pilot()
+    groups = [(f"m{i}", 1000 + 20 * i, 1010 + 20 * i) for i in range(30)]
+    development = {f"m{i}" for i in range(10)}
+    chosen, scope = mod.select_research_markets(
+        groups, development, incumbent_calibration_end_ns=2000,
+        next_calibration_start_ns=1200,
+        allow_incumbent_training_overlap=True,
+    )
+    assert scope == "INCUMBENT_TRAINING_OVERLAP"
+    assert chosen == tuple(f"m{i}" for i in range(10))
+    assert "m10" not in chosen
+    assert "m29" not in chosen
+
+
+def test_in_sample_score_explicitly_disclaims_which_model_is_better():
+    mod = pilot()
+    prepared = {
+        "records": [
+            {"ticker": "m1", "label_yes": 1, "incumbent_p_yes": .99,
+             "strike": 100.0, "strike_type": "greater", "context": [99.0]},
+        ],
+        "sample_scope": "INCUMBENT_TRAINING_OVERLAP",
+        "experiment_kind": "NON_DEPLOYABLE_EXPLORATORY",
+    }
+    forecasts = {"results": [{"ticker": "m1", "forecast_price": 102.0}]}
+    comparison = mod.compare(prepared, forecasts)
+    assert comparison["incumbent_results_in_sample"] is True
+    assert comparison["comparison_valid_for_superiority"] is False
+    assert comparison["winner"] is None
+    assert "in-sample" in comparison["limitations"].lower()
+    assert comparison["promotion_eligible"] is False
+
+
+def test_commandline_explicit_overlap_flag_is_forwarded_not_silent(monkeypatch, capsys):
+    mod = pilot()
+    calls = []
+
+    def fake_prepare(**kwargs):
+        calls.append(kwargs)
+        return {"status": "PREPARED"}
+    monkeypatch.setattr(mod, "run_prepare", fake_prepare)
+    assert mod.main(["prepare", "--markets", "32"]) == 0
+    assert calls[-1]["allow_incumbent_training_overlap"] is False
+    assert mod.main(["prepare", "--markets", "32",
+                     "--allow-incumbent-training-overlap"]) == 0
+    assert calls[-1]["allow_incumbent_training_overlap"] is True
