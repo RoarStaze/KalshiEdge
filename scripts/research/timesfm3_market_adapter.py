@@ -169,7 +169,15 @@ def _matched_predictions(prepared: dict[str, Any], timesfm: dict[str, Any]):
     if timesfm.get("checkpoint") != MODEL or timesfm.get("input_sha256") != prepared["input_sha256"]:
         raise ValueError("TimesFM3 prediction input hash or model checkpoint mismatch")
     results = timesfm.get("results")
-    if not isinstance(results, list) or len(results) != len(records):
+    if not isinstance(results, list):
+        raise ValueError("missing TimesFM3 forecast records")
+    seen_results: set[str] = set()
+    for item in results:
+        if isinstance(item, dict) and isinstance(item.get("ticker"), str):
+            if item["ticker"] in seen_results:
+                raise ValueError("duplicate TimesFM3 forecast ticker")
+            seen_results.add(item["ticker"])
+    if len(results) != len(records):
         raise ValueError("missing or extra TimesFM3 forecasts for prepared markets")
     by_ticker: dict[str, float] = {}
     for item in results:
