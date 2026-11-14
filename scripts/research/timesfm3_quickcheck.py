@@ -394,7 +394,9 @@ def run_infer(
     if not torch.cuda.is_available():
         raise ValueError("TimesFM3 research GPU unavailable; install CUDA-enabled PyTorch in its isolated environment")
     payload = _read_json(prepared)
-    if payload.get("experiment_kind") != "NON_DEPLOYABLE_EXPLORATORY":
+    if payload.get("experiment_kind") not in (
+        "NON_DEPLOYABLE_EXPLORATORY", "TIMESFM3_CHRONOLOGICAL_REFIT",
+    ):
         raise ValueError("cannot infer from a non-research input")
     records = payload.get("records")
     if not isinstance(records, list) or not records:
