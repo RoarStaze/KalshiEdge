@@ -127,8 +127,16 @@ def compare(prepared: dict[str, Any], prediction: dict[str, Any]) -> dict[str, A
         min(1., 2 * sum(math.comb(n_disagree, k) for k in range(min(timesfm_only, model_only) + 1))
             / (1 << n_disagree)) if n_disagree else 1.
     )
+    scope = prepared.get("sample_scope", "UNSPECIFIED_HISTORICAL")
+    in_sample = scope == "INCUMBENT_TRAINING_OVERLAP"
+    if scope not in ("INCUMBENT_TRAINING_OVERLAP", "POST_INCUMBENT_CALIBRATION", "UNSPECIFIED_HISTORICAL"):
+        raise ValueError("unknown benchmark evaluation sample scope")
     return {
         "experiment_kind": "NON_DEPLOYABLE_EXPLORATORY",
+        "sample_scope": scope,
+        "incumbent_results_in_sample": in_sample,
+        "comparison_valid_for_superiority": False,
+        "winner": None,
         "count": n,
         "incumbent_bundle_sha": prepared.get("incumbent_bundle_sha"),
         "timesfm_checkpoint": MODEL_ID,
@@ -147,6 +155,9 @@ def compare(prepared: dict[str, Any], prediction: dict[str, Any]) -> dict[str, A
         "brier_timesfm3": None,
         "promotion_eligible": False,
         "limitations": (
+            ("Incumbent scored in-sample on markets overlapping its fitting history; "
+             "comparing the two apparent accuracies is BIASED and cannot establish "
+             "which model is better. " if in_sample else "") +
             "Exploratory pre-existing development markets, not fresh untouched "
             "evaluation. TimesFM3 price forecasts use Binance BTCUSDT, not Kalshi "
             "BRTI reference; differences in exchange index can change strike "
@@ -215,8 +226,52 @@ def _causal_context_for_market(root: Path, symbol: str, checkpoint_second: int, 
     return causal_five_second_context(seconds, checkpoint_second=checkpoint_second, steps=steps)
 
 
+def select_research_markets(
+    chronological_groups: Sequence[tuple[str, int, int]],
+    development_groups: set[str],
+    *,
+    incumbent_calibration_end_ns: int,
+    next_calibration_start_ns: int,
+    allow_incumbent_training_overlap: bool = False,
+) -> tuple[tuple[str, ...], str]:
+    """Select only development markets; NEVER calibration or fresh lockbox.
+
+    A fair out-of-incumbent-fitting cohort may not exist after the existing
+    model was trained on the current history. An explicitly opted-in
+    overlapping training cohort is *descriptive only* and is never evidence
+    TimesFM3 or Model #1 is better on future unseen market outcomes.
+    """
+    development = tuple(
+        (ticker, first, last)
+        for ticker, first, last in chronological_groups
+        if ticker in development_groups and last < next_calibration_start_ns
+    )
+    out_of_fit = tuple(
+        ticker for ticker, first, _last in development
+        if first > incumbent_calibration_end_ns
+    )
+    if len(out_of_fit) >= 8:
+        return out_of_fit, "POST_INCUMBENT_CALIBRATION"
+    if not allow_incumbent_training_overlap:
+        raise ValueError(
+            "No safe out-of-incumbent-fitting historical development cohort "
+            f"(found {len(out_of_fit)} markets, need 8). "
+            "This is an intentional evaluation safeguard, not a data-download failure. "
+            "For a BIASED, in-sample research diagnostic only, rerun prepare with "
+            "--allow-incumbent-training-overlap; it cannot prove which model is better. "
+            "Never substitute the untouched fresh evaluation lockbox."
+        )
+    if len(development) < 8:
+        raise ValueError(
+            "Fewer than eight verified development markets available for an "
+            "in-sample diagnostic. Reserved lockbox markets must not be used."
+        )
+    return tuple(ticker for ticker, _first, _last in development), "INCUMBENT_TRAINING_OVERLAP"
+
+
 def run_prepare(
     *, root: Path, out: Path, markets: int = 32, context_steps: int = 256,
+    allow_incumbent_training_overlap: bool = False,
 ) -> dict[str, Any]:
     """Only previously exposed development markets; never read sealed lockbox labels."""
     from kalshi_edge.bootstrap import training, live
@@ -231,16 +286,13 @@ def run_prepare(
     incumbent_bundle, pipeline = live.load_default_model(root)
     training_end = incumbent_bundle.boundaries.calibration_end_ts_ns
     calibration_start = context.plan.boundaries.calibration_start_ts_ns
-    group_set = set(context.plan.development_groups)
-    eligible = [
-        ticker for ticker, first, last in training._metadata_groups(context.dataset_path)
-        if ticker in group_set and first > training_end and last < calibration_start
-    ]
-    if len(eligible) < 8:
-        raise ValueError(
-            "No safe out-of-incumbent-fitting historical development cohort; "
-            "do not use fresh sealed lockbox for this exploratory test."
-        )
+    eligible, sample_scope = select_research_markets(
+        training._metadata_groups(context.dataset_path),
+        set(context.plan.development_groups),
+        incumbent_calibration_end_ns=training_end,
+        next_calibration_start_ns=calibration_start,
+        allow_incumbent_training_overlap=allow_incumbent_training_overlap,
+    )
     candidates = sample_spaced(eligible, limit=min(len(eligible), markets))
     columns = ["market_ticker", "market_date", "split_group_id", "checkpoint_ts_ns",
                "label_yes", *context.feature_names]
@@ -260,7 +312,9 @@ def run_prepare(
         if len(records) >= markets:
             break
         row = rows.get(ticker)
-        if row is None or row.checkpoint_ts_ns % NS or row.checkpoint_ts_ns <= training_end:
+        if (row is None or row.checkpoint_ts_ns % NS
+                or (sample_scope == "POST_INCUMBENT_CALIBRATION"
+                    and row.checkpoint_ts_ns <= training_end)):
             excluded.append(ticker)
             continue
         market_path = root / "raw" / "kalshi" / "markets" / f"{ticker}.json"
@@ -298,6 +352,8 @@ def run_prepare(
 
     payload: dict[str, Any] = {
         "experiment_kind": "NON_DEPLOYABLE_EXPLORATORY",
+        "sample_scope": sample_scope,
+        "incumbent_results_in_sample": sample_scope == "INCUMBENT_TRAINING_OVERLAP",
         "incumbent_bundle_sha": incumbent_bundle.bundle_sha256,
         "timesfm_checkpoint": MODEL_ID,
         "checkpoint_seconds": CHECKPOINT_SECONDS,
@@ -313,7 +369,11 @@ def run_prepare(
     _write_json(out, payload)
     return {"status": "PREPARED", "market_count": len(records),
             "excluded": len(excluded), "output": str(out),
-            "out_of_fit_groups_only": True, "sealed_lockbox_opened": False}
+            "out_of_fit_groups_only": sample_scope == "POST_INCUMBENT_CALIBRATION",
+            "incumbent_results_in_sample": sample_scope == "INCUMBENT_TRAINING_OVERLAP",
+            "sample_scope": sample_scope,
+            "comparison_valid_for_superiority": False,
+            "sealed_lockbox_opened": False}
 
 
 def run_infer(
@@ -378,6 +438,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     prepare.add_argument("--root", type=Path, default=Path("data/bootstrap"))
     prepare.add_argument("--markets", type=int, default=32)
     prepare.add_argument("--context-steps", type=int, default=256)
+    prepare.add_argument(
+        "--allow-incumbent-training-overlap", action="store_true",
+        help="Explicitly allow BIASED in-sample diagnostic; no superiority claim or fresh lockbox access",
+    )
     prepare.add_argument("--out", type=Path, default=OUTPUT_DIR / "prepared.json")
     infer = sub.add_parser("infer", help="run zero-shot TimesFM3 in a separate CUDA/PyTorch Python environment")
     infer.add_argument("--prepared", type=Path, default=OUTPUT_DIR / "prepared.json")
@@ -390,7 +454,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.command == "prepare":
         result = run_prepare(root=args.root.resolve(), out=args.out.resolve(),
-                             markets=args.markets, context_steps=args.context_steps)
+                             markets=args.markets, context_steps=args.context_steps,
+                             allow_incumbent_training_overlap=args.allow_incumbent_training_overlap)
     elif args.command == "infer":
         result = run_infer(args.prepared, args.out,
                            accepted_noncommercial_license=args.accept_noncommercial_license,
