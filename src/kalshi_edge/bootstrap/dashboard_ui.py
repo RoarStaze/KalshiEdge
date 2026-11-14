@@ -153,6 +153,11 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-metric strong{display:block;font-size:23px;margin-top:10px;color:#8ae4cc;font-variant-numeric:tabular-nums}
 .training-metric small{color:#a3b9bb;font-size:11px;line-height:1.6}
 .training-outcome{padding:16px 18px;border:1px solid #365260;background:#152731;border-radius:11px;margin-top:17px;font-size:13px;line-height:1.7;white-space:pre-wrap}
+.training-audit{margin-top:15px;border:1px solid #304b57;background:#14232b;border-radius:11px;padding:17px 18px;font-size:12px;line-height:1.7;color:var(--text)}
+.training-audit[hidden]{display:none!important}
+.training-audit h4{font-size:14px;margin:0 0 9px;color:var(--mint)}
+.training-audit-line{margin-top:5px;overflow-wrap:anywhere}
+.training-audit-note{font-size:11px;color:var(--muted);margin-top:9px}
 .training-outcome.pass{background:#14342c;border-color:#2a8970;color:#c2f3dd}
 .training-outcome.fail{background:#352529;border-color:#96545a;color:#f6c3c6}
 .training-outcome.pending{background:#353024;border-color:#9d844c;color:#f0ddac}
@@ -285,6 +290,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="training-bar training-dataset-bar" role="progressbar" aria-label="Current training stage progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dataset-build-bar"><div id="dataset-build-bar-fill"></div></div>
   <div class="training-comparison" id="training-comparison" aria-label="Challenger versus current model"></div>
   <div id="training-outcome" class="training-outcome" role="status" aria-live="polite">No training run yet. Training results will appear here and remain after refreshing the page.</div>
+  <section id="training-promotion-audit" class="training-audit" aria-label="Post-training eight-minute model comparison" hidden></section>
   <div class="train-feedback" id="train-feedback" role="status" aria-live="polite"></div>
   <div id="forward-480-result" class="training-forward-note">Model training and evaluation are combined into Train Now. A high validation score is not automatically permission for live trading.</div>
  </div>
@@ -587,6 +593,84 @@ function renderCurrentStageProgress(run,running,hasRun,failed){
    (display.mode==="fit"?" · Waiting for confirmed fitting operations":""));
  }
 }
+function renderPromotionAudit(run){
+ const panel=el("training-promotion-audit");
+ panel.replaceChildren();
+ const audit=run.promotion_audit;
+ if(!audit||typeof audit!=="object"||!audit.status){
+  panel.hidden=true;return;
+ }
+ panel.hidden=false;
+ const heading=document.createElement("h4");
+ heading.textContent="Post-training model comparison · 480 seconds";
+ panel.append(heading);
+ function line(value,note=false){
+  const item=document.createElement("div");
+  item.className=note?"training-audit-note":"training-audit-line";
+  item.textContent=value;panel.append(item);
+ }
+ const n=Number(audit.market_count)||0;
+ const fixed=(v,decimals=4)=>typeof v==="number"&&Number.isFinite(v)?
+  v.toFixed(decimals):"unavailable";
+ const delta=v=>typeof v==="number"&&Number.isFinite(v)?
+  (v>0?"+":"")+fixed(v,4):"unavailable";
+ line("Overall directional accuracy: candidate "+
+  trainPercent(audit.overall_480_accuracy_candidate)+" vs current "+
+  trainPercent(audit.overall_480_accuracy_incumbent)+
+  " · difference "+delta(audit.overall_480_accuracy_delta_pp)+" pp ("+n+" markets).");
+ line("Qualifying forecasts: "+audit.candidate_qualified+" vs "+
+  audit.incumbent_qualified+" · coverage difference "+
+  delta(audit.coverage_delta_pp)+" pp; qualifying accuracy difference "+
+  delta(audit.qualified_accuracy_delta_pp)+" pp.");
+ line("Probability score differences (candidate minus current; lower is better): "+
+  "Brier "+delta(audit["480_brier_delta"])+
+  " · log loss "+delta(audit["480_log_loss_delta"])+
+  " · ECE "+delta(audit["480_ece_delta"])+".");
+ line("All-row directional accuracy difference: "+
+  delta(audit.overall_allrows_accuracy_delta_pp)+" pp.");
+ const paired=audit.paired_480;
+ if(paired&&typeof paired==="object"){
+  line("Same-market outcomes: both correct "+paired.both_correct+
+   " · candidate-only correct "+paired.candidate_only_correct+
+   " · current-only correct "+paired.incumbent_only_correct+
+   " · both wrong "+paired.both_wrong+".");
+  line("Qualification overlap: both "+paired.both_qualified+
+   " · candidate-only "+paired.candidate_only_qualified+
+   " · current-only "+paired.incumbent_only_qualified+".");
+  if(Array.isArray(paired.candidate_only_correct_tickers)&&
+     Array.isArray(paired.incumbent_only_correct_tickers)){
+   const details=document.createElement("details");
+   const summary=document.createElement("summary");
+   summary.textContent="View markets where the models disagreed";
+   const cases=document.createElement("div");
+   cases.className="training-audit-note";
+   cases.textContent="Candidate-only correct: "+
+    (paired.candidate_only_correct_tickers.join(", ")||"none")+
+    " · Current-only correct: "+
+    (paired.incumbent_only_correct_tickers.join(", ")||"none")+
+    " · Candidate-only qualifying: "+
+    (Array.isArray(paired.candidate_only_qualified_tickers)?
+     (paired.candidate_only_qualified_tickers.join(", ")||"none"):"unavailable")+
+    " · Current-only qualifying: "+
+    (Array.isArray(paired.incumbent_only_qualified_tickers)?
+     (paired.incumbent_only_qualified_tickers.join(", ")||"none"):"unavailable");
+   details.append(summary,cases);
+   panel.append(details);
+  }
+  const ci=paired.confidence_interval_95_pp;
+  if(Array.isArray(ci)&&ci.length===2){
+   line("Paired 95% bootstrap interval for accuracy difference: ["+
+    delta(ci[0])+", "+delta(ci[1])+"] pp; exact McNemar p="+
+    fixed(paired.mcnemar_exact_p,4)+".",true);
+  }
+  line("Uncertainty is descriptive and does not override deployment gates.",true);
+ }else{
+  line(audit.paired_status||"Paired outcomes not recorded for this evaluation.",true);
+ }
+ const economics=audit.trade_economics||{};
+ line("Net trading profit: "+String(economics.status||"UNAVAILABLE")+
+  " · "+String(economics.reason||"No verified execution data."),true);
+}
 function renderTrainingSession(run,running){
  const events=Array.isArray(run.events)?run.events:[];
  const current=String(run.stage||"");
@@ -635,6 +719,7 @@ function renderTrainingSession(run,running){
    card.append(h,strong,caption);comparison.append(card);
   }
  }
+ renderPromotionAudit(run);
  const outcome=el("training-outcome");
  outcome.className="training-outcome";
  const reasons=Array.isArray(run.reasons)?run.reasons:[];

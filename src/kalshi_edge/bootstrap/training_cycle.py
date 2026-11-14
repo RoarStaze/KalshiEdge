@@ -1258,6 +1258,29 @@ class TrainingController:
                         **info["run"], "stage": "INTERRUPTED",
                         "error": "Dashboard restarted before this run completed",
                     }
+            # Report-only augmentation: read sealed aggregates for completed
+            # sessions, including legacy runs. Never replay lockbox predictions
+            # or update persistent training state during a dashboard refresh.
+            completed_run = info["run"]
+            if (isinstance(completed_run, dict)
+                    and completed_run.get("stage") == "COMPLETE"
+                    and isinstance(completed_run.get("evaluation_report"), str)):
+                from . import promotion_audit
+                try:
+                    audit = promotion_audit.load_report_audit(
+                        self.root, Path(completed_run["evaluation_report"]),
+                    )
+                    if audit is not None:
+                        info["run"] = {**completed_run, "promotion_audit": audit}
+                except (OSError, ValueError, TypeError) as exc:
+                    LOG.warning("Completed training audit unavailable: %s", exc)
+                    info["run"] = {
+                        **completed_run,
+                        "promotion_audit_error": (
+                            "Saved paired evaluation summary unavailable: "
+                            + type(exc).__name__
+                        ),
+                    }
             info.update(self._pause_flags(info["run"], info["running"]))
             if info["paused"]:
                 info["train_available"] = False

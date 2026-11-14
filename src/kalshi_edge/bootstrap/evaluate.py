@@ -129,6 +129,9 @@ class BootstrapEvaluationReport(BaseModel):
     # Full retraining of an already-promoted live model must pass fresh,
     # same-market 480s accuracy + coverage gates before replacing it.
     requires_retrain_480_gate: bool = False
+    # Descriptive-only evidence recorded during THIS one-time evaluation.
+    # Never used by promotion_decision or for hyperparameter selection.
+    paired_480_audit: dict[str, Any] | None = None
     comparison_rule: str
 
 
@@ -787,6 +790,7 @@ def run_lockbox_evaluation(
         progress("SCORING")
     report = evaluate_lockbox(experiment, lockbox_rows)
     if is_volatility or is_learning or is_full_retrain:
+        paired_480_audit = None
         if progress is not None:
             progress("COMPARING")
         # Compare the incumbent without fitting it, or touching any other
@@ -863,9 +867,16 @@ def run_lockbox_evaluation(
             gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
                 labels, incumbent_outputs["candidate"],
             )
+            from . import promotion_audit
+            paired_480_audit = promotion_audit.paired_480_evidence(
+                [row.market_ticker for row in horizon_rows],
+                labels, candidate_outputs["candidate"],
+                incumbent_outputs["candidate"],
+            )
         report = report.model_copy(update={
             "metrics": enriched, "decision_metrics": gate_reports,
             "requires_retrain_480_gate": is_full_retrain,
+            "paired_480_audit": paired_480_audit,
         })
     if progress is not None:
         progress("PROMOTION_GATE")
