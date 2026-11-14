@@ -143,3 +143,49 @@ def test_readonly_report_reader_refuses_outside_path_and_does_not_modify_report(
     outside.write_text(raw, encoding="utf-8")
     with pytest.raises(ValueError, match="outside"):
         promotion_audit.load_report_audit(tmp_path, outside)
+
+
+def test_train_page_has_readonly_paired_evidence_section():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    assert 'id="training-promotion-audit"' in PAGE
+    assert 'run.promotion_audit' in PAGE
+    assert 'paired_480' in PAGE
+    assert "confidence_interval_95_pp" in PAGE
+    assert "trade_economics" in PAGE
+    assert "not recorded" in PAGE.lower()
+
+
+def test_existing_finalized_training_run_displays_readonly_audit(tmp_path, monkeypatch):
+    """No model replay; existing evaluation JSON is simply read once for status."""
+    import time
+    from kalshi_edge.bootstrap import training_cycle
+    from kalshi_edge.bootstrap import model_identity
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    report = reports / ("evaluation-" + "a" * 64 + ".json")
+    report.write_text(json.dumps(_old_report()), encoding="utf-8")
+    training_cycle._write_worker_state(
+        tmp_path, stage="COMPLETE", mode="baseline", round_number=0,
+        decision="VALIDATION_FAILED", promoted=False,
+        evaluation_report=str(report),
+    )
+
+    controller = training_cycle.TrainingController(tmp_path, project_root=tmp_path)
+    controller._cached = {"ready": False, "status": "WAITING"}
+    controller._cached_at = time.monotonic()
+    controller._forward_cached = {"ready": False, "status": "WAITING"}
+    controller._forward_at = time.monotonic()
+    controller._baseline_cached = {"ready": False, "status": "WAITING"}
+    controller._baseline_at = time.monotonic()
+    monkeypatch.setattr(model_identity, "current_model_identity", lambda root: {})
+    state_before = (tmp_path / "training_runs" / "current.json").read_bytes()
+    report_before = report.read_bytes()
+
+    result = controller.status()
+    audit = result["run"]["promotion_audit"]
+    assert audit["status"] == "AGGREGATES_ONLY"
+    assert audit["market_count"] == 858
+    assert audit["overall_480_accuracy_delta_pp"] == 0.0
+    assert (tmp_path / "training_runs" / "current.json").read_bytes() == state_before
+    assert report.read_bytes() == report_before
