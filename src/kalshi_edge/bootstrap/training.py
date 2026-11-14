@@ -673,7 +673,7 @@ def _filtered_rows(rows: Sequence[FeatureRow], *, remove_btc: bool = False, remo
 def _later_metrics(result: models.CandidateResults, rows: Sequence[FeatureRow], candidate: str | None = None) -> ProbabilityMetrics:
     name = candidate or result.best_candidate
     predictions = result.oof_predictions[name]
-    positions = [index for index, value in enumerate(predictions) if value is not None]
+    positions = models._oof_scoring_positions(rows, predictions)
     if not positions:
         raise TrainingError("candidate produced no development OOF predictions")
     positions.sort(key=lambda index: rows[index].checkpoint_ts_ns)

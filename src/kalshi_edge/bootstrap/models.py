@@ -139,6 +139,37 @@ def _rows_for_group_indices(rows: Sequence[FeatureRow], groups: Sequence[str], i
     return [index for index, row in enumerate(rows) if (row.split_group_id or row.market_ticker) in wanted]
 
 
+MIN_480_OOF_MARKETS = 60
+
+
+def _oof_scoring_positions(
+    rows: Sequence[FeatureRow],
+    predictions: Sequence[float | None],
+) -> list[int]:
+    """Prefer one causal 480s OOF forecast per market when sample size allows.
+
+    Research-model selection must match the eight-minute final decision.
+    Use only already-generated development OOF predictions; None entries
+    (embargo and untouched lockbox) cannot enter scoring. Legacy datasets
+    with few or duplicated 480s observations retain all-checkpoint scoring
+    rather than selecting a champion from a handful of markets.
+    """
+    if len(rows) != len(predictions):
+        raise ModelError("OOF positions do not align with feature rows")
+    positions = [index for index, value in enumerate(predictions) if value is not None]
+    at_480 = [
+        index for index in positions
+        if rows[index].features.get("seconds_remaining") == 480.0
+    ]
+    groups = [
+        rows[index].split_group_id or rows[index].market_ticker
+        for index in at_480
+    ]
+    if len(at_480) >= MIN_480_OOF_MARKETS and len(set(groups)) == len(at_480):
+        return at_480
+    return positions
+
+
 def _fit_candidate(name: str, params: Mapping[str, Any], x: Sequence[Sequence[float]], y: Sequence[int], seed: int):
     if len(set(y)) < 2:
         raise ModelError("candidate training block must contain both classes")
@@ -375,7 +406,7 @@ def train_candidate_models(
 
     oof_metrics: dict[str, ProbabilityMetrics] = {}
     for name in CANDIDATE_NAMES:
-        positions = [index for index, value in enumerate(oof[name]) if value is not None]
+        positions = _oof_scoring_positions(rows, oof[name])
         if not positions:
             raise ModelError(f"candidate {name} produced no OOF predictions")
         oof_metrics[name] = probability_metrics(
