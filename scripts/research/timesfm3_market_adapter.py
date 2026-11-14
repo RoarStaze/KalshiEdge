@@ -327,7 +327,10 @@ def run_prepare(root: Path, out: Path) -> dict[str, Any]:
     # or current untouched lockbox forecasts/labels in a research process.
     table = pq.read_table(context.dataset_path, columns=[
         "market_ticker", "checkpoint_ts_ns", "label_yes", "strike", "seconds_remaining",
-    ], filters=[("seconds_remaining", "==", 480.0)])
+    ], filters=[
+        ("market_ticker", "in", list(tickers)),
+        ("seconds_remaining", "==", 480.0),
+    ])
     candidates = {}
     permitted = set(tickers)
     for row in table.to_pylist():
@@ -361,7 +364,16 @@ def run_prepare(root: Path, out: Path) -> dict[str, Any]:
             series = quick._causal_context_for_market(
                 root, settings.binance_symbol, checkpoint // 1_000_000_000, CONTEXT_STEPS
             )
-        except (OSError, ValueError, FileNotFoundError):
+        except FileNotFoundError:
+            # Missing local daily archive is an unavailable market, not
+            # a synthetic backfilled training example.
+            excluded.append(ticker)
+            continue
+        except ValueError as exc:
+            # A missing five-second bar is an availability exclusion.
+            # Manifest checksum/source-provenance errors must FAIL CLOSED.
+            if "missing" not in str(exc).lower():
+                raise
             excluded.append(ticker)
             continue
         records.append({
