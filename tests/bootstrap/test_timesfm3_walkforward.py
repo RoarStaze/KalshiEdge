@@ -93,6 +93,7 @@ def _prepared():
                  "test":[f"t{i}" for i in range(4,8)]},
             ],
             "sealed_current_lockbox_opened":False,
+            "model1_deployed_weights_compared":False,
             "dataset_sha256":"a"*64,
             "input_sha256":"b"*64,
            }
