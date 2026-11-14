@@ -376,6 +376,30 @@ def run_prepare(
             "sealed_lockbox_opened": False}
 
 
+def _research_forecast_steps(payload: dict[str, Any]) -> int:
+    """Resolve inference horizon from validated, known research input schemas.
+
+    Older 768-market chronological prepared.json files from PR #146 contain
+    target_seconds=480 but omit predict_steps. Infer the exact required
+    (480 + 5-second last-complete-bar guard) / 5-second cadence = 97
+    forecast steps without rewriting the SHA-bound prepared JSON.
+    """
+    kind = payload.get("experiment_kind")
+    if kind == "TIMESFM3_CHRONOLOGICAL_REFIT":
+        if payload.get("target_seconds") != CHECKPOINT_SECONDS:
+            raise ValueError("TimesFM3 chronological inference requires the verified 480-second target")
+        steps = payload.get("predict_steps", PREDICT_STEPS)
+        if type(steps) is not int or steps != PREDICT_STEPS:
+            raise ValueError("TimesFM3 chronological research horizon must be 97 five-second steps")
+        return steps
+    if kind == "NON_DEPLOYABLE_EXPLORATORY":
+        steps = payload.get("predict_steps")
+        if type(steps) is not int or steps < 1:
+            raise ValueError("TimesFM3 quickcheck input lacks a valid forecast horizon")
+        return steps
+    raise ValueError("cannot infer from a non-research input")
+
+
 def run_infer(
     prepared: Path, output: Path, *, accepted_noncommercial_license: bool,
     batch_size: int = 2,
@@ -387,20 +411,20 @@ def run_infer(
             "restricted to non-commercial non-production use; do not use if this "
             "research is not permitted by the TimesFM3 license."
         )
+    # Validate the file schema and forecast horizon BEFORE loading a large
+    # TimesFM3 checkpoint, so a malformed research input fails immediately.
+    payload = _read_json(prepared)
+    horizon = _research_forecast_steps(payload)
+    records = payload.get("records")
+    if not isinstance(records, list) or not records:
+        raise ValueError("empty prepared sample")
+
     import numpy as np
     import torch
     from timesfm3 import TimesFM3Evaluator, ModelConfig
 
     if not torch.cuda.is_available():
         raise ValueError("TimesFM3 research GPU unavailable; install CUDA-enabled PyTorch in its isolated environment")
-    payload = _read_json(prepared)
-    if payload.get("experiment_kind") not in (
-        "NON_DEPLOYABLE_EXPLORATORY", "TIMESFM3_CHRONOLOGICAL_REFIT",
-    ):
-        raise ValueError("cannot infer from a non-research input")
-    records = payload.get("records")
-    if not isinstance(records, list) or not records:
-        raise ValueError("empty prepared sample")
     batch_size = max(1, min(int(batch_size), 4))
     forecaster = TimesFM3Evaluator(ModelConfig(
         checkpoint_path=MODEL_ID,
@@ -412,7 +436,7 @@ def run_infer(
         batch = records[start:start + batch_size]
         ts = [np.asarray(record["context"], dtype=np.float32) for record in batch]
         outputs = list(forecaster.predict_batch(
-            ts, horizon=int(payload["predict_steps"]),
+            ts, horizon=horizon,
             return_quantiles=False, use_symmetric_averaging=False,
         ))
         if len(outputs) != len(batch):
