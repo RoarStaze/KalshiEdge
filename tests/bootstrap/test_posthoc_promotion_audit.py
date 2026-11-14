@@ -167,6 +167,7 @@ def test_train_page_has_readonly_paired_evidence_section():
     assert 'run.promotion_audit' in PAGE
     assert 'paired_480' in PAGE
     assert "confidence_interval_95_pp" in PAGE
+    assert "candidate_only_correct_tickers" in PAGE
     assert "trade_economics" in PAGE
     assert "not recorded" in PAGE.lower()
 
