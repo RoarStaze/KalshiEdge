@@ -1076,12 +1076,81 @@ def _required_bundle_features(outcome_features: Sequence[str], dataset_features:
     return tuple(sorted(needed))
 
 
+def _validate_research_context(
+    baseline: DatasetContext, proposed: DatasetContext,
+    chronological_groups: Sequence[tuple[str, int, int]],
+) -> None:
+    """Fail closed on research-only historical fit, calibration, test overrides.
+
+    This is not exposed by Train Now. It can only refit on the CURRENT existing
+    development groups, strictly before the live model's separate calibration
+    and untouched future evaluation cohorts. It does not read evaluation labels.
+    """
+    if (
+        proposed.dataset_path != baseline.dataset_path
+        or proposed.manifest_path != baseline.manifest_path
+        or proposed.provenance_path != baseline.provenance_path
+        or proposed.feature_names != baseline.feature_names
+        or proposed.input_hashes != baseline.input_hashes
+        or proposed.mistakes_only
+        or bool(proposed.selected_tickers)
+    ):
+        raise TrainingError("research context provenance or feature hashes differ from verified dataset")
+    plan = proposed.plan
+    train, cal, test = (
+        tuple(plan.development_groups),
+        tuple(plan.calibration_groups),
+        tuple(plan.lockbox_groups),
+    )
+    if not train or not cal or not test:
+        raise TrainingError("research context requires train, calibration and test markets")
+    all_ids = (*train, *cal, *test)
+    if len(set(all_ids)) != len(all_ids):
+        raise TrainingError("research context has chronological train/calibration/test overlap")
+    allowed = set(baseline.plan.development_groups)
+    if not set(all_ids).issubset(allowed):
+        raise TrainingError("research context test/lockbox contains markets outside historical development")
+    groups = {key: (int(start), int(end)) for key, start, end in chronological_groups}
+    if not set(all_ids).issubset(groups):
+        raise TrainingError("research context market metadata is missing")
+    def extent(ids: tuple[str, ...]) -> tuple[int, int]:
+        starts = [groups[key][0] for key in ids]
+        ends = [groups[key][1] for key in ids]
+        if any(groups[after][0] <= groups[before][1] for before, after in zip(ids, ids[1:])):
+            raise TrainingError("research context has overlapping/nonchronological markets")
+        return min(starts), max(ends)
+    t0, t1 = extent(train)
+    c0, c1 = extent(cal)
+    e0, e1 = extent(test)
+    if not t1 < c0 <= c1 < e0 <= e1:
+        raise TrainingError("research context train/calibration/test chronology is invalid")
+    if e1 >= baseline.plan.boundaries.calibration_start_ts_ns:
+        raise TrainingError("research context test overlaps reserved current calibration/lockbox")
+    boundary = plan.boundaries
+    actual = (t0, t1, c0, c1, e0, e1)
+    declared = (
+        boundary.train_start_ts_ns, boundary.train_end_ts_ns,
+        boundary.calibration_start_ts_ns, boundary.calibration_end_ts_ns,
+        boundary.lockbox_start_ts_ns, boundary.lockbox_end_ts_ns,
+    )
+    if actual != declared:
+        raise TrainingError("research context chronology boundary mismatch")
+
+
 def build_experiment_bundle(
     root: Path, settings: BootstrapSettings, *, git_sha: str,
     mistakes_only: bool = False, correct_only: bool = False,
     progress: Callable[[int, int, str], None] | None = None,
+    research_context: DatasetContext | None = None,
 ) -> artifact.ModelBundle:
-    context = _verified_context(root, mistakes_only=mistakes_only, correct_only=correct_only)
+    if research_context is None:
+        context = _verified_context(root, mistakes_only=mistakes_only, correct_only=correct_only)
+    else:
+        if mistakes_only or correct_only:
+            raise TrainingError("research context cannot override mistake/refresher training")
+        baseline = _verified_context(root)
+        _validate_research_context(baseline, research_context, _metadata_groups(baseline.dataset_path))
+        context = research_context
     pre_lockbox_rows = _read_rows_before_lockbox(context)
     development_rows = _rows_for_groups(pre_lockbox_rows, context.plan.development_groups)
     calibration_rows = _rows_for_groups(pre_lockbox_rows, context.plan.calibration_groups)
