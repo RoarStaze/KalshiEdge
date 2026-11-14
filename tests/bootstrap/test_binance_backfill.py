@@ -205,3 +205,34 @@ def test_cli_executes_binance_backfill_without_touching_collector(monkeypatch, t
     assert main(["bootstrap-backfill", "--source", "binance"]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["binance"]["day_count"] == 1
+
+
+def test_binance_bulk_backfill_reports_verified_daily_progress(tmp_path):
+    _seed_market(tmp_path)
+    fake = _FakeBinanceClient()
+    seen = []
+    def converter(source, target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"PAR1-test")
+        return 1
+    report = backfill_binance(
+        BootstrapSettings(bootstrap_dir=tmp_path), client=fake,
+        parquet_converter=converter,
+        progress_callback=lambda done, total, item, phase:
+        seen.append((done, total, item, phase)),
+    )
+    assert report.day_count == 2
+    assert seen[0] == (0, 2, "", "days")
+    assert seen[-1] == (2, 2, "2026-08-02", "days")
+    assert len(seen) == 3
+
+    seen.clear()
+    rerun = backfill_binance(
+        BootstrapSettings(bootstrap_dir=tmp_path),
+        client=_FakeBinanceClient(),
+        parquet_converter=converter,
+        progress_callback=lambda done, total, item, phase:
+        seen.append((done, total, item, phase)),
+    )
+    assert rerun.downloaded_archives == 0
+    assert seen[-1] == (2, 2, "2026-08-02", "days")
