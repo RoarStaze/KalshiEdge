@@ -637,6 +637,26 @@ function renderPromotionAudit(run){
   line("Qualification overlap: both "+paired.both_qualified+
    " · candidate-only "+paired.candidate_only_qualified+
    " · current-only "+paired.incumbent_only_qualified+".");
+  if(Array.isArray(paired.candidate_only_correct_tickers)&&
+     Array.isArray(paired.incumbent_only_correct_tickers)){
+   const details=document.createElement("details");
+   const summary=document.createElement("summary");
+   summary.textContent="View markets where the models disagreed";
+   const cases=document.createElement("div");
+   cases.className="training-audit-note";
+   cases.textContent="Candidate-only correct: "+
+    (paired.candidate_only_correct_tickers.join(", ")||"none")+
+    " · Current-only correct: "+
+    (paired.incumbent_only_correct_tickers.join(", ")||"none")+
+    " · Candidate-only qualifying: "+
+    (Array.isArray(paired.candidate_only_qualified_tickers)?
+     (paired.candidate_only_qualified_tickers.join(", ")||"none"):"unavailable")+
+    " · Current-only qualifying: "+
+    (Array.isArray(paired.incumbent_only_qualified_tickers)?
+     (paired.incumbent_only_qualified_tickers.join(", ")||"none"):"unavailable");
+   details.append(summary,cases);
+   panel.append(details);
+  }
   const ci=paired.confidence_interval_95_pp;
   if(Array.isArray(ci)&&ci.length===2){
    line("Paired 95% bootstrap interval for accuracy difference: ["+
