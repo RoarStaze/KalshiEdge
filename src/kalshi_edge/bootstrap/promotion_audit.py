@@ -112,6 +112,8 @@ def paired_480_evidence(
         "both_wrong": both_wrong,
         "candidate_qualified": c_q,
         "incumbent_qualified": i_q,
+        "candidate_qualified_correct": sum(c and right for c, right in zip(c_qual, c_correct)),
+        "incumbent_qualified_correct": sum(i and right for i, right in zip(i_qual, i_correct)),
         "both_qualified": both_q,
         "candidate_only_qualified": c_only_q,
         "incumbent_only_qualified": i_only_q,
@@ -183,8 +185,16 @@ def summarize_saved_report(payload: dict[str, Any]) -> dict[str, Any] | None:
     ece_c, ece_i = _metric_pair(metrics, "retrain_480_candidate", "retrain_480_incumbent", "ece")
     all_c, all_i = _metric_pair(metrics, "candidate", "incumbent_current", "accuracy")
     paired = report.get("paired_480_audit")
-    if paired is not None and (not isinstance(paired, dict) or paired.get("market_count") != n):
-        raise ValueError("saved paired 480s evidence does not match the sealed market count")
+    if paired is not None:
+        if not isinstance(paired, dict) or paired.get("market_count") != n:
+            raise ValueError("saved paired 480s evidence does not match the sealed market count")
+        if (paired.get("candidate_qualified") != cq
+                or paired.get("incumbent_qualified") != iq
+                or paired.get("candidate_qualified_correct") != cc
+                or paired.get("incumbent_qualified_correct") != ic
+                or abs((paired.get("both_correct", -1) + paired.get("candidate_only_correct", -1)) / n - ca) > 1e-10
+                or abs((paired.get("both_correct", -1) + paired.get("incumbent_only_correct", -1)) / n - ia) > 1e-10):
+            raise ValueError("paired 480s evidence contradicts sealed aggregate scores")
 
     return {
         "status": "PAIRED_AVAILABLE" if paired is not None else "AGGREGATES_ONLY",
