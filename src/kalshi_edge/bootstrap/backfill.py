@@ -182,6 +182,7 @@ def backfill_kalshi(
     since_date: date | None = None,
     until_date: date | None = None,
     max_markets: int | None = None,
+    progress_callback: Callable[[int, int, str, str], None] | None = None,
 ) -> KalshiBackfillReport:
     root = bootstrap.bootstrap_dir
     root.mkdir(parents=True, exist_ok=True)
@@ -208,7 +209,10 @@ def backfill_kalshi(
             max_markets=max_markets,
         )
 
-        for ticker in tickers:
+        if progress_callback is not None:
+            progress_callback(0, len(tickers), "", "markets")
+
+        for market_index, ticker in enumerate(tickers, start=1):
             market_name = f"markets/{ticker}.json"
             if _verified_existing(root, "kalshi", market_name):
                 market_payload = _read_existing_json(root, "kalshi", market_name)
@@ -222,6 +226,8 @@ def backfill_kalshi(
                 label = normalize_market_label(market_payload)
             except LabelNormalizationError:
                 excluded.append(ticker)
+                if progress_callback is not None:
+                    progress_callback(market_index, len(tickers), ticker, "markets")
                 continue
 
             trades_name = f"trades/{ticker}.json"
@@ -252,6 +258,8 @@ def backfill_kalshi(
                 except httpx.HTTPStatusError as exc:
                     if exc.response.status_code == 404:
                         excluded.append(ticker)
+                        if progress_callback is not None:
+                            progress_callback(market_index, len(tickers), ticker, "markets")
                         continue
                     raise
                 _write(
@@ -262,6 +270,9 @@ def backfill_kalshi(
                     row_count=len(candles),
                 )
                 downloaded += 1
+
+            if progress_callback is not None:
+                progress_callback(market_index, len(tickers), ticker, "markets")
 
         return KalshiBackfillReport(
             market_count=len(tickers),
@@ -390,6 +401,7 @@ def backfill_binance(
     parquet_converter: Callable[[Path, Path], int] = convert_spot_1s_to_parquet,
     as_of_utc: datetime | None = None,
     required_dates: Iterable[date] | None = None,
+    progress_callback: Callable[[int, int, str, str], None] | None = None,
 ) -> BinanceBackfillReport:
     root = bootstrap.bootstrap_dir.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -425,8 +437,11 @@ def backfill_binance(
     normalized = 0
 
     try:
-        for url in urls:
+        if progress_callback is not None:
+            progress_callback(0, len(urls), "", "days")
+        for day_index, url in enumerate(urls, start=1):
             filename = Path(urlparse(url).path).name
+            day_label = filename.removesuffix(".zip")[-10:]
             logical_name = f"archive/{filename}"
             if _verified_existing(root, "binance", logical_name):
                 raw_artifact = _raw_artifact_from_existing(root, filename)
@@ -436,6 +451,8 @@ def backfill_binance(
                 downloaded += 1
 
             if _normalized_verified(root, filename):
+                if progress_callback is not None:
+                    progress_callback(day_index, len(urls), day_label, "days")
                 continue
             raw_path = root / raw_artifact.path
             normalized_path, _ = _normalized_paths(root, filename)
@@ -444,6 +461,8 @@ def backfill_binance(
                 raise BinanceDataError(f"Parquet converter did not produce output for {filename}")
             _write_normalized_manifest(root, filename, raw_artifact, row_count)
             normalized += 1
+            if progress_callback is not None:
+                progress_callback(day_index, len(urls), day_label, "days")
 
         return BinanceBackfillReport(
             day_count=len(dates),

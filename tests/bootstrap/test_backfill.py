@@ -232,3 +232,50 @@ def test_backfill_fails_hard_on_corrupt_existing_candlestick_provenance_even_if_
 
     with pytest.raises(RuntimeError, match="provenance"):
         backfill_kalshi(CollectorSettings(), bootstrap, client=MissingCandleClient())
+
+
+def test_backfill_reports_real_market_progress_and_reuses_verified_history(tmp_path):
+    bootstrap = BootstrapSettings(bootstrap_dir=tmp_path / "bootstrap")
+    progress = []
+    client = FakeClient()
+    first = backfill_kalshi(
+        CollectorSettings(), bootstrap, client=client,
+        progress_callback=lambda done, total, item, phase:
+        progress.append((done, total, item, phase)),
+    )
+    assert first.market_count == 1
+    assert progress == [
+        (0, 1, "", "markets"),
+        (1, 1, "KXBTC15M-TEST", "markets"),
+    ]
+    calls = (client.market_fetches, client.trade_fetches, client.candle_fetches)
+    progress.clear()
+    second = backfill_kalshi(
+        CollectorSettings(), bootstrap, client=client,
+        progress_callback=lambda done, total, item, phase:
+        progress.append((done, total, item, phase)),
+    )
+    assert second.downloaded_artifacts == 0
+    assert progress[-1] == (1, 1, "KXBTC15M-TEST", "markets")
+    assert (client.market_fetches, client.trade_fetches, client.candle_fetches) == calls
+
+
+def test_backfill_progress_reports_excluded_market_but_not_false_success_on_error(tmp_path):
+    market = dict(MARKET)
+    market["strike_type"] = "unverifiable"
+
+    class Invalid(FakeClient):
+        def discover_markets(self):
+            return [market]
+
+        def fetch_market(self, ticker):
+            return {"market": market}
+
+    seen = []
+    report = backfill_kalshi(
+        CollectorSettings(), BootstrapSettings(bootstrap_dir=tmp_path),
+        client=Invalid(), progress_callback=lambda d, t, i, phase:
+        seen.append((d, t, i, phase)),
+    )
+    assert report.excluded_markets == ("KXBTC15M-TEST",)
+    assert seen[-1] == (1, 1, "KXBTC15M-TEST", "markets")

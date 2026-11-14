@@ -54,6 +54,15 @@ pip install -r requirements.research.lock
 
 Research dependencies are intentionally excluded from `requirements.runtime.lock`, which remains the production collector dependency surface.
 
+### Historical-first bulk training data
+
+The `bootstrap-expand-history` command uses official Kalshi historical/current settled-market listings, 1-minute YES candlesticks and historical trades, then checksum-verified Binance BTCUSDT 1-second archives. It prints `KALSHI_EDGE_PROGRESS` for real market/day/feature-building counts and `KALSHI_EDGE_EXPANSION_RESULT` with the verified eligible market/row totals.
+
+**Run with KalshiEdge closed**, from a research-enabled Python environment with the usual read-only Kalshi credentials. A large archive can require substantial disk space and many API requests. If interrupted, repeat the same command: Kalshi and Binance artifact hashes are verified and completed downloads are reused; missing files are fetched. Corrupt existing artifacts are *not* silently overwritten.
+
+Historical candles do not recreate unavailable tick-level order books, actual live model forecasts, or executable historic quotes. The pipeline keeps historical features causal and labels from official settlements; no model is automatically trained or promoted by importing. After the dataset completes, open the Train page and use Train Now only when the separate protected training readiness gate allows it. Past lockbox evaluations cannot be replayed to claim new independent accuracy.
+
+
 Copy `.env.example` to `.env` locally and provide the Kalshi API key ID plus the path to the local RSA private key. Never commit secrets.
 
 ## Commands
@@ -76,6 +85,17 @@ kalshi-edge bootstrap-backfill --source kalshi
 kalshi-edge bootstrap-backfill --source binance
 kalshi-edge bootstrap-backfill --source all
 kalshi-edge bootstrap-build-dataset
+
+# One command: import all discoverable archived KXBTC15M markets + Binance BTC 1s
+# data, verify sources, and build the large point-in-time feature dataset.
+# Resumable by re-running it: already verified artifacts are reused.
+kalshi-edge bootstrap-expand-history
+
+# Optional budget for initial runs: newest 12,000 discoverable settled markets.
+kalshi-edge bootstrap-expand-history --max-markets 12000
+
+# Optional inclusive UTC open-date range for older targeted batches.
+kalshi-edge bootstrap-expand-history --since-date 2026-05-01 --until-date 2026-10-31
 kalshi-edge bootstrap-train
 kalshi-edge bootstrap-evaluate
 kalshi-edge predict-live
