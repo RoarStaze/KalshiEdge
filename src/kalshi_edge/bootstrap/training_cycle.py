@@ -65,11 +65,16 @@ ACTIVE_WORKER_STAGES = frozenset({
 def _select_training_mode(
     legacy: dict, forward: dict, baseline: dict | None = None,
 ) -> str | None:
-    """Prefer existing deployable training before a research-only challenger."""
-    if legacy.get("ready"):
-        return legacy.get("mode") if legacy.get("mode") in ("mistake", "correct") else None
+    """Train the complete compatible model when its fresh lockbox is ready.
+
+    Historical full-model retraining uses the verified dataset; the targeted
+    mistake/correct refreshers remain available only if the full-model gate
+    is not ready. Research-only 480s training remains the final fallback.
+    """
     if baseline is not None and baseline.get("ready"):
         return BASELINE_MODE
+    if legacy.get("ready"):
+        return legacy.get("mode") if legacy.get("mode") in ("mistake", "correct") else None
     return FORWARD_MODE if forward.get("ready") else None
 
 
