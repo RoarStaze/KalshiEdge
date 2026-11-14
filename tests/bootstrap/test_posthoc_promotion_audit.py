@@ -201,3 +201,96 @@ def test_existing_finalized_training_run_displays_readonly_audit(tmp_path, monke
     assert audit["overall_480_accuracy_delta_pp"] == 0.0
     assert (tmp_path / "training_runs" / "current.json").read_bytes() == state_before
     assert report.read_bytes() == report_before
+
+
+def test_original_one_time_lockbox_evaluation_seals_paired_480_evidence(tmp_path, monkeypatch):
+    """All 80 matched outcomes are captured in the original score/pass, not replayed."""
+    from types import SimpleNamespace
+    from kalshi_edge.bootstrap import evaluate, artifact, training
+    from kalshi_edge.bootstrap.metrics import probability_metrics
+    from kalshi_edge.bootstrap.types import FeatureRow
+    from kalshi_edge.bootstrap import live
+
+    root = tmp_path
+    (root / "models").mkdir()
+    (root / "models" / "default.json").write_text("{}", encoding="utf-8")
+    path = root / "models" / "experiments" / ("a" * 64 + ".json")
+    bounds = SimpleNamespace(lockbox_start_ts_ns=1, lockbox_end_ts_ns=100000)
+    challenger_bundle = SimpleNamespace(bundle_sha256="a" * 64,
+                                        boundaries=bounds, input_hashes={})
+    incumbent_bundle = SimpleNamespace(identity="current_model")
+    rows = tuple(
+        FeatureRow(
+            market_ticker=f"KXBTC15M-{i:04d}", checkpoint_ts_ns=100 + i,
+            label_yes=i % 2, features={"seconds_remaining": 480.0},
+            source_max_ts_ns={"kalshi": 100 + i},
+        )
+        for i in range(80)
+    )
+    labels = [row.label_yes for row in rows]
+    challenger_p = [.95 if value else .05 for value in labels]
+    incumbent_p = list(challenger_p)
+    incumbent_p[0] = .95  # incumbent gets one market wrong
+    calls = {"load": 0, "one_time": 0, "finalized": 0}
+
+    monkeypatch.setattr(artifact, "load_model_bundle", lambda p: challenger_bundle)
+    monkeypatch.setattr(evaluate, "_require_untouched_lockbox_interval", lambda *args: None)
+
+    def read_lockbox(*args, **kwargs):
+        calls["load"] += 1
+        return rows
+    monkeypatch.setattr(training, "load_lockbox_rows", read_lockbox)
+    monkeypatch.setattr(live, "load_default_bundle", lambda root: incumbent_bundle)
+
+    def predictions(bundle, cohort):
+        selected = [row.market_ticker for row in cohort]
+        assert selected == [row.market_ticker for row in rows]
+        return {
+            "candidate": challenger_p if bundle is challenger_bundle else incumbent_p,
+        }
+    monkeypatch.setattr(evaluate, "_predict_bundle_rows", predictions)
+
+    def first_evaluation(bundle, cohort):
+        calls["one_time"] += 1
+        assert cohort == rows
+        return evaluate.BootstrapEvaluationReport(
+            bundle_sha256="a" * 64, dataset_sha256="b" * 64,
+            model_version=training.MODEL_VERSION,
+            lockbox_start_ts_ns=1, lockbox_end_ts_ns=100000,
+            evaluated_rows=80, excluded_rows=0, feature_schema_match=True,
+            leakage_audit=artifact.LeakageEvidence(
+                passed=True, finding_count=0, finding_codes=(),
+            ),
+            required_ablations_present=True,
+            metrics={
+                "candidate": artifact.metric_snapshot(
+                    probability_metrics(labels, challenger_p),
+                ),
+                "kalshi_prior": artifact.metric_snapshot(
+                    probability_metrics(labels, [.5] * len(labels)),
+                ),
+            },
+            comparison_rule=evaluate.PROMOTION_RULE_ID,
+        )
+    monkeypatch.setattr(evaluate, "evaluate_lockbox", first_evaluation)
+
+    def finalize(root, path, report):
+        calls["finalized"] += 1
+        paired = report.paired_480_audit
+        assert paired["market_count"] == 80
+        assert paired["candidate_only_correct"] == 1
+        assert paired["incumbent_only_correct"] == 0
+        assert paired["candidate_qualified"] == 80
+        assert paired["incumbent_qualified"] == 80
+        assert report.requires_retrain_480_gate is True
+        sealed = {
+            "report": report.model_dump(mode="json"),
+            "decision": {"promoted": False, "reason_codes": ["TEST_REJECTED"]},
+        }
+        summary = promotion_audit.summarize_saved_report(sealed)
+        assert summary["status"] == "PAIRED_AVAILABLE"
+        assert summary["paired_480"]["candidate_only_correct"] == 1
+        return SimpleNamespace(report_path=tmp_path / "evaluation.json", promoted=False)
+    monkeypatch.setattr(evaluate, "finalize_evaluation", finalize)
+    evaluate.run_lockbox_evaluation(root, path)
+    assert calls == {"load": 1, "one_time": 1, "finalized": 1}
