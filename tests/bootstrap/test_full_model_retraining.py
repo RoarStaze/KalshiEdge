@@ -57,11 +57,23 @@ def test_single_train_now_prefers_compatible_full_retrain_over_research_when_eli
     )=="baseline"
 
 
-def test_legacy_ready_takes_precedence_over_full_retrain():
+def test_full_model_ready_takes_precedence_over_legacy_mistake_cycle():
+    # Train Now must use the large verified historical cohort when independent
+    # full-model lockbox data are available, even if mistake cases are eligible.
     assert training_cycle._select_training_mode(
         legacy={"ready":True,"mode":"mistake"},
-        forward={"ready":True},baseline={"ready":True},
-    )=="mistake"
+        forward={"ready":True},
+        baseline={"ready":True,"fresh_evaluation_markets":1222},
+    )=="baseline"
+
+
+def test_legacy_mistake_and_correct_cycle_still_work_when_full_model_not_ready():
+    for mode in ("mistake", "correct"):
+        assert training_cycle._select_training_mode(
+            legacy={"ready":True,"mode":mode},
+            forward={"ready":True},
+            baseline={"ready":False},
+        )==mode
 
 
 def test_full_retrain_requires_verified_independent_fresh_lockbox(tmp_path,monkeypatch):
