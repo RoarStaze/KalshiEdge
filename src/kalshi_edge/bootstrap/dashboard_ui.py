@@ -836,14 +836,19 @@ function renderTraining(info){
   running?"Training and evaluating…":
   mode==="forward_480"?"Ready to train the 480-second research challenger":
   mode==="baseline"?"Ready to train and evaluate a full model":
-  ready?"Ready for verified legacy training":"Waiting for verified training evidence");
+  mode==="mistake"?"Ready to learn from verified mistakes":
+  mode==="correct"?"Ready for verified correct-case refresher":
+  ready?"Ready for verified training":"Waiting for verified training evidence");
  text("training-description",running?
   "The worker is fitting and evaluating with real checkpoint data. Live predictions and trading remain unchanged until an authorized, compatible model is promoted.":
   mode==="forward_480"?
   "Train on a newly sealed 480s snapshot dataset, test on later independent markets, and report whether accuracy and coverage improved. Research specialists cannot yet replace the full live pipeline.":
   mode==="baseline"?
   "Build and audit the dataset; fit a compatible new predictor; score a fresh lockbox; compare against the running model at eight minutes; promote only if all gates pass.":
-  ready?"Use Train Now to fit and independently evaluate the legacy cycle. A passing compatible model is promoted for the next restart.":
+  mode==="mistake"?
+  "Train on verified earlier model mistakes, then independently evaluate and promote only if the safeguards pass.":
+  mode==="correct"?
+  "Refresh using verified correct-case examples, then independently evaluate and promote only if the safeguards pass.":
   "Neither training path currently has all of its verified prerequisites.");
  const button=el("train-now");
  button.disabled=!ready||running||phase==="STARTING";
