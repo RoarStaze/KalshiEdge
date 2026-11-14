@@ -290,7 +290,8 @@ def run_prepare(
         checkpoint = out.parent / "fold_checkpoints" / f"fold_{plan['fold'] + 1:02d}.json"
         if checkpoint.exists():
             saved = _json(checkpoint)
-            if saved.get("signature") != signature or saved.get("plan") != plan:
+            if (saved.get("signature") != signature
+                    or _sha_payload(saved.get("plan")) != _sha_payload(plan)):
                 raise ValueError(
                     f"saved research fold checkpoint has incompatible data/code/plan: {checkpoint}; "
                     "use a different --out directory rather than reusing stale predictions"
