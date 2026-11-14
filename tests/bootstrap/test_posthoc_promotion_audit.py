@@ -117,11 +117,23 @@ def test_existing_sealed_evaluation_gains_aggregate_explanation_without_replay()
 
 
 def test_new_report_exposes_paired_evidence_without_affecting_prior_decision():
+    from kalshi_edge.bootstrap import evaluate
+    from kalshi_edge.bootstrap.metrics import probability_metrics
     old = _old_report()
-    old["report"]["paired_480_audit"] = promotion_audit.paired_480_evidence(
-        ["a", "b", "c", "d"], [1, 0, 1, 0],
-        [.95, .05, .05, .05], [.05, .95, .95, .05], resamples=100,
+    labels = [1, 0, 1, 0]
+    candidate = [.95, .05, .05, .05]
+    incumbent = [.05, .95, .95, .05]
+    report = old["report"]
+    report["paired_480_audit"] = promotion_audit.paired_480_evidence(
+        ["a", "b", "c", "d"], labels, candidate, incumbent, resamples=100,
     )
+    for key, ps in (("candidate", candidate), ("incumbent", incumbent)):
+        report["metrics"]["retrain_480_" + key] = probability_metrics(
+            labels, ps,
+        ).model_dump(mode="json")
+        report["decision_metrics"]["retrain_480_" + key] = evaluate.checkpoint_gate_snapshot(
+            labels, ps,
+        ).model_dump(mode="json")
     summary = promotion_audit.summarize_saved_report(old)
     assert summary["status"] == "PAIRED_AVAILABLE"
     assert summary["paired_480"]["market_count"] == 4
