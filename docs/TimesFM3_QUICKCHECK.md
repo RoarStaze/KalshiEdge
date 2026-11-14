@@ -34,6 +34,28 @@ $py = ".\.venv\Scripts\python.exe"
 & $py ".\scripts\research\timesfm3_quickcheck.py" prepare --markets 32
 ~~~
 
+If the command reports **No safe out-of-incumbent-fitting historical
+development cohort**, that is not an import error. Model #1 may already
+have trained on every eligible historical development market. The strict
+experiment cannot provide an unbiased comparison.
+
+For a **quick but biased diagnostic only** (not proof TimesFM3 is better),
+explicitly permit existing incumbent-training markets:
+
+~~~powershell
+& $py ".\scripts\research\timesfm3_quickcheck.py" prepare --markets 32 --allow-incumbent-training-overlap
+~~~
+
+This mode remains limited to existing development groups and never uses
+the reserved fresh lockbox. Its preparation and score print
+`sample_scope=INCUMBENT_TRAINING_OVERLAP`,
+`comparison_valid_for_superiority=false`, and `winner=null`.
+Model #1's apparent accuracy is **in-sample and optimistically biased**.
+Do not promote TimesFM3, change live thresholds, or conclude superiority
+from this quickcheck. For a fair comparison, collect a new untouched
+prospective cohort or run a new pre-registered historical cross-validation
+design that refits Model #1 without seeing each fold.
+
 Only proceed if you've checked the licensing conditions and your proposed
 research is permitted. To avoid changing the application's CUDA/XGBoost
 environment, create a **separate** environment for TimesFM3:
@@ -91,4 +113,6 @@ It **cannot** establish production superiority because:
   eight-minute BTC settlements.
 
 If preparation reports too few safe development markets, do not bypass
-its safeguards by choosing the unused fresh lockbox.
+its safeguards by choosing the unused fresh lockbox. Use the clearly
+labeled in-sample diagnostic option only when you accept that its accuracy
+comparison **cannot** identify a superior deployable model.
