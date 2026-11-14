@@ -22,6 +22,10 @@ def test_paired_outcome_counts_and_qualifying_overlap_are_matched_by_market():
     assert audit["candidate_only_correct"] == 1
     assert audit["incumbent_only_correct"] == 2
     assert audit["both_wrong"] == 1
+    assert audit["candidate_only_correct_tickers"] == ["m2"]
+    assert audit["incumbent_only_correct_tickers"] == ["m3", "m4"]
+    assert audit["candidate_only_qualified_tickers"] == ["m4"]
+    assert audit["incumbent_only_qualified_tickers"] == ["m3"]
     assert audit["candidate_qualified"] == 4
     assert audit["incumbent_qualified"] == 4
     assert audit["both_qualified"] == 3
