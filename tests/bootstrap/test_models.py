@@ -179,3 +179,73 @@ def test_zero_weight_stacker_component_can_be_omitted_at_inference() -> None:
 
     with pytest.raises(models.ModelError, match="active component"):
         stacker.predict({"residual_corrected": [0.2, 0.8]})
+
+
+def test_inner_tuning_partition_uses_substantial_bounded_chronological_window():
+    """No more hyperparameter decisions based on just two markets out of 30k."""
+    inner_train, inner_validation = models._inner_tuning_group_indices(tuple(range(18000)))
+    assert len(inner_train) >= 17000
+    assert len(inner_validation) == 512
+    assert inner_train[-1] + 1 == inner_validation[0]
+    assert inner_validation[-1] == 17999
+    assert not set(inner_train).intersection(inner_validation)
+    assert models._inner_tuning_group_indices(tuple(range(200)))[1] == tuple(range(160, 200))
+    assert models._inner_tuning_group_indices(tuple(range(4))) == ((0, 1, 2), (3,))
+
+
+def test_inner_checkpoint_tuning_scores_only_the_exact_480s_market_rows(monkeypatch):
+    """Mixed-horizon rows must not tune 480s classification using later labels."""
+    from types import SimpleNamespace
+    seen_labels = []
+    rows = []
+    for i in range(30):
+        for seconds in (480.0, 240.0):
+            rows.append(FeatureRow(
+                market_ticker=f"KXBTC15M-{i:03d}",
+                split_group_id=f"KXBTC15M-{i:03d}",
+                checkpoint_ts_ns=1_800_000_000_000_000_000 + i * 900 * NS + (900-int(seconds))*NS,
+                label_yes=i % 2,
+                features={"signal": float(i), "seconds_remaining": seconds},
+                source_max_ts_ns={"binance": 1_800_000_000_000_000_000 + i * 900 * NS},
+            ))
+    all_rows = tuple(rows)
+    groups = tuple(f"KXBTC15M-{i:03d}" for i in range(30))
+    matrix = [[r.features["signal"], r.features["seconds_remaining"]] for r in all_rows]
+    labels = [r.label_yes for r in all_rows]
+    original_metrics = models.probability_metrics
+
+    def spy_metrics(y, p):
+        seen_labels.append((list(y), len(p)))
+        return original_metrics(y, p)
+
+    class FakeModel:
+        def predict_proba(self, x):
+            import numpy as np
+            return np.array([[.4, .6] for _ in x])
+
+    monkeypatch.setattr(models, "_fit_candidate", lambda *args, **kwargs: FakeModel())
+    monkeypatch.setattr(models, "probability_metrics", spy_metrics)
+    models._select_params(
+        "logistic", all_rows, groups, tuple(range(30)),
+        ("signal", "seconds_remaining"), seed=1,
+        matrix=matrix, labels=labels,
+    )
+    assert len(seen_labels) == len(models._candidate_grid("logistic"))
+    assert all(size == len(y) == 6 for y, size in seen_labels)
+
+
+def test_training_candidate_matrix_is_constructed_once_for_all_inner_folds(monkeypatch):
+    """Huge historical datasets must not rematerialize half a million rows for every grid trial."""
+    rows = _rows()
+    folds = _folds(rows)
+    original = models._row_matrix
+    calls = []
+
+    def track(dataset, names):
+        calls.append(len(dataset))
+        return original(dataset, names)
+
+    monkeypatch.setattr(models, "_row_matrix", track)
+    result = models.train_candidate_models(rows, folds, seed=73115)
+    assert result.best_candidate in models.CANDIDATE_NAMES
+    assert calls == [len(rows)]
