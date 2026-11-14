@@ -117,6 +117,14 @@ def test_train_page_has_exactly_one_primary_train_action_and_live_timeline():
     assert "run.reasons" in PAGE
 
 
+def test_training_page_names_actual_selected_mode_not_legacy_ambiguity():
+    assert 'mode==="baseline"?"Ready to train and evaluate a full model"' in PAGE
+    assert 'mode==="mistake"?"Ready to learn from verified mistakes"' in PAGE
+    assert 'mode==="correct"?"Ready for verified correct-case refresher"' in PAGE
+    assert "Ready for verified legacy training" not in PAGE
+    assert "verified legacy cycle" not in PAGE
+
+
 def test_old_sync_forward_evaluate_endpoint_is_deprecated(tmp_path):
     import httpx
     import threading
