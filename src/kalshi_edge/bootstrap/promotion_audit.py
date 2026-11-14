@@ -110,6 +110,22 @@ def paired_480_evidence(
         "candidate_only_correct": c_only,
         "incumbent_only_correct": i_only,
         "both_wrong": both_wrong,
+        "candidate_only_correct_tickers": [
+            market_tickers[index] for index in range(n)
+            if c_correct[index] and not i_correct[index]
+        ],
+        "incumbent_only_correct_tickers": [
+            market_tickers[index] for index in range(n)
+            if i_correct[index] and not c_correct[index]
+        ],
+        "candidate_only_qualified_tickers": [
+            market_tickers[index] for index in range(n)
+            if c_qual[index] and not i_qual[index]
+        ],
+        "incumbent_only_qualified_tickers": [
+            market_tickers[index] for index in range(n)
+            if i_qual[index] and not c_qual[index]
+        ],
         "candidate_qualified": c_q,
         "incumbent_qualified": i_q,
         "candidate_qualified_correct": sum(c and right for c, right in zip(c_qual, c_correct)),
@@ -188,6 +204,16 @@ def summarize_saved_report(payload: dict[str, Any]) -> dict[str, Any] | None:
     if paired is not None:
         if not isinstance(paired, dict) or paired.get("market_count") != n:
             raise ValueError("saved paired 480s evidence does not match the sealed market count")
+        for field, count in (
+            ("candidate_only_correct_tickers", paired.get("candidate_only_correct")),
+            ("incumbent_only_correct_tickers", paired.get("incumbent_only_correct")),
+            ("candidate_only_qualified_tickers", paired.get("candidate_only_qualified")),
+            ("incumbent_only_qualified_tickers", paired.get("incumbent_only_qualified")),
+        ):
+            names = paired.get(field)
+            if (type(names) is not list or type(count) is not int
+                    or len(names) != count or len(set(names)) != count):
+                raise ValueError("paired 480s ticker evidence contradicts sealed counts")
         if (paired.get("candidate_qualified") != cq
                 or paired.get("incumbent_qualified") != iq
                 or paired.get("candidate_qualified_correct") != cc
