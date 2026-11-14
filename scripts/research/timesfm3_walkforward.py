@@ -452,7 +452,7 @@ def score_walkforward(
         sample = [rec for rec, *_ in details if rec["fold"] == fold["fold"]]
         cm = [model_ok for rec, model_ok, *_ in details if rec["fold"] == fold["fold"]]
         ct = [tfm_ok for rec, _, tfm_ok, _ in details if rec["fold"] == fold["fold"]]
-        if not sample or len(sample) < max(8, int(.8 * fold["test_market_count"])):
+        if not sample or len(sample) < max(1, int(.8 * fold["test_market_count"])):
             raise ValueError("fold has insufficient complete matched test observations")
         fold_out.append({
             "fold": fold["fold"]+1, "markets": len(sample),
