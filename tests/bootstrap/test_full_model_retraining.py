@@ -76,6 +76,30 @@ def test_legacy_mistake_and_correct_cycle_still_work_when_full_model_not_ready()
         )==mode
 
 
+def test_train_now_launches_full_model_not_mistake_mode_when_both_ready(tmp_path,monkeypatch):
+    from kalshi_edge.bootstrap import forward_learning_480
+    controller=training_cycle.TrainingController(tmp_path,project_root=tmp_path)
+    monkeypatch.setattr(controller,"_readiness",lambda force=False:{
+        "ready":True,"mode":"mistake","round_number":7,
+        "reason":"legacy learning ready",
+    })
+    monkeypatch.setattr(forward_learning_480,"inspect_forward_training_readiness",
+                        lambda root:{"ready":True})
+    monkeypatch.setattr(training_cycle,"inspect_baseline_training_readiness",
+                        lambda root:{"ready":True,"fresh_evaluation_markets":1222})
+    monkeypatch.setattr(controller,"_git_sha",lambda:"a"*40)
+    started=[]
+    def launch(saved,*,resume):
+        started.append((dict(saved),resume))
+        return {"started":True,"mode":saved["mode"],"round_number":saved["round_number"]}
+    monkeypatch.setattr(controller,"_launch_existing",launch)
+    result=controller.start()
+    assert result=={"started":True,"mode":"baseline","round_number":0}
+    assert started[0][0]["mode"]=="baseline"
+    assert started[0][0]["round_number"]==0
+    assert started[0][1] is False
+
+
 def test_full_retrain_requires_verified_independent_fresh_lockbox(tmp_path,monkeypatch):
     from kalshi_edge.bootstrap import training_cycle
     (tmp_path/"models").mkdir()
