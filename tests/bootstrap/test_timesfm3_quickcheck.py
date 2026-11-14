@@ -184,3 +184,81 @@ def test_commandline_explicit_overlap_flag_is_forwarded_not_silent(monkeypatch, 
     assert mod.main(["prepare", "--markets", "32",
                      "--allow-incumbent-training-overlap"]) == 0
     assert calls[-1]["allow_incumbent_training_overlap"] is True
+
+
+def test_infer_accepts_existing_768_market_format_without_predict_steps(tmp_path, monkeypatch):
+    """The already-fitted walk-forward file must work WITHOUT rerunning 3 folds."""
+    import sys
+    from types import SimpleNamespace
+    import numpy as np
+
+    mod = pilot()
+    prepared = tmp_path / "prepared.json"
+    output = tmp_path / "predictions.json"
+    mod._write_json(prepared, {
+        "experiment_kind": "TIMESFM3_CHRONOLOGICAL_REFIT",
+        "target_seconds": 480,
+        "sealed_current_lockbox_opened": False,
+        "input_sha256": "a" * 64,
+        "records": [
+            {"ticker": "KXBTC15M-TEST", "context": [99500.] * 256},
+        ],
+        # NOTE: intentionally no "predict_steps" — this is the real
+        # unmodified prepared.json schema from PR #146.
+    })
+    horizons = []
+
+    class FakeEvaluator:
+        def predict_batch(self, contexts, *, horizon, return_quantiles,
+                          use_symmetric_averaging):
+            horizons.append(horizon)
+            assert len(contexts) == 1
+            assert len(contexts[0]) == 256
+            return [SimpleNamespace(forecast=np.full(horizon, 100000.))]
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: True),
+    ))
+    monkeypatch.setitem(sys.modules, "timesfm3", SimpleNamespace(
+        TimesFM3Evaluator=lambda config: FakeEvaluator(),
+        ModelConfig=lambda **kwargs: kwargs,
+    ))
+    result = mod.run_infer(
+        prepared, output, accepted_noncommercial_license=True, batch_size=1,
+    )
+    assert result["status"] == "INFERENCE_COMPLETE"
+    assert result["count"] == 1
+    assert horizons == [97]
+    predictions = mod._read_json(output)
+    assert predictions["input_sha256"] == "a" * 64
+    assert predictions["results"] == [
+        {"ticker": "KXBTC15M-TEST", "forecast_price": 100000.},
+    ]
+
+
+def test_inference_horizon_rejects_mismatched_or_unsupported_historical_inputs():
+    """Never silently guess forecast duration for unknown research formats."""
+    mod = pilot()
+    assert mod._research_forecast_steps({
+        "experiment_kind": "NON_DEPLOYABLE_EXPLORATORY",
+        "predict_steps": 97,
+    }) == 97
+    assert mod._research_forecast_steps({
+        "experiment_kind": "TIMESFM3_CHRONOLOGICAL_REFIT",
+        "target_seconds": 480,
+    }) == 97
+    with pytest.raises(ValueError, match="480"):
+        mod._research_forecast_steps({
+            "experiment_kind": "TIMESFM3_CHRONOLOGICAL_REFIT",
+            "target_seconds": 600,
+        })
+    with pytest.raises(ValueError, match="horizon"):
+        mod._research_forecast_steps({
+            "experiment_kind": "TIMESFM3_CHRONOLOGICAL_REFIT",
+            "target_seconds": 480,
+            "predict_steps": 96,
+        })
+    with pytest.raises(ValueError, match="horizon"):
+        mod._research_forecast_steps({
+            "experiment_kind": "NON_DEPLOYABLE_EXPLORATORY",
+        })
