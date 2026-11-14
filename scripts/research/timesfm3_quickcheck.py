@@ -241,7 +241,7 @@ def run_prepare(
             "No safe out-of-incumbent-fitting historical development cohort; "
             "do not use fresh sealed lockbox for this exploratory test."
         )
-    candidates = sample_spaced(eligible, limit=min(len(eligible), markets * 3))
+    candidates = sample_spaced(eligible, limit=min(len(eligible), markets))
     columns = ["market_ticker", "market_date", "split_group_id", "checkpoint_ts_ns",
                "label_yes", *context.feature_names]
     parquet = pq.read_table(
