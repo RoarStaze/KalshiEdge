@@ -95,3 +95,10 @@ def test_real_routes_and_existing_api_remain_available(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_live_trade_page_displays_63_percent_confidence_gate():
+    page=render_site_page(integrate_manual_trade(integrate_round_price_hero(PAGE)),"trade")
+    assert "63% confidence" in page
+    assert "69% confidence" not in page
+    assert "63% model confidence" in page
