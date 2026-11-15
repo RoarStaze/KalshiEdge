@@ -22,13 +22,14 @@ from typing import Any, Callable, Mapping, Sequence
 from .forward_feature_evidence_480 import _joined
 from .frozen_specialist_480 import fit_frozen_specialist, score_frozen_specialist
 from .final_history import _forecasts
+from .final_forecast import MINIMUM_FINAL_CONFIDENCE
 from .metrics import probability_metrics
 from .specialist_480 import MIN_TRAIN_MARKETS, select_eight_minute_rows
 from .types import FeatureRow
 
 MIN_VALIDATION_MARKETS = 40
 REQUIRED_MARKETS = MIN_TRAIN_MARKETS + MIN_VALIDATION_MARKETS
-CONFIDENCE_GATE = 0.69
+CONFIDENCE_GATE = MINIMUM_FINAL_CONFIDENCE
 
 
 def _eligible(rows: Sequence[FeatureRow]) -> tuple[list[FeatureRow], dict[str, int]]:
@@ -154,7 +155,7 @@ def evaluate_forward_candidate(
     """
     readiness = assess_forward_training_readiness(rows)
     result: dict[str, Any] = {
-        "report": "KALSHIEDGE_FORWARD_480_CHALLENGER_V1",
+        "report": "KALSHIEDGE_FORWARD_480_CHALLENGER_V2_63_CONFIDENCE",
         "status": "NOT_READY",
         "ready_to_promote": False,
         "live_model_changed": False,
@@ -222,11 +223,12 @@ def evaluate_forward_candidate(
     candidate = [x[1] for x in paired]
     incumbent = [x[2] for x in paired]
     veto = [x[3] for x in paired]
-    issued = [x[4] for x in paired]
+    # Issuance was recorded under potentially older (69%) live settings.
+    # For a fair 63% counterfactual, re-gate BOTH saved probability streams.
     candidate_score = probability_metrics(labels, candidate)
     incumbent_score = probability_metrics(labels, incumbent)
     candidate_gate = _gate(labels, candidate, forbidden=veto)
-    incumbent_gate = _gate(labels, incumbent, issued=issued)
+    incumbent_gate = _gate(labels, incumbent, forbidden=veto)
     baseline_accuracy = incumbent_gate["qualified_accuracy"]
     joint = (
         candidate_gate["qualified"] > incumbent_gate["qualified"]
@@ -240,8 +242,9 @@ def evaluate_forward_candidate(
         status="VALIDATION_JOINT_GAIN" if joint else "NO_VALIDATED_JOINT_GAIN",
         candidate_probability_metrics={"markets": len(paired), **candidate_score.model_dump(mode="json")},
         incumbent_probability_metrics={"markets": len(paired), **incumbent_score.model_dump(mode="json")},
-        candidate_69_gate=candidate_gate,
-        incumbent_69_gate=incumbent_gate,
+        gate_confidence=CONFIDENCE_GATE,
+        candidate_gate=candidate_gate,
+        incumbent_gate=incumbent_gate,
         matched_validation_markets=len(paired),
         candidate_model_sha256=model["sha256"],
         training_development_sha256=digest,

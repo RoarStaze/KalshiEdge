@@ -104,8 +104,9 @@ def test_challenger_is_fitted_only_on_earlier_markets_and_never_promoted():
     assert outcome["status"] in ("VALIDATION_JOINT_GAIN", "NO_VALIDATED_JOINT_GAIN")
     assert outcome["training_markets"] >= 80
     assert outcome["validation_markets"] >= 40
-    assert outcome["candidate_69_gate"]["settled_markets"] == outcome["validation_markets"]
-    assert outcome["incumbent_69_gate"]["qualified"] == 0
+    assert outcome["gate_confidence"] == .63
+    assert outcome["candidate_gate"]["settled_markets"] == outcome["validation_markets"]
+    assert outcome["incumbent_gate"]["qualified"] == 0
     assert outcome["candidate_probability_metrics"]["markets"] == outcome["validation_markets"]
     assert outcome["ready_to_promote"] is False
     assert outcome["live_model_changed"] is False
