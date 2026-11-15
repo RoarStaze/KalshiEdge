@@ -207,7 +207,12 @@ def run_continuation(root: Path, *, git_sha: str,
         leakage_audit=artifact.LeakageEvidence(
             passed=True, finding_count=0, finding_codes=(),
         ),
-        required_ablations_present=bool(active.ablations),
+        # A hash-verified parent can still be incomplete. Keep the original
+        # required-feature/component ablation gate intact rather than treating
+        # any single inherited ablation as evidence all required ones exist.
+        required_ablations_present=set(evaluate.REQUIRED_ABLATIONS).issubset(
+            {evidence.name for evidence in active.ablations}
+        ),
         metrics={
             "candidate": artifact.metric_snapshot(candidate_score),
             "incumbent_current": artifact.metric_snapshot(incumbent_score),
