@@ -750,6 +750,11 @@ function renderTrainingSession(run,running){
  const gateConfidence=Number(r.gate_confidence);
  const gatePercent=Number.isFinite(gateConfidence)&&gateConfidence>0?
    Math.round(gateConfidence*100):69;
+ if(!r.candidate_gate&&r.candidate_69_gate){
+  const note=document.createElement("small");
+  note.textContent="Saved historical 69% training result. New 480-second training uses the live 63% gate.";
+  comparison.append(note);
+ }
  if(candidateGate&&incumbentGate){
   const metrics=[
    ["Newly trained model",candidateGate],
