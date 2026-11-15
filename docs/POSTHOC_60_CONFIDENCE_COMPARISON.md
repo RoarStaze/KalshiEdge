@@ -1,4 +1,57 @@
-# Compare Model 1 and Model 2 at 60% confidence (historical, post-hoc only)
+# Compare Model 1 and Model 2 at 60% or 63% confidence (historical, post-hoc only)
+
+## Test 63% confidence on the same 1,222 markets
+
+Use the existing read-only historical comparison with an explicit threshold:
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git switch main
+git pull --ff-only origin main
+
+$py = ".\.venv\Scripts\python.exe"
+$result = & $py -m kalshi_edge.bootstrap.posthoc_confidence_comparison `
+    --threshold 0.63 --acknowledge-posthoc | ConvertFrom-Json
+
+if ($LASTEXITCODE -ne 0 -or -not $result) {
+    throw "63% comparison failed. No score was established."
+}
+
+"Original 69% counts verified: $($result.original_69_gate_verified)"
+"Evaluated historical markets: $($result.market_count)"
+
+@(
+    [PSCustomObject]@{
+        Model = "Model 1"
+        Forecasts = $result.model_1.at_63.qualified
+        Correct = $result.model_1.at_63.correct
+        Incorrect = $result.model_1.at_63.incorrect
+        Skipped = $result.model_1.at_63.skipped
+        Accuracy = "{0:P2}" -f $result.model_1.at_63.qualified_accuracy
+        Coverage = "{0:P2}" -f $result.model_1.at_63.coverage
+    }
+    [PSCustomObject]@{
+        Model = "Model 2"
+        Forecasts = $result.model_2.at_63.qualified
+        Correct = $result.model_2.at_63.correct
+        Incorrect = $result.model_2.at_63.incorrect
+        Skipped = $result.model_2.at_63.skipped
+        Accuracy = "{0:P2}" -f $result.model_2.at_63.qualified_accuracy
+        Coverage = "{0:P2}" -f $result.model_2.at_63.coverage
+    }
+) | Format-Table -AutoSize
+
+"=== ADDITIONAL FORECASTS VERSUS 69% ==="
+"Model 1: $($result.model_1.qualified_added_at_63)"
+"Model 2: $($result.model_2.qualified_added_at_63)"
+```
+
+**Definition:** At 63% model confidence, YES-side probabilities of **81.5% or higher** and NO-side probabilities of **18.5% or lower** qualify. This does not change the live 69% threshold. The existing command without `--threshold` still computes 60% and retains its original JSON keys.
+
+**Interpretation:** Because 63% is being chosen after viewing the original historical results, it is an exploratory re-analysis of the already-consumed lockbox, not prospective validation or evidence of profitability. To validate a new threshold, compare it on *fresh* subsequent settled markets.
+
+---
+
 
 The November 14 full-model evaluation on **1,222 exact 480-second markets** stored gate aggregates and paired ticker identities at a **69% confidence** threshold. It did **not** store the 1,222 underlying Model 1 and Model 2 probability vectors. **Exact 60%-gate accuracy and coverage cannot be computed from the saved report alone.**
 

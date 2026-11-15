@@ -110,3 +110,55 @@ def test_resolves_model_one_from_default_or_direct_verified_previous_hash(tmp_pa
                                 "previous_model_hash":"b"*64}))
     with pytest.raises(ValueError,match="Model 1|model 1"):
         subject.resolve_model_one(root)
+
+
+def test_63percent_compares_same_markets_against_original_69pct_reference():
+    labels, m1, m2, original = inputs()
+    result = subject.compare_probabilities(
+        labels, m1, m2, original, threshold=0.63,
+    )
+    assert result["original_69_gate_verified"] is True
+    assert result["thresholds"] == [0.63, 0.69]
+    assert result["selected_confidence_threshold"] == 0.63
+    assert result["market_count"] == 8
+    assert result["model_1"]["at_69"]["qualified"] == 2
+    assert result["model_2"]["at_69"]["qualified"] == 2
+    assert result["model_1"]["at_63"] == {
+        "qualified": 4, "correct": 3, "incorrect": 1, "skipped": 4,
+        "coverage": 0.5, "qualified_accuracy": 0.75,
+    }
+    assert result["model_2"]["at_63"] == {
+        "qualified": 4, "correct": 3, "incorrect": 1, "skipped": 4,
+        "coverage": 0.5, "qualified_accuracy": 0.75,
+    }
+    assert result["model_1"]["qualified_added_at_63"] == 2
+    assert result["model_2"]["qualified_added_at_63"] == 2
+    assert result["matched_63"] == {
+        "both_qualified": 2,
+        "model_1_only_qualified": 2,
+        "model_2_only_qualified": 2,
+        "neither_qualified": 2,
+    }
+    # Output is historical only, never a request to change the live setting.
+    assert result["automatic_promotion_eligible"] is False
+    assert result["live_confidence_threshold_changed"] is False
+
+
+@pytest.mark.parametrize("threshold", [float("nan"), float("inf"), -0.1, 0.0, 0.635, 0.69, 1.0, True])
+def test_posthoc_threshold_validation_rejects_unsafe_or_ambiguous_values(threshold):
+    labels, m1, m2, original = inputs()
+    with pytest.raises(ValueError, match="threshold|confidence"):
+        subject.compare_probabilities(
+            labels, m1, m2, original, threshold=threshold,
+        )
+
+
+def test_cli_forwards_explicit_63percent_threshold_without_modifying_files(monkeypatch, capsys):
+    recorded = []
+    def fake_run(root, *, acknowledge_posthoc, threshold):
+        recorded.append((acknowledge_posthoc, threshold))
+        return {"selected_confidence_threshold": threshold}
+    monkeypatch.setattr(subject, "run_comparison", fake_run)
+    assert subject.main(["--threshold", "0.63", "--acknowledge-posthoc"]) == 0
+    assert recorded == [(True, 0.63)]
+    assert json.loads(capsys.readouterr().out)["selected_confidence_threshold"] == 0.63
