@@ -247,7 +247,7 @@ def test_original_one_time_lockbox_evaluation_seals_paired_480_evidence(tmp_path
     monkeypatch.setattr(training, "load_lockbox_rows", read_lockbox)
     monkeypatch.setattr(live, "load_default_bundle", lambda root: incumbent_bundle)
 
-    def predictions(bundle, cohort, *, structural_executor=None, structural_progress=None):
+    def predictions(bundle, cohort, *, structural_executor=None, structural_progress=None, gpu_backends=None):
         selected = [row.market_ticker for row in cohort]
         assert selected == [row.market_ticker for row in rows]
         return challenger_p if bundle is challenger_bundle else incumbent_p

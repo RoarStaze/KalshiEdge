@@ -125,10 +125,11 @@ def xgboost_device() -> str:
     mode = gpu_mode()
     if mode == "off":
         return "cpu"
-    available = _cuda_hardware_ready()
-    built = _xgboost_cuda_build() if available else False
-    verified = _xgboost_cuda_runtime_ready() if built else False
-    if available and built and verified:
+    # XGBoost uses its own native CUDA runtime, independent of CuPy/NVRTC.
+    # A missing or misconfigured CuPy wheel must never hide a verified
+    # CUDA-capable XGBoost build. The smoke fit reads the *actual* trained
+    # booster device, so CPU fallbacks cannot be misreported as GPU.
+    if _xgboost_cuda_build() and _xgboost_cuda_runtime_ready():
         return "cuda"
     if mode == "on":
         raise CUDATrainingError(

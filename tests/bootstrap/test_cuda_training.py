@@ -88,7 +88,8 @@ def test_xgboost_uses_cuda_only_with_eligible_build_and_device(monkeypatch):
     assert cuda_training.xgboost_device() == "cpu"
     monkeypatch.setattr(cuda_training, "_xgboost_cuda_build", lambda: True)
     monkeypatch.setattr(cuda_training, "_cuda_hardware_ready", lambda: False)
-    assert cuda_training.xgboost_device() == "cpu"
+    # XGBoost has its own verified CUDA runtime, independent of CuPy.
+    assert cuda_training.xgboost_device() == "cuda"
 
 
 def test_xgboost_cuda_fail_closed_if_user_explicitly_requests_gpu(monkeypatch):

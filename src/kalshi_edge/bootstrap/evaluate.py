@@ -454,17 +454,53 @@ def _holdout_executor():
     )
 
 
+def _holdout_gpu_backend(
+    bundle: artifact.ModelBundle,
+    pipeline: training.FittedBootstrapPipeline,
+    rows: Sequence[FeatureRow],
+    cache: dict[str, object | None],
+    *,
+    candidate_only: bool = False,
+) -> object | None:
+    """One CPU-parity-verified CUDA selection per model throughout this run.
+
+    The initial diagnostic comparison still evaluates structural probability
+    even at zero stacker weight; candidate-only incumbent comparisons do not.
+    This is called only after the original holdout/leakage checks have passed.
+    GPU models are strictly runtime-only and NEVER stored in model bundles.
+    """
+    if candidate_only and pipeline.stacker.weights.get("structural", 0.0) <= 0.0:
+        return None
+    key = bundle.bundle_sha256 or artifact.bundle_sha256(bundle)
+    if key not in cache:
+        from . import cuda_training
+        from . import structural
+        sample = tuple(
+            structural.structural_state_from_row(row) for row in rows[:24]
+        )
+        cache[key] = cuda_training.choose_structural_gpu_backend(
+            pipeline.structural_model, sample,
+        )
+    return cache[key]
+
+
 def _predict_bundle_rows(
     bundle: artifact.ModelBundle, rows: Sequence[FeatureRow], *,
     structural_executor: Executor | None = None,
     structural_progress: Callable[[int, int], None] | None = None,
+    gpu_backends: dict[str, object | None] | None = None,
 ) -> dict[str, list[float]]:
-    """Calculate all scored components, retaining the exact CPU predictions."""
+    """Calculate all scored components, using verified CUDA only when selected."""
     pipeline = _verified_pipeline(bundle)
+    backend = (
+        _holdout_gpu_backend(bundle, pipeline, rows, gpu_backends)
+        if gpu_backends is not None else None
+    )
     try:
         return pipeline.predict(
             rows, structural_executor=structural_executor,
             structural_progress=structural_progress,
+            structural_gpu_backend=backend,
         )
     except Exception as exc:
         raise EvaluationError("serialized model pipeline failed lockbox inference") from exc
@@ -474,13 +510,20 @@ def _predict_bundle_candidate(
     bundle: artifact.ModelBundle, rows: Sequence[FeatureRow], *,
     structural_executor: Executor | None = None,
     structural_progress: Callable[[int, int], None] | None = None,
+    gpu_backends: dict[str, object | None] | None = None,
 ) -> list[float]:
-    """Compute *only* candidate probabilities; unused components stay inactive."""
+    """Compute candidate-only probabilities, skipping unused CUDA work."""
     pipeline = _verified_pipeline(bundle)
+    backend = (
+        _holdout_gpu_backend(
+            bundle, pipeline, rows, gpu_backends, candidate_only=True,
+        ) if gpu_backends is not None else None
+    )
     try:
         return pipeline.base_candidate(
             rows, structural_executor=structural_executor,
             structural_progress=structural_progress,
+            structural_gpu_backend=backend,
         )
     except Exception as exc:
         raise EvaluationError("serialized model pipeline failed lockbox inference") from exc
@@ -490,6 +533,7 @@ def evaluate_lockbox(
     bundle: artifact.ModelBundle, dataset: Sequence[FeatureRow], *,
     structural_executor: Executor | None = None,
     structural_progress: Callable[[int, int], None] | None = None,
+    gpu_backends: dict[str, object | None] | None = None,
 ) -> BootstrapEvaluationReport:
     """Evaluate exactly the predeclared, causally evaluable lockbox scope."""
     if bundle.stage != "experiment":
@@ -529,13 +573,15 @@ def evaluate_lockbox(
     if not leakage.passed:
         raise EvaluationError("lockbox leakage audit failed")
 
-    if structural_executor is None and structural_progress is None:
-        # Preserve old two-argument test/mocking callers and serial behavior.
+    if (structural_executor is None and structural_progress is None
+            and gpu_backends is None):
+        # Preserve original two-argument direct evaluator/test contracts.
         raw_predictions = _predict_bundle_rows(bundle, selected)
     else:
         raw_predictions = _predict_bundle_rows(
             bundle, selected, structural_executor=structural_executor,
             structural_progress=structural_progress,
+            gpu_backends=gpu_backends,
         )
     predictions = _validate_prediction_map(raw_predictions, len(selected))
     labels = [row.label_yes for row in selected]
@@ -855,6 +901,7 @@ def run_lockbox_evaluation(
             stage, completed, total, label,
         )
 
+    gpu_backends: dict[str, object | None] = {}
     with _holdout_executor() as structural_executor:
         # One Windows spawn pool is reused for the full initial lockbox,
         # incumbent comparison and all same-market 480s rechecks.
@@ -866,6 +913,7 @@ def run_lockbox_evaluation(
                 experiment, lockbox_rows,
                 structural_executor=structural_executor,
                 structural_progress=stage_progress("SCORING", "Candidate structural diagnostics"),
+                gpu_backends=gpu_backends,
             )
         if is_volatility or is_learning or is_full_retrain:
             paired_480_audit = None
@@ -884,6 +932,7 @@ def run_lockbox_evaluation(
                 incumbent_bundle, scored,
                 structural_executor=structural_executor,
                 structural_progress=stage_progress("COMPARING", "Incumbent all-checkpoint candidate"),
+                gpu_backends=gpu_backends,
             )
             if len(incumbent_p) != len(scored):
                 raise EvaluationError("incumbent model did not provide matching lockbox probabilities")
@@ -902,10 +951,12 @@ def run_lockbox_evaluation(
                     candidate_p = _predict_bundle_candidate(
                         experiment, horizon_rows, structural_executor=structural_executor,
                         structural_progress=stage_progress("COMPARING", f"Candidate {horizon}s"),
+                        gpu_backends=gpu_backends,
                     )
                     incumbent_p = _predict_bundle_candidate(
                         incumbent_bundle, horizon_rows, structural_executor=structural_executor,
                         structural_progress=stage_progress("COMPARING", f"Incumbent {horizon}s"),
+                        gpu_backends=gpu_backends,
                     )
                     baseline_outputs = [
                         training._kalshi_prior(row) for row in horizon_rows
@@ -938,10 +989,12 @@ def run_lockbox_evaluation(
                 candidate_p = _predict_bundle_candidate(
                     experiment, horizon_rows, structural_executor=structural_executor,
                     structural_progress=stage_progress("COMPARING", "Candidate 480s"),
+                    gpu_backends=gpu_backends,
                 )
                 incumbent_p = _predict_bundle_candidate(
                     incumbent_bundle, horizon_rows, structural_executor=structural_executor,
                     structural_progress=stage_progress("COMPARING", "Incumbent 480s"),
+                    gpu_backends=gpu_backends,
                 )
                 market_outputs = [training._kalshi_prior(row) for row in horizon_rows]
                 labels = [row.label_yes for row in horizon_rows]
