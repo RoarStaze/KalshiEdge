@@ -10,7 +10,7 @@ from kalshi_edge.bootstrap import evaluate, posthoc_confidence_comparison as sub
 
 
 def inputs():
-    labels=[1,0,0,0,1,0,1,0]
+    labels=[1,0,0,0,1,1,1,0]
     m1=[.91,.09,.83,.17,.79,.21,.60,.40]
     m2=[.87,.13,.81,.19,.82,.18,.76,.24]
     original={
