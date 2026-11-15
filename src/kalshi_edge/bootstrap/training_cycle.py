@@ -391,7 +391,9 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "score_rows_completed", "score_rows_total", "score_detail",
                 "worker_identity", "suspended_in_memory", "origin_git_sha",
                 "forked_from_run_id", "forked_from_git_sha", "recovery_kind",
-            ) if key in prior
+            ) if key in prior and (
+                not key.startswith("score_") or prior.get("stage") == stage
+            )
         }
     now = datetime.now(timezone.utc).isoformat()
     percent = WORKER_STAGE_PROGRESS.get(
