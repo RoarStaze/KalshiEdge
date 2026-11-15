@@ -259,7 +259,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
  </div>
  <div class="training-forward" aria-label="Prospective eight-minute predictor training">
   <div class="training-forward-head">
-   <div><div class="training-forward-title">Verified 480-second predictor training</div>
+   <div><div class="training-forward-title" id="training-evidence-title">Verified 480-second predictor training</div>
     <div id="forward-480-eligible" class="training-forward-numbers">Checking verified markets…</div>
    </div>
    <strong id="forward-480-progress" class="training-big-percent">0%</strong>
@@ -705,8 +705,22 @@ function renderTrainingSession(run,running){
  const currentMapped=mapped(current);
  const list=el("training-stage-list");
  list.replaceChildren();
+ text("training-evidence-title",trainingStatus?.current_model?.promoted_hash?
+  "New settled 480-second markets · current model":
+  "Verified 480-second predictor training");
  for(let i=0;i<trainingStages.length;i++){
-  const [stage,label]=trainingStages[i];
+  const [stage,originalLabel]=trainingStages[i];
+  const continuationLabels={
+   BUILDING_DATASET:"Reuse saved snapshots",
+   VERIFYING_DATASET:"Audit settled evidence",
+   SPLITTING:"Split fresh markets",
+   FITTING:"Continue fitted weights",
+   SCORING:"Score 80 fresh markets",
+   COMPARING:"Compare at 63%",
+   PROMOTION_GATE:"Deployment gate"
+  };
+  const label=run.mode==="continue_live"?
+   (continuationLabels[stage]||originalLabel):originalLabel;
   const stageDiv=document.createElement("div");
   stageDiv.className="training-stage"+(doneStages.includes(stage)?" done":"")+
    (!done&&!failed&&currentMapped===stage?" current":"")+
