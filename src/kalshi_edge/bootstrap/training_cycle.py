@@ -388,9 +388,12 @@ def _write_worker_state(root: Path, *, stage: str, mode: str,
                 "dataset_market_count", "dataset_verified", "experiment_path",
                 "experiment_sha256", "resume_stage", "run_id", "git_sha",
                 "fit_steps_completed", "fit_steps_total", "fit_step_detail",
+                "score_rows_completed", "score_rows_total", "score_detail",
                 "worker_identity", "suspended_in_memory", "origin_git_sha",
                 "forked_from_run_id", "forked_from_git_sha", "recovery_kind",
-            ) if key in prior
+            ) if key in prior and (
+                not key.startswith("score_") or prior.get("stage") == stage
+            )
         }
     now = datetime.now(timezone.utc).isoformat()
     percent = WORKER_STAGE_PROGRESS.get(
@@ -944,6 +947,42 @@ def _fit_progress_reporter(
     return report
 
 
+def _holdout_scoring_progress_reporter(
+    root: Path, *, mode: str, round_number: int,
+    clock: Callable[[], float] = time.monotonic,
+    min_interval_seconds: float = .5,
+) -> Callable[[str, int, int, str], None]:
+    """Record *completed* Monte Carlo rows, not a fabricated stage percentage.
+
+    Writes are throttled to avoid a filesystem fsync on every 32-row chunk;
+    stage changes and final rows are always published.
+    """
+    previous_stage: str | None = None
+    last_update = float("-inf")
+
+    def report(stage: str, completed: int, total: int, detail: str) -> None:
+        nonlocal previous_stage, last_update
+        if stage not in ("SCORING", "COMPARING"):
+            raise ValueError("holdout scoring progress stage invalid")
+        if (type(completed) is not int or type(total) is not int
+                or total <= 0 or not 0 <= completed <= total):
+            raise ValueError("holdout scoring counts must be completed rows")
+        if not isinstance(detail, str) or not detail.strip():
+            raise ValueError("holdout scoring requires actual component name")
+        now = clock()
+        if (previous_stage == stage and completed < total
+                and now - last_update < min_interval_seconds):
+            return
+        _write_worker_state(
+            root, stage=stage, mode=mode, round_number=round_number,
+            score_rows_completed=completed, score_rows_total=total,
+            score_detail=detail[:180],
+        )
+        previous_stage, last_update = stage, now
+
+    return report
+
+
 def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: str) -> int:
     """Long-running, explicitly user-triggered train + one-time evaluation."""
 
@@ -1085,6 +1124,9 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
 
             evaluation = run_lockbox_evaluation(
                 root, experiment.experiment_path, progress=report_progress,
+                scoring_progress=_holdout_scoring_progress_reporter(
+                    root, mode=mode, round_number=round_number,
+                ),
             )
             comparison = _verified_lockbox_comparison(evaluation.report_path)
             from .model_identity import current_model_identity

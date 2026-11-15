@@ -529,6 +529,18 @@ function stageProgressState(run){
    detail:String(run.fit_step_detail||
      "Fitting verified model candidates; waiting for the next completed operation")};
  }
+ if(stage==="SCORING"||stage==="COMPARING"){
+  const completed=Number(run.score_rows_completed);
+  const total=Number(run.score_rows_total);
+  const valid=run.score_rows_completed!=null&&run.score_rows_total!=null&&
+   Number.isInteger(completed)&&Number.isInteger(total)&&
+   total>0&&completed>=0&&completed<=total;
+  if(valid){
+   return {mode:"score",label:stage==="SCORING"?"Score holdout":"Compare results",
+    completed,total,
+    detail:String(run.score_detail||"Completed verified structural scoring rows")};
+  }
+ }
  const labels={
   STARTING:"Starting training",
   VERIFYING:"Audit dataset",VERIFYING_DATASET:"Audit dataset",
@@ -577,6 +589,17 @@ function renderCurrentStageProgress(run,running,hasRun,failed){
  if(datasetTicker.raf)cancelAnimationFrame(datasetTicker.raf);
  datasetTicker.raf=0;
  datasetTicker.active=false;
+ if(display.mode==="score"&&display.total!==null){
+  const pct=100*display.completed/display.total;
+  bar.hidden=false;
+  bar.setAttribute("aria-label","Completed holdout scoring rows");
+  el("dataset-build-bar-fill").style.width=pct+"%";
+  bar.setAttribute("aria-valuenow",String(Math.round(pct)));
+  text("dataset-build-detail",display.label+" · "+
+   display.completed+" / "+display.total+" verified rows scored ("+
+   formatDatasetPercent(display.completed,display.total)+"%) · "+display.detail);
+  return;
+ }
  if(display.mode==="fit"&&display.total!==null){
   const pct=100*display.completed/display.total;
   bar.hidden=false;
