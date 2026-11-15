@@ -87,12 +87,49 @@ def _structural_scores(
     *,
     executor: Executor | None = None,
     progress: Callable[[int, int], None] | None = None,
+    gpu_backend: object | None = None,
 ) -> list[float]:
-    """Use exactly the existing seeded CPU model, optionally across processes."""
+    """The same seeded Monte Carlo rows, on verified GPU or bounded CPU workers."""
     states = tuple(structural.structural_state_from_row(row) for row in rows)
     return structural.predict_probabilities(
         model, states, executor=executor, progress=progress,
+        gpu_backend=gpu_backend,
     )
+
+
+def _calibration_structural_scores(
+    model: structural.StructuralModel,
+    rows: Sequence[FeatureRow],
+    *,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[float]:
+    """Use GPU only after proven CPU parity and a representative speed check.
+
+    The rest of calibration (labels, model, holdout partitions, and fitting
+    mathematics) remains unchanged. CUDA failure in auto mode replays the
+    entire batch on CPU through structural.predict_probabilities.
+    """
+    from . import cuda_training
+    from concurrent.futures import ProcessPoolExecutor
+    from contextlib import nullcontext
+    import multiprocessing
+
+    sample = tuple(
+        structural.structural_state_from_row(row) for row in rows[:24]
+    )
+    gpu_backend = cuda_training.choose_structural_gpu_backend(model, sample)
+    workers = 0 if gpu_backend is not None else _structural_worker_count()
+    pool = (
+        ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) if workers > 1 else nullcontext(None)
+    )
+    with pool as executor:
+        return _structural_scores(
+            model, rows, executor=executor, progress=progress,
+            gpu_backend=gpu_backend,
+        )
 
 
 @dataclass(frozen=True)
@@ -116,6 +153,7 @@ class FittedBootstrapPipeline:
         self, rows: Sequence[FeatureRow], *,
         structural_executor: Executor | None = None,
         structural_progress: Callable[[int, int], None] | None = None,
+        structural_gpu_backend: object | None = None,
     ) -> list[float]:
         """Return candidate probability without computing zero-weight components.
 
@@ -139,6 +177,7 @@ class FittedBootstrapPipeline:
             active["structural"] = _structural_scores(
                 self.structural_model, selected,
                 executor=structural_executor, progress=structural_progress,
+                gpu_backend=structural_gpu_backend,
             )
         if weights.get("residual_corrected", 0.0) > 0:
             active["residual_corrected"] = self.residual_model.predict(x, prior)
@@ -154,6 +193,7 @@ class FittedBootstrapPipeline:
         self, rows: Sequence[FeatureRow], *,
         structural_executor: Executor | None = None,
         structural_progress: Callable[[int, int], None] | None = None,
+        structural_gpu_backend: object | None = None,
     ) -> dict[str, list[float]]:
         selected = tuple(rows)
         if not selected:
@@ -169,6 +209,7 @@ class FittedBootstrapPipeline:
         structural_p = _structural_scores(
             self.structural_model, selected,
             executor=structural_executor, progress=structural_progress,
+            gpu_backend=structural_gpu_backend,
         )
         residual_p = self.residual_model.predict(x, prior)
         component_map = {
@@ -1304,29 +1345,17 @@ def build_experiment_bundle(
     prior_p = [_kalshi_prior(row) for row in evaluation_calibration_rows]
     historical_p = _predict_classifier(outcome_model, calibration_x)
     logistic_p = _predict_classifier(logistic_model, calibration_x)
-    # Calibration uses the same deterministic per-row CPU paths as the
-    # chronological structural fit, but distributes independent rows across
-    # the existing capped Windows worker policy when that is worthwhile.
-    from concurrent.futures import ProcessPoolExecutor
-    from contextlib import nullcontext
-    import multiprocessing
-
-    workers = _structural_worker_count()
-    parallel = (
-        ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"))
-        if workers > 1 else nullcontext(None)
+    # Only move the original seeded structural path propagation to CUDA if
+    # independently measured faster AND exactly equal to the original CPU.
+    structural_p = _calibration_structural_scores(
+        structural_model, evaluation_calibration_rows,
+        progress=(
+            lambda done, total: progress(
+                fit_completed, fit_total,
+                f"Calibration structural paths: {done}/{total} rows scored",
+            )
+        ) if progress is not None else None,
     )
-    with parallel as executor:
-        structural_p = _structural_scores(
-            structural_model, evaluation_calibration_rows,
-            executor=executor,
-            progress=(
-                lambda done, total: progress(
-                    fit_completed, fit_total,
-                    f"Calibration structural paths: {done}/{total} rows scored",
-                )
-            ) if progress is not None else None,
-        )
     residual_p = final_residual.predict(calibration_x, prior_p)
     components = {
         "kalshi_prior": prior_p,
