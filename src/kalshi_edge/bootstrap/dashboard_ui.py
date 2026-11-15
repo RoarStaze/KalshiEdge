@@ -456,7 +456,9 @@ function paintVerifiedMarketCounter(){
  el("dataset-build-bar").setAttribute("aria-valuenow",String(Math.round(pct)));
  text("dataset-build-detail",ticker.hasRun?
   ticker.prefix+counts+" · "+ticker.action:
-  "Dataset creation begins when you press Train Now; it uses only verified source data.");
+  trainingStatus?.current_model?.promoted_hash?
+   "Continue Training reuses verified 480s snapshots from the active model; it does not rebuild the historical dataset.":
+   "Dataset creation begins when you press Train Now; it uses only verified source data.");
 }
 function tickVerifiedMarketCounter(){
  datasetTicker.raf=0;
@@ -516,6 +518,10 @@ document.addEventListener("visibilitychange",()=>{
 function stageProgressState(run){
  const stage=String(run.stage||"");
  if(stage==="BUILDING_DATASET"){
+  if(run.mode==="continue_live")return {
+   mode:"dataset",label:"Reuse saved snapshots",
+   detail:String(run.dataset_action||"Checking existing verified 480s market snapshots"),
+  };
   return {mode:"dataset",label:"Create dataset",detail:"Preparing verified historical markets"};
  }
  if(stage==="FITTING"||stage==="TRAINING"){
