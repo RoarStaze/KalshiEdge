@@ -103,12 +103,13 @@ def run_continuation(root: Path, *, git_sha: str,
     dev = pairs[:-c.CALIBRATION_MARKETS-c.VALIDATION_MARKETS]
     cal = pairs[-c.CALIBRATION_MARKETS-c.VALIDATION_MARKETS:-c.VALIDATION_MARKETS]
     valid = pairs[-c.VALIDATION_MARKETS:]
+    # Never preselect a lockbox because of its outcomes. The unseen later
+    # markets are fixed chronologically; inspect only development labels
+    # before sealing the trained candidate.
     if (len(dev) < c.MIN_DEVELOPMENT
-            or any({row.label_yes for row, _ in part} != {0, 1}
-                   for part in (dev, cal, valid))):
+            or {row.label_yes for row, _ in dev} != {0, 1}):
         raise c.ContinuationError(
-            "New development/calibration/validation periods must each have "
-            "two verified settlement outcome classes"
+            "New development markets need both official outcome classes"
         )
     bounds = artifact.SplitBoundaries(
         train_start_ts_ns=dev[0][0].checkpoint_ts_ns,
