@@ -128,7 +128,6 @@ def test_holdout_gpu_selector_does_not_cache_failed_strict_validation(monkeypatc
 def test_calibration_structural_scores_use_gpu_or_safe_cpu(monkeypatch):
     selected=object()
     calls=[]
-    monkeypatch.setattr(training._structural_worker_count.__globals__["os"],"cpu_count",lambda:1)
     monkeypatch.setattr(training,"_structural_worker_count",lambda:1)
     def scoring(model,rows,*,executor=None,progress=None,gpu_backend=None):
         calls.append(gpu_backend)
