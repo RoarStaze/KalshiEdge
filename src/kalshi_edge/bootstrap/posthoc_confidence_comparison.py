@@ -1,4 +1,4 @@
-"""Read-only, explicitly post-hoc 60% vs 69% Model 1 / Model 2 comparison.
+"""Read-only, explicitly post-hoc confidence comparison for Model 1 / Model 2.
 
 Reconstructs the old, already-evaluated 480-second cohort ONLY for the user's
 descriptive threshold question; never updates automatic promotion evidence.
@@ -175,13 +175,31 @@ def _gate_view(gate: evaluate.GateSnapshot) -> dict[str, Any]:
     }
 
 
+def _validated_threshold(threshold: float) -> float:
+    """Only whole percentage points strictly below the original 69% gate.
+
+    Prevent ambiguous output labels (such as at_63 for a 63.5% test) and
+    accidental comparisons made with an impossible or nonfinite threshold.
+    """
+    if (type(threshold) not in (int, float)
+            or not math.isfinite(threshold)
+            or not 0 < threshold < .69
+            or abs(100 * threshold - round(100 * threshold)) > 1e-9):
+        raise ValueError("confidence threshold must be a whole percentage point between 1% and 68%")
+    return float(threshold)
+
+
 def compare_probabilities(
     labels: Sequence[int],
     model_1_probabilities: Sequence[float],
     model_2_probabilities: Sequence[float],
     original_69_gates: dict[str, evaluate.GateSnapshot],
+    *,
+    threshold: float = .60,
 ) -> dict[str, Any]:
-    """Strictly descriptive 60% and 69% counts on identical market order."""
+    """Descriptive selected-threshold counts vs the unchanged 69% reference."""
+    threshold = _validated_threshold(threshold)
+    label = str(round(threshold * 100))
     old_1 = original_69_gates.get("retrain_480_incumbent")
     old_2 = original_69_gates.get("retrain_480_candidate")
     if old_1 is None or old_2 is None:
@@ -197,40 +215,45 @@ def compare_probabilities(
         ):
             raise ValueError(
                 "Recomputed 69% counts mismatch the immutable original report. "
-                "Do not present 60% results from a changed model or cohort."
+                "Do not present post-hoc threshold results from a changed model or cohort."
             )
-    m1_60 = evaluate.checkpoint_gate_snapshot(labels, model_1_probabilities, minimum_confidence=.60)
-    m2_60 = evaluate.checkpoint_gate_snapshot(labels, model_2_probabilities, minimum_confidence=.60)
+    m1_selected = evaluate.checkpoint_gate_snapshot(
+        labels, model_1_probabilities, minimum_confidence=threshold,
+    )
+    m2_selected = evaluate.checkpoint_gate_snapshot(
+        labels, model_2_probabilities, minimum_confidence=threshold,
+    )
     n = len(labels)
     def qualified(p: float) -> bool:
-        return 2 * abs(p - .5) >= .60
+        return 2 * abs(p - .5) >= threshold
     q1 = [qualified(p) for p in model_1_probabilities]
     q2 = [qualified(p) for p in model_2_probabilities]
     return {
         "status": "DESCRIPTIVE_POSTHOC_REPLAY",
         "market_count": n,
         "checkpoint_seconds_remaining": 480,
-        "thresholds": [0.60, 0.69],
+        "thresholds": [threshold, 0.69],
+        "selected_confidence_threshold": threshold,
         "original_69_gate_verified": True,
         "automatic_promotion_eligible": False,
         "live_confidence_threshold_changed": False,
         "model_1": {
             "at_69": _gate_view(m1_69),
-            "at_60": _gate_view(m1_60),
-            "qualified_added_at_60": m1_60.qualified_markets - m1_69.qualified_markets,
+            f"at_{label}": _gate_view(m1_selected),
+            f"qualified_added_at_{label}": m1_selected.qualified_markets - m1_69.qualified_markets,
             "all_markets_direction_accuracy": sum(
                 (p >= .5) == bool(y) for p,y in zip(model_1_probabilities, labels)
             ) / n,
         },
         "model_2": {
             "at_69": _gate_view(m2_69),
-            "at_60": _gate_view(m2_60),
-            "qualified_added_at_60": m2_60.qualified_markets - m2_69.qualified_markets,
+            f"at_{label}": _gate_view(m2_selected),
+            f"qualified_added_at_{label}": m2_selected.qualified_markets - m2_69.qualified_markets,
             "all_markets_direction_accuracy": sum(
                 (p >= .5) == bool(y) for p,y in zip(model_2_probabilities, labels)
             ) / n,
         },
-        "matched_60": {
+        f"matched_{label}": {
             "both_qualified": sum(a and b for a,b in zip(q1,q2)),
             "model_1_only_qualified": sum(a and not b for a,b in zip(q1,q2)),
             "model_2_only_qualified": sum(b and not a for a,b in zip(q1,q2)),
@@ -244,13 +267,16 @@ def compare_probabilities(
     }
 
 
-def run_comparison(root: Path, *, acknowledge_posthoc: bool) -> dict[str, Any]:
+def run_comparison(
+    root: Path, *, acknowledge_posthoc: bool, threshold: float = .60,
+) -> dict[str, Any]:
     """Perform no writes. Explicit acknowledgement BEFORE touching archived labels."""
     if acknowledge_posthoc is not True:
         raise ValueError(
             "post-hoc lockbox replay requires --acknowledge-posthoc; "
             "cannot treat this as fresh or independent evidence"
         )
+    threshold = _validated_threshold(threshold)
     root = Path(root).resolve()
     experiment, report = _validated_saved_report(root)
     original = resolve_model_one(root)
@@ -281,6 +307,7 @@ def run_comparison(root: Path, *, acknowledge_posthoc: bool) -> dict[str, Any]:
     result = compare_probabilities(
         [row.label_yes for row in rows],
         old_predictions, new_predictions, report.decision_metrics,
+        threshold=threshold,
     )
     result["model_1_bundle_sha256"] = original.bundle_sha256
     result["model_2_experiment_sha256"] = experiment.bundle_sha256
@@ -296,8 +323,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=BootstrapSettings().bootstrap_dir)
     parser.add_argument("--acknowledge-posthoc", action="store_true",
                         help="Accept replay is descriptive only; not an untouched holdout")
+    parser.add_argument("--threshold", type=float, default=.60,
+                        help="Descriptive confidence gate as a fraction, e.g. 0.63; default 0.60")
     args = parser.parse_args(argv)
-    result = run_comparison(args.root,acknowledge_posthoc=args.acknowledge_posthoc)
+    result = run_comparison(
+        args.root, acknowledge_posthoc=args.acknowledge_posthoc,
+        threshold=args.threshold,
+    )
     print(json.dumps(result,indent=2,sort_keys=True,allow_nan=False))
     return 0
 
