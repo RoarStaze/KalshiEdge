@@ -93,7 +93,7 @@ def test_locked_final_places_exactly_one_matching_buy(env,direction,expected):
 
 
 @pytest.mark.parametrize("direction,confidence",[
-    ("SKIP",.90),("ABOVE",.68),("BELOW",None)])
+    ("SKIP",.90),("ABOVE",.629),("BELOW",None)])
 def test_skip_low_confidence_or_missing_confidence_never_trades(env,direction,confidence):
     _,feed,manual,engine=env
     engine.arm("1.00",start_worker=False)
@@ -203,3 +203,13 @@ def test_simultaneous_ticks_submit_once(env):
     for t in threads:t.start()
     for t in threads:t.join()
     assert len(manual.orders)==1
+
+
+def test_auto_trade_follows_live_63_percent_final_boundary(env):
+    _,feed,manual,engine=env
+    engine.arm("0.25",start_worker=False)
+    feed.lock("ABOVE",confidence=.63)
+    engine.tick()
+    assert manual.previews==[(TICKER,"BUY","UP","DOLLARS","0.25")]
+    assert manual.orders==[("preview-once",TICKER)]
+    assert engine.status()["state"]=="FILLED"
