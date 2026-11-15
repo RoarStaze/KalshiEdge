@@ -8,6 +8,9 @@ import os
 import pickle
 import subprocess
 import tempfile
+import multiprocessing
+from concurrent.futures import Executor, ProcessPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -424,8 +427,8 @@ def _validate_prediction_map(predictions: Mapping[str, Sequence[float]], expecte
     return normalized
 
 
-def _predict_bundle_rows(bundle: artifact.ModelBundle, rows: Sequence[FeatureRow]) -> dict[str, list[float]]:
-    """Run only a fully hash-verified locally generated serialized pipeline."""
+def _verified_pipeline(bundle: artifact.ModelBundle) -> training.FittedBootstrapPipeline:
+    """Deserialize only existing hash-verified trained model bundles."""
     try:
         payload = artifact.serialized_pipeline_bytes(bundle)
         pipeline = pickle.loads(payload)
@@ -433,13 +436,61 @@ def _predict_bundle_rows(bundle: artifact.ModelBundle, rows: Sequence[FeatureRow
         raise EvaluationError("verified model pipeline could not be deserialized") from exc
     if not isinstance(pipeline, training.FittedBootstrapPipeline):
         raise EvaluationError("serialized model payload has unexpected pipeline type")
+    return pipeline
+
+
+def _holdout_worker_count(*, platform: str | None = None, cpu_count: int | None = None) -> int:
+    """Use the same thermal/RAM-capped CPU concurrency as structural fitting."""
+    return training._structural_worker_count(platform=platform, cpu_count=cpu_count)
+
+
+def _holdout_executor():
+    workers = _holdout_worker_count()
+    if workers <= 1:
+        return nullcontext(None)
+    return ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+
+
+def _predict_bundle_rows(
+    bundle: artifact.ModelBundle, rows: Sequence[FeatureRow], *,
+    structural_executor: Executor | None = None,
+    structural_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, list[float]]:
+    """Calculate all scored components, retaining the exact CPU predictions."""
+    pipeline = _verified_pipeline(bundle)
     try:
-        return pipeline.predict(rows)
+        return pipeline.predict(
+            rows, structural_executor=structural_executor,
+            structural_progress=structural_progress,
+        )
     except Exception as exc:
         raise EvaluationError("serialized model pipeline failed lockbox inference") from exc
 
 
-def evaluate_lockbox(bundle: artifact.ModelBundle, dataset: Sequence[FeatureRow]) -> BootstrapEvaluationReport:
+def _predict_bundle_candidate(
+    bundle: artifact.ModelBundle, rows: Sequence[FeatureRow], *,
+    structural_executor: Executor | None = None,
+    structural_progress: Callable[[int, int], None] | None = None,
+) -> list[float]:
+    """Compute *only* candidate probabilities; unused components stay inactive."""
+    pipeline = _verified_pipeline(bundle)
+    try:
+        return pipeline.base_candidate(
+            rows, structural_executor=structural_executor,
+            structural_progress=structural_progress,
+        )
+    except Exception as exc:
+        raise EvaluationError("serialized model pipeline failed lockbox inference") from exc
+
+
+def evaluate_lockbox(
+    bundle: artifact.ModelBundle, dataset: Sequence[FeatureRow], *,
+    structural_executor: Executor | None = None,
+    structural_progress: Callable[[int, int], None] | None = None,
+) -> BootstrapEvaluationReport:
     """Evaluate exactly the predeclared, causally evaluable lockbox scope."""
     if bundle.stage != "experiment":
         raise EvaluationError("lockbox evaluation accepts experiment bundles only")
@@ -478,7 +529,14 @@ def evaluate_lockbox(bundle: artifact.ModelBundle, dataset: Sequence[FeatureRow]
     if not leakage.passed:
         raise EvaluationError("lockbox leakage audit failed")
 
-    raw_predictions = _predict_bundle_rows(bundle, selected)
+    if structural_executor is None and structural_progress is None:
+        # Preserve old two-argument test/mocking callers and serial behavior.
+        raw_predictions = _predict_bundle_rows(bundle, selected)
+    else:
+        raw_predictions = _predict_bundle_rows(
+            bundle, selected, structural_executor=structural_executor,
+            structural_progress=structural_progress,
+        )
     predictions = _validate_prediction_map(raw_predictions, len(selected))
     labels = [row.label_yes for row in selected]
     snapshots = {
@@ -757,6 +815,7 @@ def _latest_experiment_path(root: Path) -> Path:
 def run_lockbox_evaluation(
     root: Path, bundle_path: Path | None = None, *,
     progress: Callable[[str], None] | None = None,
+    scoring_progress: Callable[[str, int, int, str], None] | None = None,
 ) -> BootstrapEvaluationRun:
     """Materialize the lockbox only after confirming the experiment has not been evaluated."""
     root = root.resolve()
@@ -788,96 +847,126 @@ def run_lockbox_evaluation(
         raise EvaluationError("could not materialize the predeclared lockbox") from exc
     if progress is not None:
         progress("SCORING")
-    report = evaluate_lockbox(experiment, lockbox_rows)
-    if is_volatility or is_learning or is_full_retrain:
-        paired_480_audit = None
-        if progress is not None:
-            progress("COMPARING")
-        # Compare the incumbent without fitting it, or touching any other
-        # holdout period. This is the SAME one-time evaluation call and data.
-        from .live import load_default_bundle
-        incumbent_bundle = load_default_bundle(root)
-        scored = tuple(
-            row for row in lockbox_rows
-            if experiment.boundaries.lockbox_start_ts_ns <= row.checkpoint_ts_ns
-            <= experiment.boundaries.lockbox_end_ts_ns and training.is_evaluation_row(row)
+
+    def stage_progress(stage: str, label: str) -> Callable[[int, int], None] | None:
+        if scoring_progress is None:
+            return None
+        return lambda completed, total: scoring_progress(
+            stage, completed, total, label,
         )
-        incumbent_map = _predict_bundle_rows(incumbent_bundle, scored)
-        incumbent_p = incumbent_map.get("candidate")
-        if incumbent_p is None or len(incumbent_p) != len(scored):
-            raise EvaluationError("incumbent model did not provide matching lockbox probabilities")
-        incumbent_snapshot = artifact.metric_snapshot(
-            probability_metrics([row.label_yes for row in scored], incumbent_p)
+
+    with _holdout_executor() as structural_executor:
+        # One Windows spawn pool is reused for the full initial lockbox,
+        # incumbent comparison and all same-market 480s rechecks.
+        report = evaluate_lockbox(
+            experiment, lockbox_rows,
+            structural_executor=structural_executor,
+            structural_progress=stage_progress("SCORING", "Candidate structural diagnostics"),
         )
-        enriched = {**report.metrics, "incumbent_current": incumbent_snapshot}
-        gate_reports = dict(report.decision_metrics)
-        if is_volatility:
-            # Preserve legacy 240s scoring while requiring the ACTUAL 480s
-            # live checkpoint to clear the same incumbent/market safeguards.
-            # All three participants share exact same distinct market rows.
-            for horizon in (240, 480):
-                horizon_rows = _one_checkpoint_per_market(scored, horizon)
-                _require_horizon_sample(horizon_rows, seconds=horizon, minimum=80)
-                candidate_outputs = _predict_bundle_rows(experiment, horizon_rows)
-                incumbent_outputs = _predict_bundle_rows(incumbent_bundle, horizon_rows)
-                baseline_outputs = [
-                    training._kalshi_prior(row) for row in horizon_rows
-                ]
+        if is_volatility or is_learning or is_full_retrain:
+            paired_480_audit = None
+            if progress is not None:
+                progress("COMPARING")
+            # Compare the incumbent without fitting it, or touching any other
+            # holdout period. This is the SAME one-time evaluation call and data.
+            from .live import load_default_bundle
+            incumbent_bundle = load_default_bundle(root)
+            scored = tuple(
+                row for row in lockbox_rows
+                if experiment.boundaries.lockbox_start_ts_ns <= row.checkpoint_ts_ns
+                <= experiment.boundaries.lockbox_end_ts_ns and training.is_evaluation_row(row)
+            )
+            incumbent_p = _predict_bundle_candidate(
+                incumbent_bundle, scored,
+                structural_executor=structural_executor,
+                structural_progress=stage_progress("COMPARING", "Incumbent all-checkpoint candidate"),
+            )
+            if len(incumbent_p) != len(scored):
+                raise EvaluationError("incumbent model did not provide matching lockbox probabilities")
+            incumbent_snapshot = artifact.metric_snapshot(
+                probability_metrics([row.label_yes for row in scored], incumbent_p)
+            )
+            enriched = {**report.metrics, "incumbent_current": incumbent_snapshot}
+            gate_reports = dict(report.decision_metrics)
+            if is_volatility:
+                # Preserve legacy 240s scoring while requiring the ACTUAL 480s
+                # live checkpoint to clear the same incumbent/market safeguards.
+                # All three participants share exact same distinct market rows.
+                for horizon in (240, 480):
+                    horizon_rows = _one_checkpoint_per_market(scored, horizon)
+                    _require_horizon_sample(horizon_rows, seconds=horizon, minimum=80)
+                    candidate_p = _predict_bundle_candidate(
+                        experiment, horizon_rows, structural_executor=structural_executor,
+                        structural_progress=stage_progress("COMPARING", f"Candidate {horizon}s"),
+                    )
+                    incumbent_p = _predict_bundle_candidate(
+                        incumbent_bundle, horizon_rows, structural_executor=structural_executor,
+                        structural_progress=stage_progress("COMPARING", f"Incumbent {horizon}s"),
+                    )
+                    baseline_outputs = [
+                        training._kalshi_prior(row) for row in horizon_rows
+                    ]
+                    labels = [row.label_yes for row in horizon_rows]
+                    prefix = f"volatility_{horizon}_"
+                    enriched.update({
+                        prefix + "candidate": artifact.metric_snapshot(
+                            probability_metrics(labels, candidate_p)),
+                        prefix + "incumbent": artifact.metric_snapshot(
+                            probability_metrics(labels, incumbent_p)),
+                        prefix + "kalshi": artifact.metric_snapshot(
+                            probability_metrics(labels, baseline_outputs)),
+                    })
+                    if horizon == 480:
+                        # Capture the qualifying forecasts on EXACTLY the same
+                        # untouched lockbox markets as the proper-score snapshots.
+                        gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
+                            labels, candidate_p,
+                        )
+                        gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
+                            labels, incumbent_p,
+                        )
+            if is_full_retrain:
+                # Standard (non-mistake) retraining is ACTUALLY promotable. On a
+                # pre-existing live model, require an unused 480s lockbox measured
+                # against the incumbent at identical market/checkpoint instants.
+                horizon_rows = _one_checkpoint_per_market(scored, 480)
+                _require_horizon_sample(horizon_rows, seconds=480, minimum=80)
+                candidate_p = _predict_bundle_candidate(
+                    experiment, horizon_rows, structural_executor=structural_executor,
+                    structural_progress=stage_progress("COMPARING", "Candidate 480s"),
+                )
+                incumbent_p = _predict_bundle_candidate(
+                    incumbent_bundle, horizon_rows, structural_executor=structural_executor,
+                    structural_progress=stage_progress("COMPARING", "Incumbent 480s"),
+                )
+                market_outputs = [training._kalshi_prior(row) for row in horizon_rows]
                 labels = [row.label_yes for row in horizon_rows]
-                prefix = f"volatility_{horizon}_"
+                prefix = "retrain_480_"
                 enriched.update({
                     prefix + "candidate": artifact.metric_snapshot(
-                        probability_metrics(labels, candidate_outputs["candidate"])),
+                        probability_metrics(labels, candidate_p)),
                     prefix + "incumbent": artifact.metric_snapshot(
-                        probability_metrics(labels, incumbent_outputs["candidate"])),
+                        probability_metrics(labels, incumbent_p)),
                     prefix + "kalshi": artifact.metric_snapshot(
-                        probability_metrics(labels, baseline_outputs)),
+                        probability_metrics(labels, market_outputs)),
                 })
-                if horizon == 480:
-                    # Capture the qualifying forecasts on EXACTLY the same
-                    # untouched lockbox markets as the proper-score snapshots.
-                    gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
-                        labels, candidate_outputs["candidate"],
-                    )
-                    gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
-                        labels, incumbent_outputs["candidate"],
-                    )
-        if is_full_retrain:
-            # Standard (non-mistake) retraining is ACTUALLY promotable. On a
-            # pre-existing live model, require an unused 480s lockbox measured
-            # against the incumbent at identical market/checkpoint instants.
-            horizon_rows = _one_checkpoint_per_market(scored, 480)
-            _require_horizon_sample(horizon_rows, seconds=480, minimum=80)
-            candidate_outputs = _predict_bundle_rows(experiment, horizon_rows)
-            incumbent_outputs = _predict_bundle_rows(incumbent_bundle, horizon_rows)
-            market_outputs = [training._kalshi_prior(row) for row in horizon_rows]
-            labels = [row.label_yes for row in horizon_rows]
-            prefix = "retrain_480_"
-            enriched.update({
-                prefix + "candidate": artifact.metric_snapshot(
-                    probability_metrics(labels, candidate_outputs["candidate"])),
-                prefix + "incumbent": artifact.metric_snapshot(
-                    probability_metrics(labels, incumbent_outputs["candidate"])),
-                prefix + "kalshi": artifact.metric_snapshot(
-                    probability_metrics(labels, market_outputs)),
+                gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
+                    labels, candidate_p,
+                )
+                gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
+                    labels, incumbent_p,
+                )
+                from . import promotion_audit
+                paired_480_audit = promotion_audit.paired_480_evidence(
+                    [row.market_ticker for row in horizon_rows],
+                    labels, candidate_p,
+                    incumbent_p,
+                )
+            report = report.model_copy(update={
+                "metrics": enriched, "decision_metrics": gate_reports,
+                "requires_retrain_480_gate": is_full_retrain,
+                "paired_480_audit": paired_480_audit,
             })
-            gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
-                labels, candidate_outputs["candidate"],
-            )
-            gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
-                labels, incumbent_outputs["candidate"],
-            )
-            from . import promotion_audit
-            paired_480_audit = promotion_audit.paired_480_evidence(
-                [row.market_ticker for row in horizon_rows],
-                labels, candidate_outputs["candidate"],
-                incumbent_outputs["candidate"],
-            )
-        report = report.model_copy(update={
-            "metrics": enriched, "decision_metrics": gate_reports,
-            "requires_retrain_480_gate": is_full_retrain,
-            "paired_480_audit": paired_480_audit,
-        })
     if progress is not None:
         progress("PROMOTION_GATE")
     return finalize_evaluation(root, experiment_path, report)
