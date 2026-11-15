@@ -345,7 +345,7 @@ def _joined(root:Path) -> tuple[list[FeatureRow],dict[str,Any]]:
                 counts["issued_correct"]+=1
             else:
                 counts["issued_incorrect"]+=1
-        elif final.forecast=="SKIP" and final.reason=="CONFIDENCE_BELOW_69_PERCENT":
+        elif final.forecast=="SKIP" and final.reason in {"CONFIDENCE_BELOW_69_PERCENT", "CONFIDENCE_BELOW_63_PERCENT"}:
             counts["confidence_skips"]+=1
             if (final.p_yes is not None and type(final.p_yes) in (int,float)
                     and math.isfinite(final.p_yes) and 0<=final.p_yes<=1):
