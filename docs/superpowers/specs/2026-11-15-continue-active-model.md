@@ -1,0 +1,23 @@
+# Genuine continued training from the active KalshiEdge model
+
+## Root cause
+The current `Train Now` controller prefers full baseline reconstruction when fresh historical lockbox data is ready, otherwise a 480s offline specialist researcher. `build_experiment_bundle` refits logistic, histogram gradient boost, XGBoost, structural, residual, stacking, and calibration from scratch. The forward specialist is explicitly `ready_to_promote=False` and never modifies the live model. Thus repeated pressing Train Now may fit a separate model but does not further train the active Model #2. Historical feature readiness is blocked after the last consumed lockbox; do not reset that lock to force a retrain.
+
+## Requested behavior
+When a verified active model exists, the main Train Now action should **continue fitting eligible classifier components of that exact active pipeline** using NEW, CAUSALLY CAPTURED 480-second snapshots and VERIFIED OFFICIAL settlements, instead of restarting the full seven-stage original fit, or running an undeployable research-only challenger. Preserve the rest of the proven full pipeline unchanged.
+
+## Continuation implementation
+- Read current immutable ModelBundle with loader/hash checks, deserialize its exact FittedBootstrapPipeline, clone it, and continue the applicable outcome classifier:
+  - XGBoost classifier: continue the trained booster using `xgb_model=original.get_booster()`, a fixed small new tree budget on fresh rows only.
+  - HistGradientBoosting: `warm_start=True`, add a bounded fixed number of iterations to the cloned fitted ensemble.
+  - StandardScaler + sklearn LogisticRegression: keep original scaler unchanged; fit logistic estimator from its previous coefficients with `warm_start=True`, fixed small max_iter on new verified rows.
+  - Continue separate logistic component similarly. Structural model, residual, stacker and independent calibrator are preserved, no rebuilding all models or retuning on lockbox outcomes.
+- Only source labels from immutable `forward_feature_evidence_480._joined` official-settlement evidence, and restrict to observed forecasts actually issued by the currently active model hash, with all required saved feature names present, causal 480s timestamp, no duplicate tickers, valid Kalshi prior and class diversity. Disallow any market overlapping ANY previously consumed evaluation lockbox or the previously evaluated online snapshot interval. A rejected continuation's previous fitted checkpoint can be loaded as the next optimization starting point, provided the active parent hash has not changed.
+- Predeclare chronological development/calibration/holdout, >=80 fresh markets minimum with ~40 dev, 10 cal, 30 later evaluation for this incremental v1; use no lockbox labels for training or hyperparameter selection, and require no leakage/duplicates/corruption.
+- Persist a new SHA-256 content-addressed experiment containing the continued pipeline, original model lineage, signed development source evidence hashes and immutable 480s cohort bounds.
+- On independent later markets compare active vs continued pipeline at **same 63%** model confidence, with original coinflip mask. Apply coverage-first promotion policy already predeclared in `evaluate.PROMOTION_RULE_ID`: net more qualified forecasts and no more than 0.5pp lost qualified accuracy / 1pp overall / small probability-score degradation. No automatic trade action. On success, atomically install newly versioned model pointer, preserve original and restart required; on rejection, preserve the continued fitted experiment as checkpoint for another round, with truthful `TRAINED_NOT_PROMOTED` not fake training error. Do not automatically promote research specialists.
+- UI: the one main Train Now action shows `Continue Model #N`, actual verified new active-model 480s training availability and concise reason (count/80) if not ready. Show previous run unchanged. Explicit CLI available for diagnostics, no hidden background jobs.
+- No change to user live AutoTrade arming, training tests execute without credentials/orders, no destruction of original Model2; no historical lockbox reset. User must pull/restart to load changes.
+
+## Limits
+This is **component fine-tuning**, not deep retraining every subcomponent. New data after current model adoption must accumulate; if fewer than 80 genuinely new settled matching snapshots exist, training will not be marked available. Historical accuracy or profit are not assumed to generalize. 30 test markets give noisy estimates; keep limits guarded and disclose uncertainty. No permission to fit on a previously used independent lockbox and regrade it as unseen.
