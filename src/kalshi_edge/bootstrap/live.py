@@ -111,7 +111,7 @@ def load_default_bundle(root: Path) -> artifact.ModelBundle:
                     evaluate.MANUAL_ALLOWED_REJECTION_REASONS
                 )):
             raise LiveModelError("manually promoted model lacks allowable rejection provenance")
-    elif bundle.promotion_rule != evaluate.PROMOTION_RULE_ID:
+    elif bundle.promotion_rule not in (evaluate.PROMOTION_RULE_ID, evaluate.LEGACY_PROMOTION_RULE_ID):
         raise LiveModelError("promoted model uses an obsolete promotion rule and cannot be used for live inference")
     return bundle
 
