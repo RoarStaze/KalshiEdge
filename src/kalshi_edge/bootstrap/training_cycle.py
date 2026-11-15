@@ -1280,6 +1280,8 @@ class TrainingController:
         self._forward_at = 0.0
         self._baseline_cached: dict[str, Any] | None = None
         self._baseline_at = 0.0
+        self._continuation_cached: dict[str, Any] | None = None
+        self._continuation_at = 0.0
         self._log_handle = None
 
     def _tracked_pid(self) -> int | None:
@@ -1358,12 +1360,23 @@ class TrainingController:
                 self._baseline_cached = inspect_baseline_training_readiness(self.root)
                 self._baseline_at = now
             info["baseline_retrain"] = dict(self._baseline_cached)
+            continuation = None
+            if (self.root / "models" / "default.json").is_file():
+                if (force or self._continuation_cached is None
+                        or now - self._continuation_at > CACHE_SECONDS):
+                    from .model_continuation import inspect_continuation_readiness
+                    self._continuation_cached = inspect_continuation_readiness(self.root)
+                    self._continuation_at = now
+                continuation = dict(self._continuation_cached)
+            info["continuation"] = continuation or {}
             selected = _select_training_mode(
                 info, info["forward_480"], info["baseline_retrain"],
+                continuation=continuation,
             )
             info["selected_mode"] = selected
             info["train_available"] = selected is not None
             info["train_reason"] = (
+                continuation.get("reason") if continuation is not None else
                 "Verified forward 480s data ready for supervised training and validation."
                 if selected == FORWARD_MODE else
                 info["baseline_retrain"].get("reason") if selected == BASELINE_MODE else
@@ -1392,6 +1405,7 @@ class TrainingController:
                     self._cached_at = 0
                     self._baseline_at = 0
                     self._forward_at = 0
+                    self._continuation_at = 0
             else:
                 info["running"] = False
                 if info["run"] is not None and info["run"].get("stage") in ACTIVE_WORKER_STAGES:
@@ -1703,7 +1717,7 @@ class TrainingController:
         round_number = saved.get("round_number")
         run_id = saved.get("run_id")
         git = saved.get("git_sha")
-        if (mode not in ("mistake", "correct", BASELINE_MODE, FORWARD_MODE)
+        if (mode not in ("mistake", "correct", BASELINE_MODE, FORWARD_MODE, CONTINUE_MODE)
                 or type(round_number) is not int or round_number < 0
                 or not isinstance(run_id, str) or not isinstance(git, str)
                 or len(git) != 40):
@@ -1787,15 +1801,25 @@ class TrainingController:
             baseline = inspect_baseline_training_readiness(self.root)
             self._baseline_cached = baseline
             self._baseline_at = time.monotonic()
-            selected = _select_training_mode(info, forward, baseline)
+            continuation = None
+            if (self.root / "models" / "default.json").is_file():
+                from .model_continuation import inspect_continuation_readiness
+                continuation = inspect_continuation_readiness(self.root)
+                self._continuation_cached = continuation
+                self._continuation_at = time.monotonic()
+            selected = _select_training_mode(
+                info, forward, baseline, continuation=continuation,
+            )
             if selected is None:
                 raise CycleError(
                     "No eligible training path: historical cycle: "
                     + str(info.get("reason", "unavailable"))
                     + " | full model: " + str(baseline.get("reason", "unavailable"))
                     + " | verified 480s: " + str(forward.get("reason", "unavailable"))
+                    + (" | active model continuation: " + str(continuation.get("reason"))
+                       if continuation is not None else "")
                 )
-            round_number = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
+            round_number = 0 if selected in (FORWARD_MODE, BASELINE_MODE, CONTINUE_MODE) else info["round_number"]
             saved = {
                 "mode": selected, "round_number": round_number,
                 "run_id": uuid.uuid4().hex, "git_sha": self._git_sha(),
@@ -2034,7 +2058,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Internal supervised KalshiEdge learning-cycle worker")
     parser.add_argument("--worker", action="store_true", required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("mistake", "correct", BASELINE_MODE, FORWARD_MODE), required=True)
+    parser.add_argument("--mode", choices=("mistake", "correct", BASELINE_MODE, FORWARD_MODE, CONTINUE_MODE), required=True)
     parser.add_argument("--round-number", type=int, required=True)
     parser.add_argument("--git-sha", required=True)
     args = parser.parse_args()
@@ -2051,6 +2075,10 @@ def main() -> int:
         if args.round_number != 0:
             raise CycleError("invalid forward-training round identity")
         return run_forward_training_worker(args.root)
+    if args.mode == CONTINUE_MODE:
+        if args.round_number != 0:
+            raise CycleError("invalid active-model continuation round identity")
+        return run_continuation_worker(args.root, git_sha=args.git_sha)
     return run_training_worker(
         args.root, mode=args.mode,
         round_number=args.round_number, git_sha=args.git_sha,
