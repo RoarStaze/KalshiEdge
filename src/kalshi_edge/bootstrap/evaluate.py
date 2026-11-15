@@ -858,11 +858,15 @@ def run_lockbox_evaluation(
     with _holdout_executor() as structural_executor:
         # One Windows spawn pool is reused for the full initial lockbox,
         # incumbent comparison and all same-market 480s rechecks.
-        report = evaluate_lockbox(
-            experiment, lockbox_rows,
-            structural_executor=structural_executor,
-            structural_progress=stage_progress("SCORING", "Candidate structural diagnostics"),
-        )
+        if structural_executor is None and scoring_progress is None:
+            # Preserve the original public two-argument evaluation contract.
+            report = evaluate_lockbox(experiment, lockbox_rows)
+        else:
+            report = evaluate_lockbox(
+                experiment, lockbox_rows,
+                structural_executor=structural_executor,
+                structural_progress=stage_progress("SCORING", "Candidate structural diagnostics"),
+            )
         if is_volatility or is_learning or is_full_retrain:
             paired_480_audit = None
             if progress is not None:
