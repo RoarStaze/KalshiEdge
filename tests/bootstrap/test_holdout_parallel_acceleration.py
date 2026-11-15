@@ -177,3 +177,19 @@ if(stale.mode==="score") throw Error("fabricated holdout count");
 '''
     p=subprocess.run([node,"-"],input=script,text=True,capture_output=True,timeout=10)
     assert p.returncode==0,p.stderr
+
+
+def test_score_row_counters_expire_at_next_stage_boundary(tmp_path):
+    reporter=training_cycle._holdout_scoring_progress_reporter(
+        tmp_path, mode="baseline", round_number=0,
+    )
+    reporter("SCORING",20,100,"Candidate structural diagnostics")
+    assert training_cycle._run_state(tmp_path)["score_rows_completed"] == 20
+    training_cycle._write_worker_state(
+        tmp_path,stage="COMPARING",mode="baseline",round_number=0,
+    )
+    next_stage=training_cycle._run_state(tmp_path)
+    assert next_stage["stage"] == "COMPARING"
+    assert "score_rows_completed" not in next_stage
+    assert "score_rows_total" not in next_stage
+    assert "score_detail" not in next_stage
