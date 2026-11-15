@@ -8,6 +8,7 @@ No live forecast, dataset or untouched lockbox is modified by status reads.
 """
 
 import json
+import math
 import logging
 import os
 import re
