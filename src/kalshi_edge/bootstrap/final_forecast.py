@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 NS = 1_000_000_000
 FINAL_CHECKPOINT_SECONDS = 480
 LEGACY_FINAL_CHECKPOINT_SECONDS = 240
-MINIMUM_FINAL_CONFIDENCE = 0.69
+MINIMUM_FINAL_CONFIDENCE = 0.63
 # Heuristic live veto: <= 0.20 expected remaining BRTI standard deviations
 # from strike. NOT a calibrated coin-flip probability; validate prospectively.
 COIN_FLIP_MAX_RISK_Z = 0.20
@@ -161,7 +161,7 @@ class FinalForecastGate:
             fields["kalshi_yes_ask"] = ask
         if confidence < MINIMUM_FINAL_CONFIDENCE:
             return FinalForecastRecord(
-                **base, **fields, forecast="SKIP", reason="CONFIDENCE_BELOW_69_PERCENT",
+                **base, **fields, forecast="SKIP", reason="CONFIDENCE_BELOW_63_PERCENT",
             )
         # Active 480s gate: a high-confidence prediction can still be near
         # the strike relative to realized BRTI volatility. Fail safe to SKIP

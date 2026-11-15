@@ -24,7 +24,7 @@ from .profit_intelligence import build_profit_intelligence
 from .auto_edge import assess_auto_buy_edge, suggest_auto_stake
 from .autotrade_execution_audit import sanitize_quote_snapshot
 from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted, ManualTrader
-from kalshi_edge.bootstrap.final_forecast import FINAL_CHECKPOINT_SECONDS
+from kalshi_edge.bootstrap.final_forecast import FINAL_CHECKPOINT_SECONDS, MINIMUM_FINAL_CONFIDENCE
 
 LOG = logging.getLogger(__name__)
 NS = 1_000_000_000
@@ -542,8 +542,8 @@ class ArmedAutoTrader:
         confidence = final.get("confidence")
         if (direction == "SKIP" or type(confidence) not in (int, float)
                 or not math.isfinite(confidence)
-                or not 0.69 <= confidence <= 1):
-            self._finish("SKIPPED", "Final SKIP or confidence below 69%; no order")
+                or not MINIMUM_FINAL_CONFIDENCE <= confidence <= 1):
+            self._finish("SKIPPED", "Final SKIP or confidence below 63%; no order")
             return
         if armed.get("final_attempts", 0) >= MAX_NO_FILL_ATTEMPTS:
             self._finish("NO_FILL", "No executed shares after bounded retries")

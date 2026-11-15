@@ -95,7 +95,7 @@ def _verified_saved_candidate(root: Path) -> dict[str, Any]:
             report.model_version != experiment.model_version or
             report.lockbox_start_ts_ns != experiment.boundaries.lockbox_start_ts_ns or
             report.lockbox_end_ts_ns != experiment.boundaries.lockbox_end_ts_ns or
-            report.comparison_rule != evaluate.PROMOTION_RULE_ID):
+            report.comparison_rule not in (evaluate.PROMOTION_RULE_ID, evaluate.LEGACY_PROMOTION_RULE_ID)):
         raise ValueError("saved report and trained experiment provenance mismatch")
     recomputed = evaluate.promotion_decision(report)
     if recomputed.model_dump(mode="json") != recorded.model_dump(mode="json"):
@@ -179,7 +179,7 @@ def activate(root: Path, *, expected_experiment_sha: str, acknowledge: bool) -> 
         if active.source_experiment_sha256 == expected:
             return {"status": "ALREADY_ACTIVE", "active_hash": active.bundle_sha256}
         raise ValueError("another manually promoted model is active; rollback first")
-    if active.promotion_rule != evaluate.PROMOTION_RULE_ID:
+    if active.promotion_rule not in (evaluate.PROMOTION_RULE_ID, evaluate.LEGACY_PROMOTION_RULE_ID):
         raise ValueError("current model is not a verified automatic promotion")
     report, experiment, decision = verified["report"], verified["experiment"], verified["decision"]
     promoted = experiment.model_copy(update={
@@ -276,9 +276,9 @@ def rollback(root: Path, *, expected_active_hash: str, acknowledge: bool) -> dic
     except Exception as exc:
         raise ValueError("previous promoted model backup failed integrity verification") from exc
     if (previous.get("bundle_sha256") != original.bundle_sha256 or
-            previous.get("promotion_rule") != evaluate.PROMOTION_RULE_ID or
+            previous.get("promotion_rule") not in (evaluate.PROMOTION_RULE_ID, evaluate.LEGACY_PROMOTION_RULE_ID) or
             original.stage != "promoted" or
-            original.promotion_rule != evaluate.PROMOTION_RULE_ID or
+            original.promotion_rule not in (evaluate.PROMOTION_RULE_ID, evaluate.LEGACY_PROMOTION_RULE_ID) or
             original.model_version != training.MODEL_VERSION or
             original.feature_schema_version != training.FEATURE_SCHEMA_VERSION or
             current.get("previous_model_hash") != original.bundle_sha256):

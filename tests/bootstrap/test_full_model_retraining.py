@@ -27,11 +27,11 @@ def _report(*,cq=50,cc=48,iq=43,ic=40,with_480=True):
         gate={
             "retrain_480_candidate":evaluate.GateSnapshot(
                 total_markets=100,qualified_markets=cq,qualified_correct=cc,
-                minimum_confidence=.69,
+                minimum_confidence=.63,
             ),
             "retrain_480_incumbent":evaluate.GateSnapshot(
                 total_markets=100,qualified_markets=iq,qualified_correct=ic,
-                minimum_confidence=.69,
+                minimum_confidence=.63,
             ),
         }
     return evaluate.BootstrapEvaluationReport(
@@ -171,4 +171,4 @@ def test_full_retrain_480_rejects_worse_accuracy_even_with_more_trades():
     report=_report(cq=60,cc=45,iq=43,ic=40)
     verdict=evaluate.promotion_decision(report)
     assert verdict.promoted is False
-    assert "RETRAIN_480_QUALIFIED_ACCURACY_DEGRADED" in verdict.reason_codes
+    assert "RETRAIN_480_QUALIFIED_ACCURACY_OUTSIDE_TOLERANCE" in verdict.reason_codes

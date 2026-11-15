@@ -8,6 +8,7 @@ No live forecast, dataset or untouched lockbox is modified by status reads.
 """
 
 import json
+import math
 import logging
 import os
 import re
@@ -782,6 +783,12 @@ def _verified_lockbox_comparison(path: Path) -> dict[str, Any]:
         prior = gates.get(prefix + "incumbent")
         if not isinstance(cand, dict) or not isinstance(prior, dict):
             return {}
+        threshold = float(cand.get("minimum_confidence", .69))
+        incumbent_threshold = float(prior.get("minimum_confidence", .69))
+        if (not math.isfinite(threshold) or not 0 <= threshold <= 1
+                or not math.isfinite(incumbent_threshold)
+                or abs(threshold - incumbent_threshold) > 1e-9):
+            return {}
         def view(value: dict) -> dict:
             total = int(value["total_markets"])
             qualified = int(value["qualified_markets"])
@@ -796,13 +803,21 @@ def _verified_lockbox_comparison(path: Path) -> dict[str, Any]:
                 "qualified_accuracy": correct/qualified if qualified else None,
             }
         scores = result.get("metrics") or {}
-        return {
-            "candidate_69_gate": view(cand),
-            "incumbent_69_gate": view(prior),
+        candidate_view, incumbent_view = view(cand), view(prior)
+        comparison = {
+            "gate_confidence": threshold,
+            "candidate_gate": candidate_view,
+            "incumbent_gate": incumbent_view,
             "candidate_probability_metrics": scores.get(prefix + "candidate"),
             "incumbent_probability_metrics": scores.get(prefix + "incumbent"),
             "validation_source": "HASH_VERIFIED_FRESH_LOCKBOX_480",
         }
+        # Preserve old report/UI compatibility only when the stored snapshots
+        # truly represent the original 69% decision. No false 69% labels.
+        if abs(threshold - .69) <= 1e-9:
+            comparison["candidate_69_gate"] = candidate_view
+            comparison["incumbent_69_gate"] = incumbent_view
+        return comparison
     except (OSError, ValueError, KeyError, TypeError, ArithmeticError):
         return {}
 
@@ -810,8 +825,9 @@ def _verified_lockbox_comparison(path: Path) -> dict[str, Any]:
 def _lockbox_rejection_reasons(codes: tuple[str, ...],
                                comparison: dict[str, Any]) -> list[str]:
     out = []
-    cand = comparison.get("candidate_69_gate") or {}
-    base = comparison.get("incumbent_69_gate") or {}
+    cand = comparison.get("candidate_gate") or comparison.get("candidate_69_gate") or {}
+    base = comparison.get("incumbent_gate") or comparison.get("incumbent_69_gate") or {}
+    confidence_pct = round(100 * float(comparison.get("gate_confidence", .69)))
     if cand and base:
         n = cand.get("settled_markets") or 0
         ca, ia = cand.get("qualified") or 0, base.get("qualified") or 0
@@ -825,7 +841,7 @@ def _lockbox_rejection_reasons(codes: tuple[str, ...],
         )
     for code in codes:
         if code.endswith("COVERAGE_NOT_INCREASED"):
-            out.append("Coverage did not increase: fewer or equal usable forecasts at the 69% gate.")
+            out.append(f"Coverage did not increase: fewer or equal usable forecasts at the {confidence_pct}% gate.")
         elif code.endswith("QUALIFIED_ACCURACY_NOT_IMPROVED"):
             out.append("Qualified directional accuracy did not improve at the eight-minute checkpoint.")
         elif code.endswith("QUALIFIED_ACCURACY_DEGRADED"):

@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .final_forecast import MAX_CHECKPOINT_LATENESS_NS, MINIMUM_FINAL_CONFIDENCE, FinalForecastRecord
+from .final_forecast import MAX_CHECKPOINT_LATENESS_NS, FinalForecastRecord
 from .final_history import (
     OfficialSettlement, SettlementIntegrityError, SAFE_TICKER,
     _close_ns, _forecasts, _load_saved_settlement, _settlement_path,
@@ -26,6 +26,10 @@ LOG = logging.getLogger(__name__)
 NS = 1_000_000_000
 POLICY = "official-settled-confident-correct-refresher-v1"
 MINIMUM_DIRECTIONAL_PROBABILITY = .69
+# Historical refresher-v1 eligibility is deliberately frozen at the original
+# 69% source gate. Lowering the *live* final gate must not retroactively
+# rewrite which old immutable examples qualify for this separate pool.
+MINIMUM_REFRESHER_CONFIDENCE = .69
 
 
 class CorrectCase(BaseModel):
@@ -35,7 +39,7 @@ class CorrectCase(BaseModel):
     market_close_ts_ns: int = Field(gt=0)
     forecast: Literal["ABOVE", "BELOW"]
     actual_side: Literal["ABOVE", "BELOW"]
-    confidence: float = Field(ge=MINIMUM_FINAL_CONFIDENCE, le=1)
+    confidence: float = Field(ge=MINIMUM_REFRESHER_CONFIDENCE, le=1)
     directional_probability: float = Field(ge=MINIMUM_DIRECTIONAL_PROBABILITY, le=1)
     selected_label: Literal["yes", "no"]
     model_hash: str
@@ -63,7 +67,7 @@ def _expected_correct(root: Path, forecast: FinalForecastRecord, official: Offic
     if not forecast.scheduled_ts_ns <= forecast.prediction_ts_ns <= forecast.scheduled_ts_ns + MAX_CHECKPOINT_LATENESS_NS:
         return None
     if (
-        forecast.confidence is None or forecast.confidence < MINIMUM_FINAL_CONFIDENCE
+        forecast.confidence is None or forecast.confidence < MINIMUM_REFRESHER_CONFIDENCE
         or forecast.directional_probability is None or forecast.directional_probability < MINIMUM_DIRECTIONAL_PROBABILITY
     ):
         return None

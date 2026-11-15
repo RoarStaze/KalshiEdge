@@ -76,19 +76,19 @@ def test_final_forecast_is_not_published_early_and_locks_once_at_480s() -> None:
 
 
 def test_final_forecast_skip_rule_exact_threshold_and_below() -> None:
-    assert MINIMUM_FINAL_CONFIDENCE == 0.69
+    assert MINIMUM_FINAL_CONFIDENCE == 0.63
     below = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.8, confidence=0.689),
+        prediction=_prediction(DUE, probability=0.8, confidence=0.629),
     )
     assert below.forecast == "SKIP"
-    assert below.reason == "CONFIDENCE_BELOW_69_PERCENT"
-    assert below.confidence == pytest.approx(0.689)
+    assert below.reason == "CONFIDENCE_BELOW_63_PERCENT"
+    assert below.confidence == pytest.approx(0.629)
     assert below.directional_probability == pytest.approx(0.8)
 
     boundary = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.845, confidence=0.69),
+        prediction=_prediction(DUE, probability=0.815, confidence=0.63),
     )
     assert boundary.forecast == "ABOVE"
     assert boundary.reason is None
@@ -288,7 +288,7 @@ def test_low_confidence_skip_keeps_original_reason_and_records_coinflip_risk():
         prediction=_prediction(DUE, probability=0.8, confidence=0.6, risk_ratio=0.05),
     )
     assert final.forecast == "SKIP"
-    assert final.reason == "CONFIDENCE_BELOW_69_PERCENT"
+    assert final.reason == "CONFIDENCE_BELOW_63_PERCENT"
     assert final.coin_flip_assessment == "HIGH"
 
 
