@@ -770,6 +770,11 @@ function renderTrainingSession(run,running){
   outcome.classList.add("pass");
   outcome.textContent="PASS · NEW MODEL PROMOTED.\nThe verified candidate passed the independent evaluation and incumbent checks. Restart KalshiEdge to load the newly promoted model.\n"+
    reasons.join("\n");
+ }else if(run.decision==="TRAINED_NOT_PROMOTED"){
+  outcome.classList.add("pending");
+  outcome.textContent="CONTINUED TRAINING SAVED · Current model retained.\n"+
+   (reasons.length?reasons.join("\n"):
+    "The previous classifier weights were extended and checkpointed. More new markets are needed to validate promotion.");
  }else if(run.decision==="VALIDATION_FAILED"){
   outcome.classList.add("fail");
   outcome.textContent="FAIL · NEW MODEL REJECTED — Existing model retained.\n"+
@@ -836,7 +841,8 @@ function renderTraining(info){
  renderModelIdentity();
  const run=info.run||{};
  const running=!!info.running;
- const prospective=info.forward_480||{};
+ const hasActive=!!info.current_model?.promoted_hash;
+ const prospective=hasActive?(info.continuation||{}):(info.forward_480||{});
  const baseline=info.baseline_retrain||{};
  const ready=!!(info.train_available ?? (info.ready||prospective.ready||baseline.ready));
  const mode=String(info.selected_mode||
@@ -848,7 +854,7 @@ function renderTraining(info){
   running?"TRAINING RUNNING":ready?"READY TO TRAIN":
   info.status==="BLOCKED"?"DATA BLOCKED":"COLLECTING DATA";
  pill.className="training-pill"+(running||ready?"":" waiting");
- const n=Math.max(0,Number(prospective.eligible_480_markets)||0);
+ const n=Math.max(0,Number(prospective.eligible_markets??prospective.eligible_480_markets)||0);
  const target=Math.max(1,Number(prospective.required_markets)||120);
  const p=Math.max(0,Math.min(100,Number(prospective.progress_percent)||0));
  text("forward-480-progress",p+"%");
@@ -856,12 +862,16 @@ function renderTraining(info){
  text("forward-480-eligible",n+" / "+target+" verified markets · "+
   String(prospective.verified_outcome_classes||0)+" / 2 settled outcome classes");
  text("forward-480-reason",prospective.reason||"Waiting for verified forward 480s features.");
- text("baseline-retrain-ready",(baseline.ready?"Full model ready: ":"Full model: ")+
+ text("baseline-retrain-ready",hasActive?
+  "Full-model rebuild disabled for the primary Train Now workflow. Existing fitted classifier weights are continued without rebuilding the historical dataset.":
+  (baseline.ready?"Full model ready: ":"Full model: ")+
   (baseline.reason||"Checking historical dataset and fresh independent lockbox"));
  text("training-headline",run.stage==="PAUSED"?"Training paused":
    run.stage==="FAILED"?"Previous training stopped — model unchanged":
   info.pause_requested?"Pausing after the next safe checkpoint…":
   running?"Training and evaluating…":
+  mode==="continue_live"?"Ready to continue active Model #"+String(info.current_model?.model_number||"?"):
+  hasActive?"Collecting new settlements to continue Model #"+String(info.current_model?.model_number||"?"):
   mode==="forward_480"?"Ready to train the 480-second research challenger":
   mode==="baseline"?"Ready to train and evaluate a full model":
   mode==="mistake"?"Ready to learn from verified mistakes":
@@ -869,6 +879,8 @@ function renderTraining(info){
   ready?"Ready for verified training":"Waiting for verified training evidence");
  text("training-description",running?
   "The worker is fitting and evaluating with real checkpoint data. Live predictions and trading remain unchanged until an authorized, compatible model is promoted.":
+  hasActive?
+  "Continue the current model's existing fitted logistic and boosting classifiers on newly settled 480s markets. Keep structural forecasts, stacking and calibration; no full retrain. Promote only after new independent 63% confidence coverage-first validation. "+String(prospective.reason||""):
   mode==="forward_480"?
   "Train on a newly sealed 480s snapshot dataset, test on later independent markets, and report whether accuracy and coverage improved. Research specialists cannot yet replace the full live pipeline.":
   mode==="baseline"?
@@ -880,7 +892,7 @@ function renderTraining(info){
   "Neither training path currently has all of its verified prerequisites.");
  const button=el("train-now");
  button.disabled=!ready||running||phase==="STARTING";
- button.textContent=running?"Training…":"Train Now";
+ button.textContent=running?"Continuing…":hasActive?"Continue Training":"Train Now";
  updateTrainingPauseControls(info);
  renderTrainingSession(run,running);
  if(info.pause_requested&&running){
@@ -1030,7 +1042,9 @@ el("train-now").addEventListener("click",async()=>{
  const mode=String(trainingStatus?.selected_mode||
   (trainingStatus?.ready?trainingStatus?.mode:
    trainingStatus?.baseline_retrain?.ready?"baseline":"forward_480"));
- const prompt=mode==="forward_480"?
+ const prompt=mode==="continue_live"?
+  "Continue the CURRENT active model's fitted classifier weights? Only NEW verified settled 480-second markets will be used. KalshiEdge will preserve the structural, stacking and calibration components, compare the continuation against the current model at 63% confidence on later markets, and retain a checkpoint if not promoted. No full retrain or automatic trades are performed.":
+  mode==="forward_480"?
   "Start verified 480-second training? This creates and audits an immutable dataset, trains a model, compares it against the current model on later markets, and reports exact pass/fail reasons. Research specialists cannot replace the full live pipeline without prospective validation.":
   mode==="baseline"?
   "Start full-model training? KalshiEdge will build and audit the dataset, train a compatible predictor, and compare it against the current model on independent eight-minute lockbox markets. Only one that improves accuracy and coverage with stable probability quality can be promoted; restart is required.":
