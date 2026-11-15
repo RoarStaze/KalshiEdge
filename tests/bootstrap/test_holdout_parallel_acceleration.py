@@ -146,3 +146,34 @@ def test_scoring_progress_rejects_fake_or_out_of_bounds_counts(tmp_path):
         with pytest.raises(ValueError):
             reporter("SCORING",done,total,"bad progress")
     assert training_cycle._run_state(tmp_path) is None
+
+
+def test_dashboard_shows_real_holdout_counts_without_fake_global_percent():
+    import re
+    import shutil
+    import subprocess
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+
+    assert "run.score_rows_completed" in PAGE
+    assert "run.score_rows_total" in PAGE
+    assert "run.score_detail" in PAGE
+    assert 'if(display.mode==="score"&&display.total!==null)' in PAGE
+    node=shutil.which("node")
+    if node is None:
+        return
+    match=re.search(r"function stageProgressState\\(run\\)\\s*\\{.*?^\\}",PAGE,re.S|re.M)
+    assert match is not None
+    script=match.group(0)+'''
+const scoring=stageProgressState({
+ stage:"SCORING",score_rows_completed:32,score_rows_total:100,
+ score_detail:"Candidate structural diagnostics"
+});
+if(scoring.mode!=="score"||scoring.completed!==32||scoring.total!==100
+  ||scoring.detail!=="Candidate structural diagnostics")
+ throw Error("real holdout count missing: "+JSON.stringify(scoring));
+const stale=stageProgressState({stage:"COMPARING",score_rows_completed:99,
+ score_rows_total:0,score_detail:"stale"});
+if(stale.mode==="score") throw Error("fabricated holdout count");
+'''
+    p=subprocess.run([node,"-"],input=script,text=True,capture_output=True,timeout=10)
+    assert p.returncode==0,p.stderr
