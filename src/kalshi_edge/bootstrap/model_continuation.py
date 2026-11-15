@@ -221,3 +221,20 @@ def continue_pipeline(current: object, development: Sequence[FeatureRow]) -> obj
     outcome = continue_fitted_classifier(current.outcome_model, matrix, labels)
     logistic = continue_fitted_classifier(current.logistic_model, matrix, labels)
     return replace(current, outcome_model=outcome, logistic_model=logistic)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Read-only status. Real training starts only via the UI worker."""
+    import argparse
+    import json
+    from .config import BootstrapSettings
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=BootstrapSettings().bootstrap_dir)
+    args = parser.parse_args(argv)
+    result = inspect_continuation_readiness(args.root)
+    print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
