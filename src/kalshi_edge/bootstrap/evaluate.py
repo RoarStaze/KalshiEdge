@@ -423,9 +423,12 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         if "RETRAIN_480_CONFIDENCE_GATE_MISMATCH" not in reasons:
             reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISMATCH")
     else:
-        # The existing v2 COVERAGE_NOT_INCREASED rule stays binding, including
-        # equal qualifying counts (a candidate must produce fewer SKIPs).
+        # Unlike v2, the live gate is 63%. Explicitly enforce a strict
+        # coverage improvement; the v2 69% branch is intentionally bypassed.
         assert cand_gate is not None and inc_gate is not None
+        if cand_gate.qualified_markets <= inc_gate.qualified_markets:
+            if "RETRAIN_480_COVERAGE_NOT_INCREASED" not in reasons:
+                reasons.append("RETRAIN_480_COVERAGE_NOT_INCREASED")
         ca = cand_gate.qualified_accuracy
         ia = inc_gate.qualified_accuracy
         if (ca is None or ia is None or
@@ -1123,16 +1126,16 @@ def run_lockbox_evaluation(
                         probability_metrics(labels, market_outputs)),
                 })
                 gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
-                    labels, candidate_p,
+                    labels, candidate_p, minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
                 )
                 gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
-                    labels, incumbent_p,
+                    labels, incumbent_p, minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
                 )
                 from . import promotion_audit
                 paired_480_audit = promotion_audit.paired_480_evidence(
                     [row.market_ticker for row in horizon_rows],
-                    labels, candidate_p,
-                    incumbent_p,
+                    labels, candidate_p, incumbent_p,
+                    minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
                 )
             report = report.model_copy(update={
                 "metrics": enriched, "decision_metrics": gate_reports,
