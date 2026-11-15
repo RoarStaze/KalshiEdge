@@ -646,8 +646,8 @@ def _forward_failure_reasons(report: dict[str, Any]) -> list[str]:
             "is required before activation.",
         ]
 
-    candidate = report.get("candidate_69_gate") or {}
-    incumbent = report.get("incumbent_69_gate") or {}
+    candidate = report.get("candidate_gate") or report.get("candidate_69_gate") or {}
+    incumbent = report.get("incumbent_gate") or report.get("incumbent_69_gate") or {}
     n = report.get("matched_validation_markets") or candidate.get("settled_markets") or 0
     cq, iq = candidate.get("qualified") or 0, incumbent.get("qualified") or 0
     ca, ia = candidate.get("qualified_accuracy"), incumbent.get("qualified_accuracy")
