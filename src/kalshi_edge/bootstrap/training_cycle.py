@@ -52,6 +52,7 @@ WORKER_STAGE_PROGRESS = {
 }
 FORWARD_MODE = "forward_480"
 BASELINE_MODE = "baseline"
+CONTINUE_MODE = "continue_live"
 MIN_RETRAIN_LOCKBOX_MARKETS = 80
 _active_interpreter_identity: tuple[int, str | None] | None = None
 
@@ -65,6 +66,7 @@ ACTIVE_WORKER_STAGES = frozenset({
 
 def _select_training_mode(
     legacy: dict, forward: dict, baseline: dict | None = None,
+    *, continuation: dict | None = None,
 ) -> str | None:
     """Train the complete compatible model when its fresh lockbox is ready.
 
@@ -72,6 +74,12 @@ def _select_training_mode(
     mistake/correct refreshers remain available only if the full-model gate
     is not ready. Research-only 480s training remains the final fallback.
     """
+    # Once an active model exists, the primary Train Now action MUST continue
+    # its fitted components, never secretly fit a research-only specialist or
+    # restart the complete baseline. A None continuation keeps old bootstrap
+    # behavior for an installation without an active promoted model.
+    if continuation is not None:
+        return CONTINUE_MODE if continuation.get("ready") else None
     if baseline is not None and baseline.get("ready"):
         return BASELINE_MODE
     if legacy.get("ready"):
@@ -680,6 +688,79 @@ def _forward_failure_reasons(report: dict[str, Any]) -> list[str]:
     ]
 
 
+def run_continuation_worker(root: Path, *, git_sha: str) -> int:
+    """Continue the ACTIVE fitted classifier instead of refitting baseline."""
+    from ..launcher import SingleStarter
+    from . import model_continuation as continuation
+    from .model_continuation_run import run_continuation
+
+    root = Path(root).resolve()
+    mode, round_number = CONTINUE_MODE, 0
+    with SingleStarter(root / "training_runs" / "worker.lock"):
+        try:
+            _pause_boundary(root, stage="BUILDING_DATASET", mode=mode,
+                            round_number=round_number,
+                            dataset_action="Reuse original saved 480s snapshots; no historical dataset rebuild")
+            _pause_boundary(root, stage="VERIFYING_DATASET", mode=mode,
+                            round_number=round_number,
+                            dataset_action="Verify current-model 480s snapshots and official settlements")
+            readiness = continuation.inspect_continuation_readiness(root)
+            if not readiness.get("ready"):
+                raise CycleError(readiness.get("reason") or "Not enough fresh settled markets")
+            _pause_boundary(root, stage="SPLITTING", mode=mode,
+                            round_number=round_number,
+                            dataset_market_count=readiness["eligible_markets"],
+                            dataset_row_count=readiness["eligible_markets"],
+                            dataset_verified=True,
+                            dataset_action="Reusing original verified forward snapshots; no dataset rebuild")
+
+            def progress(stage: str) -> None:
+                if stage not in ("FITTING", "SCORING", "COMPARING", "PROMOTION_GATE"):
+                    raise CycleError("invalid continued-model training stage")
+                _pause_boundary(root, stage=stage, mode=mode,
+                                round_number=round_number)
+
+            result = run_continuation(root, git_sha=git_sha, progress=progress)
+            from .model_identity import current_model_identity
+            active_id = current_model_identity(root)
+            decision = result["status"]
+            codes = result.get("reason_codes") or []
+            reasons = (
+                ["Continued the existing fitted classifier weights; passed new "
+                 "independent 63% coverage-first validation. Model #"
+                 + str(active_id["model_number"]) + " installed. Restart to load."]
+                if result["promoted"] else
+                ["Continued trained classifier saved as a resume checkpoint; "
+                 "current model remains active. No full baseline refit occurred.",
+                 "Next Train Now will continue this checkpoint using newly settled "
+                 "markets, not reopen the evaluated lockbox.",
+                 *["Promotion gate: " + code for code in codes]]
+            )
+            _write_worker_state(
+                root, stage="COMPLETE", mode=mode, round_number=round_number,
+                decision=decision, promoted=result["promoted"], reasons=reasons,
+                reason_codes=codes, results=result,
+                report_path=result["evaluation_report"],
+                evaluation_report=result["evaluation_report"],
+                experiment_sha256=result["experiment_sha256"],
+                promoted_model_number=active_id["model_number"] if result["promoted"] else None,
+            )
+            return 0
+        except training_pause.TrainingPaused:
+            intent = training_pause.read_pause(root)
+            _save_paused_state(root, mode=mode, round_number=round_number,
+                               reason="manual" if intent.get("manual") else "shutdown")
+            return 0
+        except Exception as exc:
+            LOG.exception("Continued classifier fitting failed")
+            _write_worker_state(
+                root, stage="FAILED", mode=mode, round_number=round_number,
+                decision="ERROR", promoted=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return 2
+
+
 def run_forward_training_worker(root: Path) -> int:
     """Persistent offline 480s training. A research score is never a live PASS."""
     from ..launcher import SingleStarter
@@ -1202,6 +1283,8 @@ class TrainingController:
         self._forward_at = 0.0
         self._baseline_cached: dict[str, Any] | None = None
         self._baseline_at = 0.0
+        self._continuation_cached: dict[str, Any] | None = None
+        self._continuation_at = 0.0
         self._log_handle = None
 
     def _tracked_pid(self) -> int | None:
@@ -1280,12 +1363,23 @@ class TrainingController:
                 self._baseline_cached = inspect_baseline_training_readiness(self.root)
                 self._baseline_at = now
             info["baseline_retrain"] = dict(self._baseline_cached)
+            continuation = None
+            if (self.root / "models" / "default.json").is_file():
+                if (force or self._continuation_cached is None
+                        or now - self._continuation_at > CACHE_SECONDS):
+                    from .model_continuation import inspect_continuation_readiness
+                    self._continuation_cached = inspect_continuation_readiness(self.root)
+                    self._continuation_at = now
+                continuation = dict(self._continuation_cached)
+            info["continuation"] = continuation or {}
             selected = _select_training_mode(
                 info, info["forward_480"], info["baseline_retrain"],
+                continuation=continuation,
             )
             info["selected_mode"] = selected
             info["train_available"] = selected is not None
             info["train_reason"] = (
+                continuation.get("reason") if continuation is not None else
                 "Verified forward 480s data ready for supervised training and validation."
                 if selected == FORWARD_MODE else
                 info["baseline_retrain"].get("reason") if selected == BASELINE_MODE else
@@ -1314,6 +1408,7 @@ class TrainingController:
                     self._cached_at = 0
                     self._baseline_at = 0
                     self._forward_at = 0
+                    self._continuation_at = 0
             else:
                 info["running"] = False
                 if info["run"] is not None and info["run"].get("stage") in ACTIVE_WORKER_STAGES:
@@ -1625,7 +1720,7 @@ class TrainingController:
         round_number = saved.get("round_number")
         run_id = saved.get("run_id")
         git = saved.get("git_sha")
-        if (mode not in ("mistake", "correct", BASELINE_MODE, FORWARD_MODE)
+        if (mode not in ("mistake", "correct", BASELINE_MODE, FORWARD_MODE, CONTINUE_MODE)
                 or type(round_number) is not int or round_number < 0
                 or not isinstance(run_id, str) or not isinstance(git, str)
                 or len(git) != 40):
@@ -1709,15 +1804,25 @@ class TrainingController:
             baseline = inspect_baseline_training_readiness(self.root)
             self._baseline_cached = baseline
             self._baseline_at = time.monotonic()
-            selected = _select_training_mode(info, forward, baseline)
+            continuation = None
+            if (self.root / "models" / "default.json").is_file():
+                from .model_continuation import inspect_continuation_readiness
+                continuation = inspect_continuation_readiness(self.root)
+                self._continuation_cached = continuation
+                self._continuation_at = time.monotonic()
+            selected = _select_training_mode(
+                info, forward, baseline, continuation=continuation,
+            )
             if selected is None:
                 raise CycleError(
                     "No eligible training path: historical cycle: "
                     + str(info.get("reason", "unavailable"))
                     + " | full model: " + str(baseline.get("reason", "unavailable"))
                     + " | verified 480s: " + str(forward.get("reason", "unavailable"))
+                    + (" | active model continuation: " + str(continuation.get("reason"))
+                       if continuation is not None else "")
                 )
-            round_number = 0 if selected in (FORWARD_MODE, BASELINE_MODE) else info["round_number"]
+            round_number = 0 if selected in (FORWARD_MODE, BASELINE_MODE, CONTINUE_MODE) else info["round_number"]
             saved = {
                 "mode": selected, "round_number": round_number,
                 "run_id": uuid.uuid4().hex, "git_sha": self._git_sha(),
@@ -1956,7 +2061,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Internal supervised KalshiEdge learning-cycle worker")
     parser.add_argument("--worker", action="store_true", required=True)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--mode", choices=("mistake", "correct", BASELINE_MODE, FORWARD_MODE), required=True)
+    parser.add_argument("--mode", choices=("mistake", "correct", BASELINE_MODE, FORWARD_MODE, CONTINUE_MODE), required=True)
     parser.add_argument("--round-number", type=int, required=True)
     parser.add_argument("--git-sha", required=True)
     args = parser.parse_args()
@@ -1973,6 +2078,10 @@ def main() -> int:
         if args.round_number != 0:
             raise CycleError("invalid forward-training round identity")
         return run_forward_training_worker(args.root)
+    if args.mode == CONTINUE_MODE:
+        if args.round_number != 0:
+            raise CycleError("invalid active-model continuation round identity")
+        return run_continuation_worker(args.root, git_sha=args.git_sha)
     return run_training_worker(
         args.root, mode=args.mode,
         round_number=args.round_number, git_sha=args.git_sha,
