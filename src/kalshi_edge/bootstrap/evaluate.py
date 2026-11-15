@@ -35,7 +35,15 @@ REQUIRED_ABLATIONS = (
     "xgboost_vs_lower_variance",
 )
 
-PROMOTION_RULE_ID = "kalshi-lockbox-v2:nondegenerate-prior-both-nonworse-one-improves-ece-bounded"
+LEGACY_PROMOTION_RULE_ID = "kalshi-lockbox-v2:nondegenerate-prior-both-nonworse-one-improves-ece-bounded"
+PROMOTION_RULE_ID = "kalshi-lockbox-v3:coverage-first-63pct-bounded-accuracy-and-probability-loss"
+# These tolerances are prospective policy choices, not tuned on the already
+# inspected Model 1/Model 2 holdout. Applies to fresh full retrains only.
+RETRAIN_LIVE_GATE_CONFIDENCE = 0.63
+RETRAIN_MAX_QUALIFIED_ACCURACY_DROP = 0.005  # 0.5 percentage points
+RETRAIN_MAX_OVERALL_ACCURACY_DROP = 0.01  # 1.0 percentage point
+RETRAIN_MAX_BRIER_DROP = 0.005
+RETRAIN_MAX_LOG_LOSS_DROP = 0.02
 # Distinct, user-initiated manual deployment of a *previously rejected*,
 # verified experiment. Never used by promotion_decision().
 MANUAL_OVERRIDE_RULE_ID = "kalshi-manual-accuracy-override-v1"
@@ -207,9 +215,10 @@ def ablation_decision(
     )
 
 
-def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
+def _legacy_promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
+    """Frozen v2 interpretation: never retroactively alter saved v2 decisions."""
     reasons: list[str] = []
-    if report.comparison_rule != PROMOTION_RULE_ID:
+    if report.comparison_rule != LEGACY_PROMOTION_RULE_ID:
         reasons.append("COMPARISON_RULE_MISMATCH")
     if not report.leakage_audit.passed:
         reasons.append("LEAKAGE_AUDIT_FAILED")
@@ -362,8 +371,106 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         brier_improvement=brier_improvement,
         log_loss_improvement=log_loss_improvement,
         ece_change=ece_change,
-        comparison_rule=PROMOTION_RULE_ID,
+        comparison_rule=LEGACY_PROMOTION_RULE_ID,
     )
+
+
+def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
+    """Versioned, integrity-preserving promotion policy.
+
+    Old v2 reports are evaluated ONLY with their original strict gate.
+    V3 full-retrain candidates instead maximize forecast coverage at the
+    actual 63% live gate, while bounding every allowed quality degradation.
+    Non-retrain/volatility paths retain the established strict policy.
+    """
+    if report.comparison_rule == LEGACY_PROMOTION_RULE_ID:
+        return _legacy_promotion_decision(report)
+    if report.comparison_rule != PROMOTION_RULE_ID:
+        old = _legacy_promotion_decision(report)
+        return old.model_copy(update={"comparison_rule": PROMOTION_RULE_ID})
+    # The strict v2 rule is a *baseline* so we preserve all its safeguards.
+    # The copy only selects the correct historical rule for computation and
+    # never changes the saved/serialized report or any market outcomes.
+    old = _legacy_promotion_decision(
+        report.model_copy(update={"comparison_rule": LEGACY_PROMOTION_RULE_ID})
+    )
+    if not report.requires_retrain_480_gate:
+        return old.model_copy(update={"comparison_rule": PROMOTION_RULE_ID})
+
+    # On fresh full retrains only, replace the v2 incumbent superiority
+    # requirement with a narrowly bounded, coverage-first live policy.
+    relaxation = {
+        "INCUMBENT_MODEL_NOT_BEATEN",
+        "RETRAIN_480_INCUMBENT_NOT_BEATEN",
+        "RETRAIN_480_INCUMBENT_ACCURACY_NOT_IMPROVED",
+        "RETRAIN_480_QUALIFIED_ACCURACY_NOT_IMPROVED",
+        "RETRAIN_480_QUALIFIED_ACCURACY_DEGRADED",
+        # The legacy internal gate expects 69%; the v3 gate is verified below.
+        "RETRAIN_480_CONFIDENCE_GATE_MISMATCH",
+    }
+    reasons = [code for code in old.reason_codes if code not in relaxation]
+    cand_gate = report.decision_metrics.get("retrain_480_candidate")
+    inc_gate = report.decision_metrics.get("retrain_480_incumbent")
+    valid_gate = (
+        cand_gate is not None
+        and inc_gate is not None
+        and cand_gate.total_markets == inc_gate.total_markets
+        and cand_gate.total_markets >= 80
+        and abs(cand_gate.minimum_confidence - RETRAIN_LIVE_GATE_CONFIDENCE) <= 1e-9
+        and abs(inc_gate.minimum_confidence - RETRAIN_LIVE_GATE_CONFIDENCE) <= 1e-9
+    )
+    if not valid_gate:
+        if "RETRAIN_480_CONFIDENCE_GATE_MISMATCH" not in reasons:
+            reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISMATCH")
+    else:
+        # The existing v2 COVERAGE_NOT_INCREASED rule stays binding, including
+        # equal qualifying counts (a candidate must produce fewer SKIPs).
+        assert cand_gate is not None and inc_gate is not None
+        ca = cand_gate.qualified_accuracy
+        ia = inc_gate.qualified_accuracy
+        if (ca is None or ia is None or
+                ca + RETRAIN_MAX_QUALIFIED_ACCURACY_DROP
+                    + PROMOTION_NONWORSE_TOLERANCE < ia):
+            reasons.append("RETRAIN_480_QUALIFIED_ACCURACY_OUTSIDE_TOLERANCE")
+
+    candidate = report.metrics.get("candidate")
+    incumbent = report.metrics.get("incumbent_current")
+    final = report.metrics.get("retrain_480_candidate")
+    final_incumbent = report.metrics.get("retrain_480_incumbent")
+    if any(x is None for x in (candidate, incumbent, final, final_incumbent)):
+        if "RETRAIN_480_BENCHMARK_MISSING" not in reasons:
+            reasons.append("RETRAIN_480_BENCHMARK_MISSING")
+    else:
+        assert candidate is not None and incumbent is not None
+        assert final is not None and final_incumbent is not None
+        if (final.accuracy + RETRAIN_MAX_OVERALL_ACCURACY_DROP
+                + PROMOTION_NONWORSE_TOLERANCE < final_incumbent.accuracy):
+            reasons.append("RETRAIN_480_OVERALL_ACCURACY_OUTSIDE_TOLERANCE")
+        if any(
+            trial.brier > baseline.brier + RETRAIN_MAX_BRIER_DROP
+            + PROMOTION_NONWORSE_TOLERANCE
+            or trial.log_loss > baseline.log_loss + RETRAIN_MAX_LOG_LOSS_DROP
+            + PROMOTION_NONWORSE_TOLERANCE
+            for trial, baseline in (
+                (candidate, incumbent),
+                (final, final_incumbent),
+            )
+        ):
+            reasons.append("RETRAIN_480_INCUMBENT_PROBABILITY_DEGRADED")
+        # Retain v2 calibrated ECE guard and explicitly ensure the 480s
+        # incumbent comparison cannot bypass that guard.
+        if (final.ece > final_incumbent.ece
+                + PROMOTION_MAX_ECE_DEGRADATION
+                + PROMOTION_NONWORSE_TOLERANCE):
+            reasons.append("RETRAIN_480_INCUMBENT_ECE_DEGRADED")
+
+    unique_reasons = tuple(dict.fromkeys(reasons))
+    return old.model_copy(update={
+        "promoted": not unique_reasons,
+        "superior_to_kalshi": not unique_reasons,
+        "reason_codes": unique_reasons,
+        "comparison_rule": PROMOTION_RULE_ID,
+    })
 
 
 def _one_checkpoint_per_market(
