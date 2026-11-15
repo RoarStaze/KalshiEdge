@@ -54,7 +54,7 @@ def _setup(root: Path):
     original=_bundle().model_copy(update={
         "stage":"promoted",
         "source_experiment_sha256":"d"*64,
-        "promotion_rule":evaluate.PROMOTION_RULE_ID,
+        "promotion_rule":evaluate.LEGACY_PROMOTION_RULE_ID,
     })
     old_path=artifact.save_model_bundle(original,root/"models"/"promoted")
     pointer={
@@ -63,7 +63,7 @@ def _setup(root: Path):
         "bundle_sha256":old_path.stem,
         "path":old_path.relative_to(root).as_posix(),
         "source_experiment_sha256":"d"*64,
-        "promotion_rule":evaluate.PROMOTION_RULE_ID,
+        "promotion_rule":evaluate.LEGACY_PROMOTION_RULE_ID,
     }
     evaluate._atomic_json(root/"models"/"default.json",pointer)
     labels=[1]*100
@@ -104,7 +104,7 @@ def _setup(root: Path):
         },
         requires_retrain_480_gate=True,
         paired_480_audit=paired,
-        comparison_rule=evaluate.PROMOTION_RULE_ID,
+        comparison_rule=evaluate.LEGACY_PROMOTION_RULE_ID,
     )
     decision=evaluate.promotion_decision(report)
     assert set(decision.reason_codes)=={
