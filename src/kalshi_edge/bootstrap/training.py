@@ -17,6 +17,7 @@ import os
 import pickle
 import platform
 import sys
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -80,6 +81,20 @@ class DatasetContext:
     selected_labels: tuple[tuple[str, int], ...] = ()
 
 
+def _structural_scores(
+    model: structural.StructuralModel,
+    rows: Sequence[FeatureRow],
+    *,
+    executor: Executor | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[float]:
+    """Use exactly the existing seeded CPU model, optionally across processes."""
+    states = tuple(structural.structural_state_from_row(row) for row in rows)
+    return structural.predict_probabilities(
+        model, states, executor=executor, progress=progress,
+    )
+
+
 @dataclass(frozen=True)
 class FittedBootstrapPipeline:
     """Serializable fitted pipeline consumed by Task 8 evaluation and Task 9 live inference."""
@@ -97,7 +112,11 @@ class FittedBootstrapPipeline:
     # below keeps every previously promoted bundle loadable without re-fitting.
     volatility_overlay: volatility.VolatilityOverlay | None = None
 
-    def base_candidate(self, rows: Sequence[FeatureRow]) -> list[float]:
+    def base_candidate(
+        self, rows: Sequence[FeatureRow], *,
+        structural_executor: Executor | None = None,
+        structural_progress: Callable[[int, int], None] | None = None,
+    ) -> list[float]:
         """Return candidate probability without computing zero-weight components.
 
         This matches predict()['candidate'] exactly, but avoids unnecessary
@@ -117,10 +136,10 @@ class FittedBootstrapPipeline:
         if weights.get("historical_ml", 0.0) > 0:
             active["historical_ml"] = _predict_classifier(self.outcome_model, x)
         if weights.get("structural", 0.0) > 0:
-            active["structural"] = [
-                self.structural_model.predict_proba(structural.structural_state_from_row(row))
-                for row in selected
-            ]
+            active["structural"] = _structural_scores(
+                self.structural_model, selected,
+                executor=structural_executor, progress=structural_progress,
+            )
         if weights.get("residual_corrected", 0.0) > 0:
             active["residual_corrected"] = self.residual_model.predict(x, prior)
         if not active:
@@ -131,7 +150,11 @@ class FittedBootstrapPipeline:
             return [float(p) for p in raw]
         return [existing_overlay.predict(p, row.features) for p, row in zip(raw, selected)]
 
-    def predict(self, rows: Sequence[FeatureRow]) -> dict[str, list[float]]:
+    def predict(
+        self, rows: Sequence[FeatureRow], *,
+        structural_executor: Executor | None = None,
+        structural_progress: Callable[[int, int], None] | None = None,
+    ) -> dict[str, list[float]]:
         selected = tuple(rows)
         if not selected:
             raise TrainingError("prediction requires at least one row")
@@ -143,10 +166,10 @@ class FittedBootstrapPipeline:
         prior = [_kalshi_prior(row) for row in selected]
         historical = _predict_classifier(self.outcome_model, x)
         logistic = _predict_classifier(self.logistic_model, x)
-        structural_p = [
-            self.structural_model.predict_proba(structural.structural_state_from_row(row))
-            for row in selected
-        ]
+        structural_p = _structural_scores(
+            self.structural_model, selected,
+            executor=structural_executor, progress=structural_progress,
+        )
         residual_p = self.residual_model.predict(x, prior)
         component_map = {
             "kalshi_prior": prior,
@@ -1281,7 +1304,29 @@ def build_experiment_bundle(
     prior_p = [_kalshi_prior(row) for row in evaluation_calibration_rows]
     historical_p = _predict_classifier(outcome_model, calibration_x)
     logistic_p = _predict_classifier(logistic_model, calibration_x)
-    structural_p = [structural_model.predict_proba(structural.structural_state_from_row(row)) for row in evaluation_calibration_rows]
+    # Calibration uses the same deterministic per-row CPU paths as the
+    # chronological structural fit, but distributes independent rows across
+    # the existing capped Windows worker policy when that is worthwhile.
+    from concurrent.futures import ProcessPoolExecutor
+    from contextlib import nullcontext
+    import multiprocessing
+
+    workers = _structural_worker_count()
+    parallel = (
+        ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"))
+        if workers > 1 else nullcontext(None)
+    )
+    with parallel as executor:
+        structural_p = _structural_scores(
+            structural_model, evaluation_calibration_rows,
+            executor=executor,
+            progress=(
+                lambda done, total: progress(
+                    fit_completed, fit_total,
+                    f"Calibration structural paths: {done}/{total} rows scored",
+                )
+            ) if progress is not None else None,
+        )
     residual_p = final_residual.predict(calibration_x, prior_p)
     components = {
         "kalshi_prior": prior_p,
