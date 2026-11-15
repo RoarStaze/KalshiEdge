@@ -698,6 +698,9 @@ def run_continuation_worker(root: Path, *, git_sha: str) -> int:
     mode, round_number = CONTINUE_MODE, 0
     with SingleStarter(root / "training_runs" / "worker.lock"):
         try:
+            _pause_boundary(root, stage="BUILDING_DATASET", mode=mode,
+                            round_number=round_number,
+                            dataset_action="Reuse original saved 480s snapshots; no historical dataset rebuild")
             _pause_boundary(root, stage="VERIFYING_DATASET", mode=mode,
                             round_number=round_number,
                             dataset_action="Verify current-model 480s snapshots and official settlements")
