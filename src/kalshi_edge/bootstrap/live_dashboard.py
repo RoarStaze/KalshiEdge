@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
+from .final_forecast import FINAL_CHECKPOINT_SECONDS, MINIMUM_FINAL_CONFIDENCE, FinalForecastRecord
 from .live import LivePredictionRecord
 
 LOG = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ def read_live_dashboard(root: Path, *, now_ns: int | None = None) -> dict[str, A
         "strike": None,
         "latest_prediction": None,
         "final_forecast": None,
-        "minimum_confidence": 0.69,
+        "minimum_confidence": MINIMUM_FINAL_CONFIDENCE,
     }
     prediction = _latest_prediction(root.resolve(), now_ns=now_ns)
     if prediction is None:
