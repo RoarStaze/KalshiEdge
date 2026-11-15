@@ -53,7 +53,7 @@ def resolve_model_one(root: Path) -> artifact.ModelBundle:
     bundle = artifact.load_model_bundle(previous_path)
     if (bundle.bundle_sha256 != previous_sha
             or bundle.stage != "promoted"
-            or bundle.promotion_rule != evaluate.PROMOTION_RULE_ID):
+            or bundle.promotion_rule not in (evaluate.PROMOTION_RULE_ID, evaluate.LEGACY_PROMOTION_RULE_ID)):
         raise ValueError("previous Model 1 bundle is missing, altered or not an original promotion")
     return bundle
 
