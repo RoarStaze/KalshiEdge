@@ -232,7 +232,7 @@ def run_continuation(root: Path, *, git_sha: str,
         progress("PROMOTION_GATE")
     if live.load_default_bundle(root).bundle_sha256 != parent_sha:
         raise c.ContinuationError("active model changed before promotion")
-    outcome = evaluate._finalize_evaluation(root, experiment_path, report)
+    outcome = evaluate.finalize_evaluation(root, experiment_path, report)
 
     result: dict[str, Any] = {
         "status": "PROMOTED" if outcome.decision.promoted else "TRAINED_NOT_PROMOTED",
