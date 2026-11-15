@@ -133,7 +133,7 @@ def test_preview_is_readonly_and_reports_accuracy_coverage_and_rejection(tmp_pat
     summary=manual_promotion.preview(tmp_path)
     assert summary["eligible"] is True
     assert summary["experiment_sha256"]==digest
-    assert summary["paired_accuracy_delta_pp"]==1.0
+    assert summary["paired_accuracy_delta_pp"] == pytest.approx(1.0, abs=1e-12)
     assert summary["coverage_delta_pp"]==-10.0
     assert set(summary["rejection_codes"])=={
         "INCUMBENT_MODEL_NOT_BEATEN",
