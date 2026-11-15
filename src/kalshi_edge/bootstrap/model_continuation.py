@@ -159,6 +159,7 @@ def inspect_continuation_readiness(root: Path) -> dict[str, Any]:
     result: dict[str, Any] = {
         "mode": MODE, "ready": False, "status": "COLLECTING_NEW_SETTLEMENTS",
         "eligible_markets": 0, "required_markets": MIN_NEW_MARKETS,
+        "progress_percent": 0, "verified_outcome_classes": 0,
         "reason": "No fresh verified settled 480s markets from the active model",
         "live_model_changed": False, "auto_trade_changed": False,
     }
@@ -172,6 +173,8 @@ def inspect_continuation_readiness(root: Path) -> dict[str, Any]:
         result.update(
             active_model_sha256=bundle.bundle_sha256,
             eligible_markets=len(pairs),
+            progress_percent=min(99, int(100 * len(pairs) / MIN_NEW_MARKETS)),
+            verified_outcome_classes=len({row.label_yes for row, _ in pairs}),
             previously_evaluated_through_ns=after,
             verified_settled_forward_markets=audit.get("settled_480s", 0),
         )
@@ -194,6 +197,7 @@ def inspect_continuation_readiness(root: Path) -> dict[str, Any]:
             return result
         result.update(
             ready=True, status="READY_TO_CONTINUE_ACTIVE_MODEL",
+            progress_percent=100,
             reason=(
                 f"{len(pairs)} new verified active-model markets: continue existing "
                 "fitted logistic/boosting weights, reserve later markets for "
