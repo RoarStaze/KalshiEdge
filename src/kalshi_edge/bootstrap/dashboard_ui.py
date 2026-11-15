@@ -199,7 +199,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="direction-caption" id="direction-caption">No current model call available.</div>
   <div class="confidence-row"><div class="confidence-value" id="confidence">—</div><div><div class="confidence-label">Model confidence</div><div class="confidence-sub" id="confidence-sub">Directional strength, not measured accuracy</div></div></div>
   <div class="progress" aria-label="Confidence indicator"><div id="confidence-fill"></div></div>
-  <div class="note" id="confidence-note">A final forecast requires at least 69% model confidence at the eight-minute checkpoint.</div>
+  <div class="note" id="confidence-note">A final forecast requires at least 63% model confidence at the eight-minute checkpoint.</div>
   <div class="two-times">
    <div><div class="time-label">Round closes in</div><div class="time-value" id="round-countdown">—</div></div>
    <div class="right"><div class="time-label" id="lock-time-label">Forecast locks at</div><div class="time-value" id="lock-time">—</div></div>
@@ -235,7 +235,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <div class="health-row"><span>Data feed</span><strong id="feed-status">Awaiting data</strong></div>
    <div class="health-row"><span>Model version</span><strong id="model-version">—</strong></div>
    <div class="health-row"><span>Checkpoint rule</span><strong>480 seconds before close</strong></div>
-   <div class="health-row"><span>SKIP threshold</span><strong>69% confidence</strong></div>
+   <div class="health-row"><span>SKIP threshold</span><strong>63% confidence</strong></div>
    <div class="health-row"><span>Latest prediction</span><strong id="latest-at">—</strong></div>
    <div class="health-row"><span>Market closes</span><strong id="close-at">—</strong></div>
   </article>
@@ -309,7 +309,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="table-wrap"><table><thead><tr><th>Market closes (local)</th><th>Market</th><th>Forecast</th><th>Probability</th><th>Confidence</th><th>Settled outcome</th><th>Result</th></tr></thead><tbody id="history-rows"><tr><td colspan="7" class="empty">Awaiting history data…</td></tr></tbody></table></div>
  </div>
 </section>
-<footer>Read-only research tool. Model confidence is a directional-strength score and is not the same as measured forecast accuracy. At the 69% confidence gate, directional probability is at least approximately 84.5% by the model's current definition; this is not a guarantee of correctness. History excludes pending and SKIP forecasts from directional accuracy.</footer>
+<footer>Read-only research tool. Model confidence is a directional-strength score and is not the same as measured forecast accuracy. At the 63% confidence gate, directional probability is at least approximately 84.5% by the model's current definition; this is not a guarantee of correctness. History excludes pending and SKIP forecasts from directional accuracy.</footer>
 </div>
 <script>
 "use strict";
@@ -354,7 +354,7 @@ function renderLive(data){
  const side=locked?f.forecast:p?.status==="OK"?p.predicted_side:null;
  const display=side==="ABOVE"?"UP":side==="BELOW"?"DOWN":side==="SKIP"?"SKIP":current?"WAITING":"WAITING";
  const direction=el("direction");direction.className="direction "+(display==="UP"?"up":display==="DOWN"?"down":display==="SKIP"?"skip":"waiting");direction.textContent=display;
- text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires at least 69% confidence at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
+ text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires at least 63% confidence at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
  const strength=locked?f.confidence:p?.confidence;
  text("confidence",Number.isFinite(strength)?Math.round(strength*100)+"%":"—");
  el("confidence-fill").style.width=Number.isFinite(strength)?Math.min(100,Math.max(0,strength*100))+"%":"0%";
