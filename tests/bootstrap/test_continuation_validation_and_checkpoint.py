@@ -116,7 +116,7 @@ def test_full_continuation_flow_retains_sha_sealed_checkpoint_after_rejection(tm
                                      reason_codes=("RETRAIN_480_COVERAGE_NOT_INCREASED",)),
             report_path=root/"reports"/"saved-failure.json",
         )
-    monkeypatch.setattr(evaluate,"_finalize_evaluation",finalize)
+    monkeypatch.setattr(evaluate,"finalize_evaluation",finalize)
     result=model_continuation_run.run_continuation(root,git_sha="f"*40)
     assert result["status"]=="TRAINED_NOT_PROMOTED"
     assert result["retrained_entire_model"] is False
