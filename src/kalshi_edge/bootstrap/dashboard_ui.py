@@ -725,14 +725,19 @@ function renderTrainingSession(run,running){
  const comparison=el("training-comparison");
  comparison.replaceChildren();
  const r=run.results||{};
- if(r.candidate_69_gate&&r.incumbent_69_gate){
+ const candidateGate=r.candidate_gate||r.candidate_69_gate;
+ const incumbentGate=r.incumbent_gate||r.incumbent_69_gate;
+ const gateConfidence=Number(r.gate_confidence);
+ const gatePercent=Number.isFinite(gateConfidence)&&gateConfidence>0?
+   Math.round(gateConfidence*100):69;
+ if(candidateGate&&incumbentGate){
   const metrics=[
-   ["Newly trained model",r.candidate_69_gate],
-   ["Current live model",r.incumbent_69_gate]
+   ["Newly trained model",candidateGate],
+   ["Current live model",incumbentGate]
   ];
   for(const [title,data] of metrics){
    const card=document.createElement("div");card.className="training-metric";
-   const h=document.createElement("h4");h.textContent=title;
+   const h=document.createElement("h4");h.textContent=title+" · "+gatePercent+"% confidence gate";
    const strong=document.createElement("strong");
    strong.textContent=trainPercent(data.qualified_accuracy);
    const caption=document.createElement("small");
