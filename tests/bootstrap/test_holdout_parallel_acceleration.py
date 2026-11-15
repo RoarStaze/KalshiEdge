@@ -161,7 +161,7 @@ def test_dashboard_shows_real_holdout_counts_without_fake_global_percent():
     node=shutil.which("node")
     if node is None:
         return
-    match=re.search(r"function stageProgressState\\(run\\)\\s*\\{.*?^\\}",PAGE,re.S|re.M)
+    match=re.search(r"function stageProgressState\(run\)\s*\{.*?^\}",PAGE,re.S|re.M)
     assert match is not None
     script=match.group(0)+'''
 const scoring=stageProgressState({
