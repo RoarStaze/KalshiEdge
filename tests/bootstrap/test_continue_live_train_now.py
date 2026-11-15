@@ -67,7 +67,7 @@ def test_continued_candidate_is_checkpointed_without_false_failed_training(tmp_p
         return {
             "status":"TRAINED_NOT_PROMOTED","promoted":False,
             "experiment_sha256":"d"*64,
-            "evaluation_report":str(root/"reports"/"evaluation-"+"d"*64+".json"),
+            "evaluation_report":str(root / "reports" / ("evaluation-"+"d"*64+".json")),
             "reason_codes":["RETRAIN_480_COVERAGE_NOT_INCREASED"],
             "gate_confidence":.63,
             "candidate_gate":{"qualified":20},"incumbent_gate":{"qualified":21},
