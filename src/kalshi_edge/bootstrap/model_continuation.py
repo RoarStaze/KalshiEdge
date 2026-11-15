@@ -190,10 +190,12 @@ def inspect_continuation_readiness(root: Path) -> dict[str, Any]:
             pairs[-CALIBRATION_MARKETS-VALIDATION_MARKETS:-VALIDATION_MARKETS],
             pairs[-VALIDATION_MARKETS:],
         )
+        # The later 80-market lockbox must not be filtered or selected based
+        # on its labels before a new classifier is sealed. Only development
+        # labels determine whether the incremental fit is mathematically valid.
         if (len(groups[0]) < MIN_DEVELOPMENT
-                or any({row.label_yes for row, _ in part} != {0, 1}
-                       for part in groups)):
-            result["reason"] = "New chronological training and validation need both outcome classes"
+                or {row.label_yes for row, _ in groups[0]} != {0, 1}):
+            result["reason"] = "New development markets need both verified outcome classes"
             return result
         result.update(
             ready=True, status="READY_TO_CONTINUE_ACTIVE_MODEL",
