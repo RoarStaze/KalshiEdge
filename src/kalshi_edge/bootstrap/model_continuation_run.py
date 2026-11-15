@@ -149,6 +149,10 @@ def run_continuation(root: Path, *, git_sha: str,
         "stage": "experiment",
         "git_sha": git_sha,
         "boundaries": bounds,
+        # New continued classifier metrics are ONLY measured on the new
+        # holdout below. Never mislabel the old parent development metrics
+        # as results of this newly trained model.
+        "metrics": {},
         "input_hashes": {
             **active.input_hashes,
             "continuation/active_parent_bundle": parent_sha,
