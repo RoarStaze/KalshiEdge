@@ -36,6 +36,14 @@ REQUIRED_ABLATIONS = (
 )
 
 PROMOTION_RULE_ID = "kalshi-lockbox-v2:nondegenerate-prior-both-nonworse-one-improves-ece-bounded"
+# Distinct, user-initiated manual deployment of a *previously rejected*,
+# verified experiment. Never used by promotion_decision().
+MANUAL_OVERRIDE_RULE_ID = "kalshi-manual-accuracy-override-v1"
+MANUAL_ALLOWED_REJECTION_REASONS = frozenset({
+    "INCUMBENT_MODEL_NOT_BEATEN",
+    "RETRAIN_480_INCUMBENT_NOT_BEATEN",
+    "RETRAIN_480_COVERAGE_NOT_INCREASED",
+})
 PROMOTION_MIN_IMPROVEMENT = 1e-6
 PROMOTION_NONWORSE_TOLERANCE = 1e-12
 PROMOTION_MAX_ECE_DEGRADATION = 0.02

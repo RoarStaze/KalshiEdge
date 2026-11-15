@@ -103,7 +103,15 @@ def load_default_bundle(root: Path) -> artifact.ModelBundle:
         raise LiveModelError("promoted model version is obsolete; rebuild the dataset and train a new experiment")
     if bundle.feature_schema_version != training.FEATURE_SCHEMA_VERSION:
         raise LiveModelError("promoted feature schema is obsolete; rebuild the dataset and train a new experiment")
-    if bundle.promotion_rule != evaluate.PROMOTION_RULE_ID:
+    if bundle.promotion_rule == evaluate.MANUAL_OVERRIDE_RULE_ID:
+        # This was never accepted by the automatic lockbox promotion policy.
+        # Retain failure provenance in the hash-sealed bundle for auditing.
+        if (not bundle.promotion_reason_codes
+                or not set(bundle.promotion_reason_codes).issubset(
+                    evaluate.MANUAL_ALLOWED_REJECTION_REASONS
+                )):
+            raise LiveModelError("manually promoted model lacks allowable rejection provenance")
+    elif bundle.promotion_rule != evaluate.PROMOTION_RULE_ID:
         raise LiveModelError("promoted model uses an obsolete promotion rule and cannot be used for live inference")
     return bundle
 
