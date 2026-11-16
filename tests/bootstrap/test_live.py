@@ -794,3 +794,65 @@ def test_live_prediction_loop_uses_checkpoint_first_persistence():
     code = inspect.getsource(_run_live_async)
     assert "persist_prediction_tick(" in code
     assert "writer.append(prediction)" not in code
+
+
+def test_fitted_multisignal_adjusts_real_480_checkpoint_probability_and_audit_fields():
+    from kalshi_edge.bootstrap.signal_fusion_480 import FEATURE_NAMES, FusionModel
+    from kalshi_edge.bootstrap.live import LivePredictor
+    from kalshi_edge.bootstrap.final_forecast import FinalForecastGate
+
+    now = CLOSE - 480 * NS
+    state = _healthy_state(now)
+    # A strictly causal and nonconstant BRTI series supplies the existing flip z.
+    state.brti_observations = [
+        BRTIObservation(source_ts_ns=now - (95 - i) * NS,
+                        value=60_000.1 + (i % 7) * 0.31)
+        for i in range(95)
+    ]
+    state.latest_brti_ts_ns = now - NS
+    predictor = _predictor(state)
+    bundle_hash = predictor.model_hash
+    predictor._signal_fusion = FusionModel.build(
+        model_hash=bundle_hash,
+        means=(0.0,) * len(FEATURE_NAMES),
+        scales=(1.0,) * len(FEATURE_NAMES),
+        coefficients=(0.3,) * len(FEATURE_NAMES),
+        intercept=0.,
+        fit_markets=240,
+        calibration_markets=80,
+        evaluation_markets=100,
+        evaluation={"brier_improvement": .001},
+        training_through_ts_ns=OPEN - NS,
+    )
+    result = predictor.predict(now)
+    assert result.status == "OK"
+    assert result.unfused_p_yes == pytest.approx(0.66)
+    assert result.fusion_hash == predictor._signal_fusion.sha256
+    assert result.p_yes != pytest.approx(0.66)
+    assert result.final_probability == pytest.approx(result.p_yes)
+    assert result.confidence == pytest.approx(2 * abs(result.p_yes - .5))
+    final = FinalForecastGate().evaluate(state.market, now_ns=now, prediction=result)
+    assert final is not None
+    assert final.fusion_hash == result.fusion_hash
+    assert final.unfused_p_yes == pytest.approx(.66)
+
+
+def test_fusion_missing_verified_brti_risk_falls_back_without_fabricating():
+    from kalshi_edge.bootstrap.signal_fusion_480 import FEATURE_NAMES, FusionModel
+    now = CLOSE - 480 * NS
+    state = _healthy_state(now)
+    predictor = _predictor(state)
+    predictor._signal_fusion = FusionModel.build(
+        model_hash=predictor.model_hash,
+        means=(0.0,) * len(FEATURE_NAMES),
+        scales=(1.0,) * len(FEATURE_NAMES),
+        coefficients=(0.3,) * len(FEATURE_NAMES),
+        intercept=0.,
+        fit_markets=240, calibration_markets=80, evaluation_markets=100,
+        evaluation={"brier_improvement": .001}, training_through_ts_ns=OPEN - NS,
+    )
+    result = predictor.predict(now)
+    assert result.status == "OK"
+    assert result.p_yes == pytest.approx(.66)
+    assert result.fusion_hash is None
+    assert result.unfused_p_yes is None
