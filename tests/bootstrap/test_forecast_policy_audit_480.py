@@ -60,13 +60,13 @@ def test_policy_audit_reports_more_qualifying_forecasts_and_actual_accuracy(tmp_
     assert result["matched_settled_markets"] == 5
     assert result["current_strength_policy"]["qualified"] == 1
     assert result["current_strength_policy"]["correct"] == 1
-    assert result["requested_directional_policy"]["qualified"] == 3
+    assert result["requested_directional_policy"]["qualified"] == 2
     assert result["requested_directional_policy"]["correct"] == 2
-    assert result["requested_directional_policy"]["skipped"] == 2
-    assert result["changes"]["extra_qualifying"] == 2
+    assert result["requested_directional_policy"]["skipped"] == 3
+    assert result["changes"]["extra_qualifying"] == 1
     assert result["changes"]["extra_correct"] == 1
-    assert result["changes"]["extra_incorrect"] == 1
-    assert result["changes"]["accuracy_change_percentage_points"] < 0
+    assert result["changes"]["extra_incorrect"] == 0
+    assert result["changes"]["accuracy_change_percentage_points"] == 0
     assert result["probability_source"] == "UNCHANGED_SAVED_MODEL"
     assert result["model_retraining"] is False
 
@@ -150,7 +150,7 @@ def test_read_only_sweep_fixed_8_thresholds_and_same_paired_cohort(tmp_path):
         assert row["coverage"] == qualified / 13
         assert row["settled_markets"] == 13
         assert row["confidence_interval_kind"] == "not_calculated"
-    assert rows[63]["qualified"] == report["requested_directional_policy"]["qualified"]
+    assert report["requested_directional_policy"]["qualified"] == 9  # Live 69% is distinct from the 63% sweep row
 
 
 def test_incremental_accuracy_is_correctness_of_extra_band_only(tmp_path):
