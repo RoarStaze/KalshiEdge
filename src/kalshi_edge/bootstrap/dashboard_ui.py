@@ -209,7 +209,8 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   </div>
   <details id="record-details"><summary>Forecast record details</summary><div class="detail-grid">
    <span>Model</span><strong id="detail-model">—</strong>
-   <span>Directional model probability</span><strong id="detail-probability">—</strong>
+   <span>Final directional probability</span><strong id="detail-probability">—</strong>
+   <span>Forecast method</span><strong id="detail-method">—</strong>
    <span>Model strength (gate)</span><strong id="detail-strength">—</strong>
    <span>Model hash</span><strong id="detail-hash">—</strong>
    <span>Record status</span><strong id="detail-status">—</strong>
@@ -360,12 +361,13 @@ function renderLive(data){
  const sideProbability=locked?f.directional_probability:p?.status==="OK"?(p.predicted_side==="ABOVE"?p.p_yes:p.predicted_side==="BELOW"?p.p_no:null):null;
  text("confidence",Number.isFinite(sideProbability)?Math.round(sideProbability*100)+"%":"—");
  el("confidence-fill").style.width=Number.isFinite(sideProbability)?Math.min(100,Math.max(0,sideProbability*100))+"%":"0%";
- text("confidence-sub",locked?"Locked model estimate · not accuracy":"Live model estimate · can change");
- text("confidence-note",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Saved model probability "+pct(sideProbability)+", but high near-strike flip risk vetoed the call. The veto is not a calibrated probability.":locked?"Saved "+display+" call has predicted-side model probability "+pct(sideProbability)+". A SKIP is not a successful directional forecast.":"Probability of the predicted direction, not historical accuracy. Final lock requires 63% model strength (81.5% predicted-side probability) plus the near-strike flip-risk check.");
+ text("confidence-sub",locked?(f?.fusion_hash?"Fitted multi-signal · locked":"Base model · locked"):(p?.fusion_hash?"Fitted multi-signal · live":"Live model estimate · can change"));
+ text("confidence-note",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Saved model probability "+pct(sideProbability)+", but high near-strike flip risk vetoed the call. The veto is not a calibrated probability.":locked?"Saved "+display+" call has predicted-side forecast probability "+pct(sideProbability)+". A SKIP is not a successful directional forecast.":"Probability of the predicted direction, not historical accuracy. Final lock requires 63% model strength (81.5% predicted-side probability) plus the near-strike flip-risk check.");
  text("record-title",locked?"Forecast saved":"Waiting to save the forecast");
  text("record-description",locked?"The final decision is immutable. Official settlement verification will score ABOVE or BELOW; SKIP is excluded from accuracy.":"The model locks once at the scheduled 480-second checkpoint. Low-confidence, late, or unhealthy inputs produce SKIP.");
  text("detail-model",f?.model_version||p?.model_version);
  text("detail-probability",pct(sideProbability));
+ text("detail-method",f?.fusion_hash||p?.fusion_hash?"Fitted multi-signal at 480s":"Base model (no fitted fusion)");
  text("detail-strength",pct(strength));
  text("detail-hash",f?.model_hash||p?.model_hash||"—");
  renderModelIdentity();
