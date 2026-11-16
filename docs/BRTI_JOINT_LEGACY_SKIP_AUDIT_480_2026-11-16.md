@@ -24,7 +24,7 @@ It reports:
 3. The subset where **both benchmarks additionally agree with the model direction** (not just with each other), and the subset where references agree **against** the model.
 4. How many of those hypothetical joint cases are *already above* today's 63% predicted-side-probability gate versus **at or below** it. Cases at/below that gate must not be called automatic eligible trades.
 5. A separate **counterfactual replay** of the active strict >63% probability gate *and the recorded BRTI z<=0.20 veto* on the same saved model outputs. This is **not** the historically issued-decision rate or a substitute for new real-time tracking.
-6. The joint signals broken out by *predeclared model probability intervals* (0.50,0.63], (0.63,0.70], (0.70,0.80], (0.80,1.00] to distinguish reference effects from probability selection.
+6. The joint signals broken out by *predeclared model probability intervals* [0.50,0.63], (0.63,0.70], (0.70,0.80], (0.80,1.00] to distinguish reference effects from probability selection.
 7. How often BRTI/Binance agree, disagree or have insufficient historical evidence; invalid and stale records are never silently backfilled.
 
 **Causality / integrity:** a usable reference snapshot must have separately recorded BRTI and Binance source times **no more than five seconds old**, valid digests, non-tied strike-side observations, and internally consistent BRTI/Binance basis. Missing, stale, inconsistent or unrecorded data produces `unavailable`, not a manufactured signal. No future price, outcome or settlement is ever used to *select* an eligible cohort.
