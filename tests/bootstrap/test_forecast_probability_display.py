@@ -28,3 +28,10 @@ def test_trade_copy_explains_actual_63pct_strength_gate_and_coinflip_veto() -> N
     assert "69% produce SKIP" not in PAGE
     assert "near-strike" in PAGE
     assert "not historical accuracy" in PAGE
+
+
+def test_trade_page_identifies_when_live_probability_uses_fitted_multisignal_weights():
+    assert 'id="detail-method"' in PAGE
+    assert 'f?.fusion_hash||p?.fusion_hash' in PAGE
+    assert "Fitted multi-signal at 480s" in PAGE
+    assert "Base model (no fitted fusion)" in PAGE
