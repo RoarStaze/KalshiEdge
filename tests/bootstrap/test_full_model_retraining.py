@@ -27,11 +27,11 @@ def _report(*,cq=50,cc=48,iq=43,ic=40,with_480=True):
         gate={
             "retrain_480_candidate":evaluate.GateSnapshot(
                 total_markets=100,qualified_markets=cq,qualified_correct=cc,
-                minimum_confidence=.63,
+                minimum_confidence=.69,gate_kind="predicted_side_probability",
             ),
             "retrain_480_incumbent":evaluate.GateSnapshot(
                 total_markets=100,qualified_markets=iq,qualified_correct=ic,
-                minimum_confidence=.63,
+                minimum_confidence=.69,gate_kind="predicted_side_probability",
             ),
         }
     return evaluate.BootstrapEvaluationReport(
