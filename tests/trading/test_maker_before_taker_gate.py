@@ -1,4 +1,4 @@
-"""Regression: evaluate maker EV before rejecting an expensive taker quote.
+"""The final-only AutoTrade route uses immediate IOC, not an optional maker wait.
 
 All orders and reads are fakes. No live Kalshi credentials or network.
 """
@@ -33,7 +33,7 @@ def _setup(tmp_path, yes_bid="0.7000"):
             return {"order_id": order_id, "fill_count": "0.00"}
         def send_order(self, order):
             self.iocs.append(dict(order))
-            raise AssertionError("Should not submit an expensive taker order")
+            return {"order_id": "offline-ioc", "fill_count": order["count"]}
         def get(self, path, *, params=None):
             return {"orders": [{
                 "ticker": TICKER, "order_id": order_id,
@@ -75,24 +75,25 @@ def _setup(tmp_path, yes_bid="0.7000"):
     return bot, client, now, checkpoint
 
 
-def test_profitable_maker_is_considered_when_taker_ev_is_negative(tmp_path):
-    bot, client, now, checkpoint = _setup(tmp_path)
-    bot.tick()
-    assert len(client.makers) == 1
-    assert client.makers[0]["price"] == "0.7000"
-    assert client.iocs == []
-    assert bot.status()["last_result"] == "FILLED"
-    assert bot.history_store.has_attempt(TICKER)
-    assert client.makers[0]["client_order_id"] == bot.history_store.recent_stages(TICKER)[0]["client_order_id"]
-
-
-def test_truly_unprofitable_maker_still_never_places_an_order(tmp_path):
-    bot, client, now, checkpoint = _setup(tmp_path, yes_bid="0.8800")
+def test_negative_taker_ev_still_routes_locked_final_to_immediate_ioc(tmp_path):
+    bot, client, _, _ = _setup(tmp_path)
     bot.tick()
     assert client.makers == []
-    assert client.iocs == []
-    assert not bot.history_store.has_attempt(TICKER)
-    assert bot.history_store.recent_quote_rejections()
+    assert len(client.iocs) == 1
+    assert client.iocs[0]["price"] == "0.9200"
+    assert bot.status()["last_result"] == "FILLED"
+    assert bot.status()["latest_opportunity"]["route"] == "FORECAST_ONLY_IOC"
+    assert bot.history_store.has_attempt(TICKER)
+    assert client.iocs[0]["client_order_id"] == bot.history_store.recent_stages(TICKER)[0]["client_order_id"]
+
+
+def test_unprofitable_maker_does_not_veto_final_ioc(tmp_path):
+    bot, client, _, _ = _setup(tmp_path, yes_bid="0.8800")
+    bot.tick()
+    assert client.makers == []
+    assert len(client.iocs) == 1
+    assert bot.status()["last_result"] == "FILLED"
+    assert not bot.history_store.recent_quote_rejections()
 
 
 def test_maker_sizes_down_to_fractional_kelly_and_five_percent_budget():
@@ -105,10 +106,11 @@ def test_maker_sizes_down_to_fractional_kelly_and_five_percent_budget():
     assert Decimal(plan["amount_estimate"]) <= Decimal("3.45") * Decimal("0.05")
 
 
-def test_expiration_explains_unsuitable_price_instead_of_only_too_late(tmp_path):
+def test_final_ioc_never_repeats_after_execution_window_expires(tmp_path):
     bot, client, now, checkpoint = _setup(tmp_path, yes_bid="0.8800")
     bot.tick()
+    assert len(client.iocs) == 1
     now[0] = checkpoint + 31 * NS
     bot.tick()
-    assert bot.status()["last_result"] == "EXPIRED"
-    assert "positive" in bot.status()["message"].lower() or "edge" in bot.status()["message"].lower()
+    assert len(client.iocs) == 1
+    assert bot.status()["last_result"] == "FILLED"
