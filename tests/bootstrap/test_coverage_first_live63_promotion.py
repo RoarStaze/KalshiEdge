@@ -14,7 +14,7 @@ def metric(*, accuracy=.74,brier=.171,loss=.511,ece=.03):
     )
 
 
-def gate(qualified: int,correct: int, *, threshold: float=.63):
+def gate(qualified: int,correct: int, *, threshold: float=.69):
     return evaluate.GateSnapshot(
         total_markets=1000,qualified_markets=qualified,
         qualified_correct=correct,minimum_confidence=threshold,
@@ -24,7 +24,7 @@ def gate(qualified: int,correct: int, *, threshold: float=.63):
 def report(*, qualified=(420,378), incumbent=(405,365),
            cand_overall=.74, incumbent_overall=.74,
            cand_brier=.171,cand_loss=.511, cand_ece=.03,
-           threshold=.63, schema=True, leak=True,rule=None):
+           threshold=.69, schema=True, leak=True,rule=None):
     c=metric(accuracy=cand_overall,brier=cand_brier,loss=cand_loss,ece=cand_ece)
     i=metric(accuracy=incumbent_overall,brier=.168,loss=.500,ece=.025)
     prior=metric(accuracy=.70,brier=.21,loss=.62,ece=.04)
@@ -57,7 +57,7 @@ def report(*, qualified=(420,378), incumbent=(405,365),
 
 def test_new_rule_allows_more_forecasts_despite_small_accuracy_decline():
     assert evaluate.PROMOTION_RULE_ID != evaluate.LEGACY_PROMOTION_RULE_ID
-    assert evaluate.RETRAIN_LIVE_GATE_CONFIDENCE==.63
+    assert evaluate.RETRAIN_LIVE_GATE_CONFIDENCE==.69
     r=report()  # coverage +15 forecasts; qualified accuracy ~-0.12pp
     d=evaluate.promotion_decision(r)
     assert d.promoted is True, d.reason_codes
@@ -108,7 +108,7 @@ def test_material_calibration_deterioration_blocks():
     assert "RETRAIN_480_INCUMBENT_ECE_DEGRADED" in d.reason_codes
 
 
-@pytest.mark.parametrize("threshold", [.69,.60])
+@pytest.mark.parametrize("threshold", [.63,.60])
 def test_incorrect_threshold_cannot_promote(threshold):
     d=evaluate.promotion_decision(report(threshold=threshold))
     assert not d.promoted
