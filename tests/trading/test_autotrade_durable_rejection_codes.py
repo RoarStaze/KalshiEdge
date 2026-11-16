@@ -26,6 +26,7 @@ NS=1_000_000_000
     ("Fresh quote exceeds AutoTrade dollar budget","DOLLAR_BUDGET_EXCEEDED"),
     ("Quote expired; refresh and click again","QUOTE_EXPIRED"),
     ("Market changed; refresh quote","MARKET_CHANGED"),
+    ("AutoTrade refreshed quote identity changed","QUOTE_IDENTITY_CHANGED"),
     ("Market is closing or has no valid close time","MARKET_NOT_OPEN"),
     ("No executable quote","NO_EXECUTABLE_LIQUIDITY"),
     ("Pre-submit account/quote read HTTP 429","FRESH_QUOTE_READ_FAILED"),
