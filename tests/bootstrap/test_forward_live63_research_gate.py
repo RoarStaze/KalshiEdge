@@ -5,15 +5,15 @@ Historical saved 69%-gate snapshots must retain their original label.
 from __future__ import annotations
 
 from kalshi_edge.bootstrap import forward_learning_480, training_cycle
-from kalshi_edge.bootstrap.final_forecast import MINIMUM_FINAL_CONFIDENCE
+from kalshi_edge.bootstrap.final_forecast import MINIMUM_FINAL_DIRECTIONAL_PROBABILITY
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
 
 
 def test_69percent_model_strength_fallback_is_shared_with_forward_research():
-    assert MINIMUM_FINAL_CONFIDENCE == .69
-    assert forward_learning_480.CONFIDENCE_GATE == MINIMUM_FINAL_CONFIDENCE
+    assert MINIMUM_FINAL_DIRECTIONAL_PROBABILITY == .69
+    assert forward_learning_480.CONFIDENCE_GATE == MINIMUM_FINAL_DIRECTIONAL_PROBABILITY
     labels=[1,0,1]
-    probabilities=[.90,.10,.80]
+    probabilities=[.90,.10,.60]
     result=forward_learning_480._gate(labels,probabilities)
     assert result["qualified"] == 2
     assert result["correct"] == 2
