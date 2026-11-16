@@ -197,9 +197,9 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="lock-banner pending" id="lock-banner"><div class="lock-heading" id="lock-heading">◌ &nbsp; WAITING FOR MARKET</div><div class="lock-desc" id="lock-description">Connecting to a currently open Kalshi BTC market.</div></div>
   <div class="direction waiting" id="direction">WAITING</div>
   <div class="direction-caption" id="direction-caption">No current model call available.</div>
-  <div class="confidence-row"><div class="confidence-value" id="confidence">—</div><div><div class="confidence-label">Model confidence</div><div class="confidence-sub" id="confidence-sub">Directional strength, not measured accuracy</div></div></div>
-  <div class="progress" aria-label="Confidence indicator"><div id="confidence-fill"></div></div>
-  <div class="note" id="confidence-note">A final forecast requires at least 63% model confidence at the eight-minute checkpoint.</div>
+  <div class="confidence-row"><div class="confidence-value" id="confidence">—</div><div><div class="confidence-label">Forecast probability</div><div class="confidence-sub" id="confidence-sub">Probability of the predicted direction · model estimate, not accuracy</div></div></div>
+  <div class="progress" aria-label="Directional probability indicator"><div id="confidence-fill"></div></div>
+  <div class="note" id="confidence-note">A final forecast requires at least 63% model confidence (81.5% predicted-side probability) at the eight-minute checkpoint, plus a near-strike flip-risk check.</div>
   <div class="two-times">
    <div><div class="time-label">Round closes in</div><div class="time-value" id="round-countdown">—</div></div>
    <div class="right"><div class="time-label" id="lock-time-label">Forecast locks at</div><div class="time-value" id="lock-time">—</div></div>
@@ -209,7 +209,8 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   </div>
   <details id="record-details"><summary>Forecast record details</summary><div class="detail-grid">
    <span>Model</span><strong id="detail-model">—</strong>
-   <span>Model probability</span><strong id="detail-probability">—</strong>
+   <span>Directional model probability</span><strong id="detail-probability">—</strong>
+   <span>Model strength (gate)</span><strong id="detail-strength">—</strong>
    <span>Model hash</span><strong id="detail-hash">—</strong>
    <span>Record status</span><strong id="detail-status">—</strong>
    <span>Reason</span><strong id="detail-reason">—</strong>
@@ -309,7 +310,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="table-wrap"><table><thead><tr><th>Market closes (local)</th><th>Market</th><th>Forecast</th><th>Probability</th><th>Confidence</th><th>Settled outcome</th><th>Result</th></tr></thead><tbody id="history-rows"><tr><td colspan="7" class="empty">Awaiting history data…</td></tr></tbody></table></div>
  </div>
 </section>
-<footer>Read-only research tool. Model confidence is a directional-strength score and is not the same as measured forecast accuracy. At the 63% confidence gate, directional probability is at least approximately 84.5% by the model's current definition; this is not a guarantee of correctness. History excludes pending and SKIP forecasts from directional accuracy.</footer>
+<footer>Read-only research tool. Model confidence is a directional-strength score and is not the same as measured forecast accuracy. At the 63% confidence gate, directional probability is at least approximately 81.5% by the model's current definition; this is not a guarantee of correctness. History excludes pending and SKIP forecasts from directional accuracy.</footer>
 </div>
 <script>
 "use strict";
@@ -356,14 +357,16 @@ function renderLive(data){
  const direction=el("direction");direction.className="direction "+(display==="UP"?"up":display==="DOWN"?"down":display==="SKIP"?"skip":"waiting");direction.textContent=display;
  text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires at least 63% confidence at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
  const strength=locked?f.confidence:p?.confidence;
- text("confidence",Number.isFinite(strength)?Math.round(strength*100)+"%":"—");
- el("confidence-fill").style.width=Number.isFinite(strength)?Math.min(100,Math.max(0,strength*100))+"%":"0%";
- text("confidence-sub",locked?"Locked with this forecast":"Live strength · can change");
- text("confidence-note",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Model confidence cannot override the near-strike risk veto. This is a heuristic, not a calibrated coin-flip probability.":locked?"Saved "+display+" call has model probability "+pct(f.directional_probability)+". Model confidence is not historical accuracy.":"Model confidence measures the strength of the estimated direction. At 480 seconds before close, values below 69% produce SKIP.");
+ const sideProbability=locked?f.directional_probability:p?.status==="OK"?(p.predicted_side==="ABOVE"?p.p_yes:p.predicted_side==="BELOW"?p.p_no:null):null;
+ text("confidence",Number.isFinite(sideProbability)?Math.round(sideProbability*100)+"%":"—");
+ el("confidence-fill").style.width=Number.isFinite(sideProbability)?Math.min(100,Math.max(0,sideProbability*100))+"%":"0%";
+ text("confidence-sub",locked?"Locked model estimate · not accuracy":"Live model estimate · can change");
+ text("confidence-note",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Saved model probability "+pct(sideProbability)+", but high near-strike flip risk vetoed the call. The veto is not a calibrated probability.":locked?"Saved "+display+" call has predicted-side model probability "+pct(sideProbability)+". A SKIP is not a successful directional forecast.":"Probability of the predicted direction, not historical accuracy. Final lock requires 63% model strength (81.5% predicted-side probability) plus the near-strike flip-risk check.");
  text("record-title",locked?"Forecast saved":"Waiting to save the forecast");
  text("record-description",locked?"The final decision is immutable. Official settlement verification will score ABOVE or BELOW; SKIP is excluded from accuracy.":"The model locks once at the scheduled 480-second checkpoint. Low-confidence, late, or unhealthy inputs produce SKIP.");
  text("detail-model",f?.model_version||p?.model_version);
- text("detail-probability",pct(locked?f.directional_probability:p?.predicted_side==="ABOVE"?p.p_yes:p?.predicted_side==="BELOW"?p.p_no:null));
+ text("detail-probability",pct(sideProbability));
+ text("detail-strength",pct(strength));
  text("detail-hash",f?.model_hash||p?.model_hash||"—");
  renderModelIdentity();
  text("detail-status",locked?"IMMUTABLE":p?.status||"WAITING");
