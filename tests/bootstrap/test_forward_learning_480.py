@@ -106,7 +106,9 @@ def test_challenger_is_fitted_only_on_earlier_markets_and_never_promoted():
     assert outcome["validation_markets"] >= 40
     assert outcome["gate_confidence"] == .69
     assert outcome["candidate_gate"]["settled_markets"] == outcome["validation_markets"]
-    assert outcome["incumbent_gate"]["qualified"] == 0
+    # Replayed directional-gate eligibility is independent of the historical
+    # archived SKIP issuance labels; a valid saved p_yes may now qualify.
+    assert outcome["incumbent_gate"]["qualified"] > 0
     assert outcome["candidate_probability_metrics"]["markets"] == outcome["validation_markets"]
     assert outcome["ready_to_promote"] is False
     assert outcome["live_model_changed"] is False
