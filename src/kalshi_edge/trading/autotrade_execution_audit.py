@@ -43,6 +43,7 @@ AUTO_ORDER_REJECTION_CODES = frozenset((
     "MARKET_CHANGED",
     "MARKET_NOT_OPEN",
     "NO_EXECUTABLE_LIQUIDITY",
+    "AMOUNT_BELOW_EXECUTABLE_MINIMUM",
     "QUOTE_IDENTITY_CHANGED",
     "PRICE_MOVED",
     "FRESH_QUOTE_READ_FAILED",
@@ -74,9 +75,11 @@ def classify_auto_order_rejection(reason: str) -> str:
         return "MARKET_CHANGED"
     if msg.startswith(("market is closing", "market is not open", "market closed")):
         return "MARKET_NOT_OPEN"
-    if msg.startswith(("no executable quote", "insufficient liquidity",
-                       "amount is smaller than one executable share",
-                       "insufficient cash for the requested size including fee")):
+    if msg.startswith("insufficient cash for the requested size including fee"):
+        return "INSUFFICIENT_CASH"
+    if msg.startswith("amount is smaller than one executable share"):
+        return "AMOUNT_BELOW_EXECUTABLE_MINIMUM"
+    if msg.startswith(("no executable quote", "insufficient liquidity")):
         return "NO_EXECUTABLE_LIQUIDITY"
     if msg.startswith("autotrade refreshed quote identity changed"):
         return "QUOTE_IDENTITY_CHANGED"
