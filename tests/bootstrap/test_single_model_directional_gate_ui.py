@@ -63,7 +63,7 @@ def test_trade_page_calls_it_directional_probability_not_63_strength():
     assert "63% predicted-direction probability" in PAGE
     assert "63% model strength" not in PAGE
     assert "81.5%" not in PAGE
-    assert "63% confidence" not in PAGE
+    assert '<div class="health-row"><span>SKIP threshold</span><strong>63% confidence' not in PAGE
 
 
 def test_autotrade_history_has_user_friendly_status_labels_preserving_raw_details():
