@@ -38,7 +38,7 @@ def _setup_upstream(repo: Path) -> tuple[object, object, object]:
         "WHALE_SCANNER_ENABLED": "false",
     })
     os.environ.setdefault(
-        "DATABASE_URL", "sqlite:///" + (repo / "siddhabot_benchmark.sqlite3").as_posix()
+        "DATABASE_URL", "sqlite:///" + (repo.parent / "siddhabot_benchmark.sqlite3").as_posix()
     )
     os.chdir(repo)
     sys.path.insert(0, str(repo))
