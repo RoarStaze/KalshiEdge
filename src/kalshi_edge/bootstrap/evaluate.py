@@ -36,10 +36,10 @@ REQUIRED_ABLATIONS = (
 )
 
 LEGACY_PROMOTION_RULE_ID = "kalshi-lockbox-v2:nondegenerate-prior-both-nonworse-one-improves-ece-bounded"
-PROMOTION_RULE_ID = "kalshi-lockbox-v3:coverage-first-63pct-bounded-accuracy-and-probability-loss"
+PROMOTION_RULE_ID = "kalshi-lockbox-v4:coverage-first-69pct-bounded-accuracy-and-probability-loss"
 # These tolerances are prospective policy choices, not tuned on the already
 # inspected Model 1/Model 2 holdout. Applies to fresh full retrains only.
-RETRAIN_LIVE_GATE_CONFIDENCE = 0.63
+RETRAIN_LIVE_GATE_CONFIDENCE = 0.69
 RETRAIN_MAX_QUALIFIED_ACCURACY_DROP = 0.005  # 0.5 percentage points
 RETRAIN_MAX_OVERALL_ACCURACY_DROP = 0.01  # 1.0 percentage point
 RETRAIN_MAX_BRIER_DROP = 0.005
@@ -380,7 +380,7 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
 
     Old v2 reports are evaluated ONLY with their original strict gate.
     V3 full-retrain candidates instead maximize forecast coverage at the
-    actual 63% live gate, while bounding every allowed quality degradation.
+    actual 69% live gate, while bounding every allowed quality degradation.
     Non-retrain/volatility paths retain the established strict policy.
     """
     if report.comparison_rule == LEGACY_PROMOTION_RULE_ID:
@@ -423,7 +423,7 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         if "RETRAIN_480_CONFIDENCE_GATE_MISMATCH" not in reasons:
             reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISMATCH")
     else:
-        # Unlike v2, the live gate is 63%. Explicitly enforce a strict
+        # Unlike v2, the live gate is 69%. Explicitly enforce a strict
         # coverage improvement; the v2 69% branch is intentionally bypassed.
         assert cand_gate is not None and inc_gate is not None
         if cand_gate.qualified_markets <= inc_gate.qualified_markets:
