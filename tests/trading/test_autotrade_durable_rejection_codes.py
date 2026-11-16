@@ -22,6 +22,8 @@ NS=1_000_000_000
 
 @pytest.mark.parametrize("raw,expected",[
     ("Fresh AutoTrade quote exceeds available cash","INSUFFICIENT_CASH"),
+    ("Insufficient cash for the requested size including fee reserve","INSUFFICIENT_CASH"),
+    ("Amount is smaller than one executable share increment","AMOUNT_BELOW_EXECUTABLE_MINIMUM"),
     ("Fresh AutoTrade quote exceeds 5% cash risk ceiling","LEGACY_CASH_FRACTION_CAP"),
     ("Fresh quote exceeds AutoTrade dollar budget","DOLLAR_BUDGET_EXCEEDED"),
     ("Quote expired; refresh and click again","QUOTE_EXPIRED"),
