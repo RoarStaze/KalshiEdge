@@ -58,7 +58,8 @@ def _record(root: Path, i: int, *, p: float=.8, actual: bool=True,
     )
     file=FinalForecastWriter(root).save(f,market_close_ts_ns=close)
     assert file is not None
-    if snapshot:
+    # 240s legacy records cannot lawfully have a 480s immutable snapshot.
+    if snapshot and seconds == 480:
         row=FeatureRow(
             market_ticker=ticker,checkpoint_ts_ns=ts,label_yes=0,
             features={
