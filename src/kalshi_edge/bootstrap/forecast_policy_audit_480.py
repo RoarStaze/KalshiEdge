@@ -39,6 +39,83 @@ _EXCLUSIONS = (
     "invalid_settlement", "non_probability_skip", "missing_probability",
 )
 
+# Predeclared descriptive gate sweep. Never chosen or applied to live trading.
+SWEEP_THRESHOLDS_PERCENT = (63, 68, 70, 73, 75, 78, 80, 82)
+
+
+def _sweep_rows(
+    total: int,
+    thresholds: tuple[int, ...],
+    counts: dict[int, list[int]],
+) -> list[dict[str, Any]]:
+    """Nested gate rows; incremental accuracy uses only each newly admitted band.
+
+    For a lower threshold t and the next higher threshold h, the incremental
+    cohort is (t/100, h/100], provided the saved BRTI veto did not apply.
+    The largest gate has no higher comparison, so its marginal values are None.
+    """
+    rows: list[dict[str, Any]] = []
+    for index, percent in enumerate(thresholds):
+        qualified, correct = counts[percent]
+        row = _summary(total, qualified, correct)
+        higher = thresholds[index + 1] if index + 1 < len(thresholds) else None
+        if higher is None:
+            added = added_correct = added_incorrect = added_accuracy = None
+        else:
+            higher_qualified, higher_correct = counts[higher]
+            added = qualified - higher_qualified
+            added_correct = correct - higher_correct
+            added_incorrect = added - added_correct
+            if min(added, added_correct, added_incorrect) < 0:
+                raise ValueError("Nested sweep thresholds yielded inconsistent counts")
+            added_accuracy = added_correct / added if added else None
+        row.update({
+            "threshold_percent": percent,
+            "threshold_probability": percent / 100.,
+            "incremental_vs_higher_threshold_percent": higher,
+            "incremental_qualified": added,
+            "incremental_correct": added_correct,
+            "incremental_incorrect": added_incorrect,
+            "incremental_accuracy": added_accuracy,
+            "confidence_interval_kind": "not_calculated",
+        })
+        rows.append(row)
+    return rows
+
+
+def _print_sweep_table(report: dict[str, Any]) -> None:
+    """Console-only, readable on Windows PowerShell without extra libraries."""
+    print("KalshiEdge 480-second historical probability-gate sweep")
+    print("Model hash:", report["model_hash_filter"] or "ALL HISTORICAL MODELS (exploratory)")
+    print("Status:", report["status"], "| Paired settled markets:", report["matched_settled_markets"])
+    print("Strict rule: qualify only if predicted-side probability > gate; BRTI flip veto retained.")
+    print("Incremental accuracy: accuracy of newly admitted markets vs next higher tested gate.")
+    print()
+    print(
+        f'{"Gate":>6} {"Qualified":>9} {"Skipped":>8} {"Correct":>8} '
+        f'{"Incorrect":>10} {"Accuracy":>10} {"Coverage":>10} '
+        f'{"Added":>7} {"Incremental accuracy":>21}'
+    )
+    for row in report["sweep"]:
+        accuracy = "-" if row["accuracy"] is None else f'{100 * row["accuracy"]:.2f}%'
+        marginal = (
+            "-" if row["incremental_accuracy"] is None
+            else f'{100 * row["incremental_accuracy"]:.2f}%'
+        )
+        added = "-" if row["incremental_qualified"] is None else str(row["incremental_qualified"])
+        print(
+            f'{row["threshold_percent"]:>5}% {row["qualified"]:>9} {row["skipped"]:>8} '
+            f'{row["correct"]:>8} {row["incorrect"]:>10} {accuracy:>10} '
+            f'{100 * row["coverage"]:>9.2f}% {added:>7} {marginal:>21}'
+        )
+    print()
+    print("Excluded (never silently interpreted as tradable):")
+    for reason, count in report["excluded"].items():
+        print(f"  {reason}: {count}")
+    print()
+    print("DESCRIPTIVE ONLY: not a model comparison or independent validation.")
+    print(report["limitation"])
+
 
 def _summary(total: int, qualified: int, correct: int) -> dict[str, Any]:
     return {
@@ -52,13 +129,25 @@ def _summary(total: int, qualified: int, correct: int) -> dict[str, Any]:
     }
 
 
-def evaluate_saved_policy(root: Path, *, model_hash: str | None) -> dict[str, Any]:
+def evaluate_saved_policy(
+    root: Path, *, model_hash: str | None,
+    sweep_thresholds_percent: tuple[int, ...] | None = None,
+) -> dict[str, Any]:
     """Compare eligibility on strictly paired, immutable, settled checkpoints.
 
     The original model and its probabilities are the SAME for both policies.
     Do not call this a model improvement or use it to claim calibrated uplift.
     """
     root = Path(root).resolve()
+    if sweep_thresholds_percent is not None:
+        if (not sweep_thresholds_percent
+                or tuple(sorted(set(sweep_thresholds_percent))) != sweep_thresholds_percent
+                or any(type(t) is not int or not 50 < t < 100
+                       for t in sweep_thresholds_percent)):
+            raise ValueError("Sweep thresholds must be unique increasing integer percentages (51-99)")
+        sweep_counts = {t: [0, 0] for t in sweep_thresholds_percent}
+    else:
+        sweep_counts = {}
     excluded = {name: 0 for name in _EXCLUSIONS}
     original_qual = original_correct = changed_qual = changed_correct = 0
     gained_correct = gained_wrong = 0
@@ -122,12 +211,16 @@ def evaluate_saved_policy(root: Path, *, model_hash: str | None) -> dict[str, An
         if new_qualifies and not old_qualifies:
             gained_correct += int(direction_correct)
             gained_wrong += int(not direction_correct)
+        for threshold, tally in sweep_counts.items():
+            if not veto and probability > threshold / 100.:
+                tally[0] += 1
+                tally[1] += int(direction_correct)
 
     current = _summary(matched, original_qual, original_correct)
     requested = _summary(matched, changed_qual, changed_correct)
     old_acc = current["accuracy"]
     new_acc = requested["accuracy"]
-    return {
+    report = {
         "status": "DESCRIPTIVE_ONLY" if matched else "NO_MATCHED_SETTLEMENTS",
         "policy": "480s-same-probability-decision-gates-v1",
         "model_hash_filter": model_hash,
@@ -161,6 +254,13 @@ def evaluate_saved_policy(root: Path, *, model_hash: str | None) -> dict[str, An
             "settlements, and measure fees/fills separately."
         ),
     }
+    if sweep_thresholds_percent is not None:
+        report.update({
+            "sweep_thresholds_percent": list(sweep_thresholds_percent),
+            "sweep": _sweep_rows(matched, sweep_thresholds_percent, sweep_counts),
+            "live_gate_changed": False,
+        })
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,7 +277,17 @@ def main(argv: list[str] | None = None) -> int:
         "--all-models", action="store_true",
         help="Exploratory cross-model history; mixed versions are not a fair model comparison",
     )
+    parser.add_argument(
+        "--sweep", action="store_true",
+        help="Read-only paired 63/68/70/73/75/78/80/82%% directional-probability gate sweep",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="With --sweep: output structured JSON instead of the human-readable table",
+    )
     args = parser.parse_args(argv)
+    if args.json and not args.sweep:
+        parser.error("--json requires --sweep (the original audit is already JSON)")
     if args.all_models and args.model_hash:
         parser.error("--all-models cannot be combined with --model-hash")
     if args.all_models:
@@ -193,8 +303,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"Cannot identify the active promoted model: {exc}. "
                 "Supply --model-hash or --all-models for descriptive history."
             )
-    report = evaluate_saved_policy(args.root, model_hash=model_hash)
-    print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+    report = evaluate_saved_policy(
+        args.root, model_hash=model_hash,
+        sweep_thresholds_percent=(SWEEP_THRESHOLDS_PERCENT if args.sweep else None),
+    )
+    if args.sweep and not args.json:
+        _print_sweep_table(report)
+    else:
+        print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     return 0
 
 
