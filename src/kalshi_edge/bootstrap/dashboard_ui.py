@@ -357,7 +357,7 @@ function renderLive(data){
  const side=locked?f.forecast:p?.status==="OK"?p.predicted_side:null;
  const display=side==="ABOVE"?"UP":side==="BELOW"?"DOWN":side==="SKIP"?"SKIP":current?"WAITING":"WAITING";
  const direction=el("direction");direction.className="direction "+(display==="UP"?"up":display==="DOWN"?"down":display==="SKIP"?"skip":"waiting");direction.textContent=display;
- text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires above 63% directional probability at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
+ text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires above 69% directional probability at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
  const strength=locked?f.confidence:p?.confidence;
  const sideProbability=locked?f.directional_probability:p?.status==="OK"?(p.predicted_side==="ABOVE"?p.p_yes:p.predicted_side==="BELOW"?p.p_no:null):null;
  text("confidence",Number.isFinite(sideProbability)?Math.round(sideProbability*100)+"%":"—");
@@ -1075,7 +1075,7 @@ el("train-now").addEventListener("click",async()=>{
   (trainingStatus?.ready?trainingStatus?.mode:
    trainingStatus?.baseline_retrain?.ready?"baseline":"forward_480"));
  const prompt=mode==="continue_live"?
-  "Continue the CURRENT active model's fitted classifier weights? Only NEW verified settled 480-second markets will be used. KalshiEdge will preserve the structural, stacking and calibration components, compare the continuation against the current model at 63% confidence on later markets, and retain a checkpoint if not promoted. No full retrain or automatic trades are performed.":
+  "Continue the CURRENT active model's fitted classifier weights? Only NEW verified settled 480-second markets will be used. KalshiEdge will preserve the structural, stacking and calibration components, compare the continuation against the current model at >69% predicted-direction probability on later markets, and retain a checkpoint if not promoted. No full retrain or automatic trades are performed.":
   mode==="forward_480"?
   "Start verified 480-second training? This creates and audits an immutable dataset, trains a model, compares it against the current model on later markets, and reports exact pass/fail reasons. Research specialists cannot replace the full live pipeline without prospective validation.":
   mode==="baseline"?
