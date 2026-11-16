@@ -1,4 +1,4 @@
-"""No-training policy correction: the 63% displayed probability is the gate.
+"""No-training policy correction: the 69% displayed probability is the live gate.
 
 These are synthetic contract tests, NOT evidence of improved live profitability.
 """
@@ -36,21 +36,21 @@ def _final(p_yes: float, *, risk: float | None = None):
 
 
 def test_predicted_direction_probability_7838_not_skipped_for_legacy_strength():
-    assert MINIMUM_FINAL_CONFIDENCE == .63
+    assert MINIMUM_FINAL_CONFIDENCE == .69
     final = _final(.7838, risk=1.0)
     assert final.forecast == "ABOVE"
     assert final.reason is None
-    assert final.confidence < .63
+    assert final.confidence < .69
     assert final.directional_probability == .7838
 
 
-def test_at_or_below_63_percent_direction_probability_is_skipped():
-    boundary = _final(.63, risk=1.)
+def test_at_or_below_69_percent_direction_probability_is_skipped():
+    boundary = _final(.69, risk=1.)
     assert boundary.forecast == "SKIP"
-    assert boundary.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+    assert boundary.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
     below = _final(.62)
     assert below.forecast == "SKIP"
-    assert _final(.631).forecast == "ABOVE"
+    assert _final(.691).forecast == "ABOVE"
 
 
 def test_below_contract_direction_and_flip_risk_keep_same_protections():
@@ -60,8 +60,8 @@ def test_below_contract_direction_and_flip_risk_keep_same_protections():
     assert veto.reason == "COIN_FLIP_RISK_HIGH"
 
 
-def test_trade_page_calls_it_directional_probability_not_63_strength():
-    assert "63% predicted-direction probability" in PAGE
+def test_trade_page_calls_it_directional_probability_not_69_strength():
+    assert "69% predicted-direction probability" in PAGE
     assert "63% model strength" not in PAGE
     assert "81.5%" not in PAGE
     assert '<div class="health-row"><span>SKIP threshold</span><strong>63% confidence' not in PAGE
@@ -69,12 +69,12 @@ def test_trade_page_calls_it_directional_probability_not_63_strength():
 
 def test_autotrade_history_has_user_friendly_status_labels_preserving_raw_details():
     assert 'function autoHistoryStatusLabel(status)' in SCRIPT
-    assert 'case "NOT_SUBMITTED":return "SKIPPED";' in SCRIPT
+    assert 'case "NOT_SUBMITTED":return "NOT SENT";' in SCRIPT
     assert 'case "FILLED":return "BOUGHT";' in SCRIPT
     assert 'case "PARTIAL":return "PARTIALLY BOUGHT";' in SCRIPT
-    assert 'state.textContent=autoHistoryStatusLabel(entry.status);' in SCRIPT
+    assert 'entry.reconciliation_status==="EXCHANGE_ORDER_VERIFIED"' in SCRIPT
     assert 'const outcome=String(stage.status||"UNKNOWN").replaceAll("_"," ");' in SCRIPT
-    assert 'entry.status==="NOT_SUBMITTED"?"No order submitted"' in SCRIPT
+    assert 'entry.status==="NOT_SUBMITTED"&&postReject?"Order outcome unverified' in SCRIPT
 
 
 def test_trade_panels_use_equal_grid_columns_at_desktop():
