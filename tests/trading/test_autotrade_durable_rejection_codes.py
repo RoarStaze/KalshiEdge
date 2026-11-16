@@ -195,3 +195,13 @@ def test_unknown_after_post_never_invents_definite_failure_reason(tmp_path):
     row=store.recent_stages(TICKER)[0]
     assert row["rejection_reason_code"] is None
     assert read_execution_audit(store.path)["unsubmitted_reason_counts"]=={}
+
+
+def test_auto_history_displays_safe_definite_rejection_code_without_raw_exceptions():
+    from kalshi_edge.bootstrap.manual_trade_ui import SCRIPT
+    # A user must see why a previous market was NOT_SUBMITTED after the
+    # armed widget moves to the next market and its status text is replaced.
+    assert "stage.rejection_reason_code" in SCRIPT
+    assert "replaceAll(\"_\",\" \")" in SCRIPT
+    assert 'entry.stages.map(stage=>' in SCRIPT
+    assert "details.textContent=words.join" in SCRIPT
