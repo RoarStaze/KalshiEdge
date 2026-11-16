@@ -1,0 +1,30 @@
+# Live multi-signal directional probability — source audit (2026-11-16)
+
+## Current production behavior (verified from source)
+
+- `bootstrap/live.py` obtains `candidate` from the promoted, hash-sealed `FittedBootstrapPipeline`, which combines calibrated historical ML, structural price modeling, a Kalshi-quote prior, and a residual correction through fitted stacking. The set of active components and their weights belongs to the local promoted model bundle.
+- `bootstrap/features.py` generates point-in-time BTC returns, realized volatility, market high/low, 1-second Binance klines and taker-buy base-volume imbalance, Kalshi yes-taker imbalance, quote/price/candle information. Do not claim every available feature has an independently nonzero incremental effect; feature use depends on the fitted bundle.
+- `confidence = 2 * abs(p_yes - 0.5)`. Thus `p(predicted side)=0.7565` displays 51.3% model *strength*, not 51.3% directional probability. At the existing 63% strength gate, `p(predicted side) >= 0.815` is required.
+- The existing coin-flip guard measures trailing causal BRTI strike distance relative to realized volatility (`z`); high risk vetoes the 480-second final call. The guard is **heuristic and uncalibrated**. It currently does **not** rescore `p_yes` or `p_no`; nor does it predict reversal direction by itself.
+- The existing UI presented the rescaled strength as the hero percentage and had a stale 69% live copy plus an incorrect 84.5% threshold equivalence. This patch displays the existing calibrated-pipeline *directional probability*, preserves a separate model-strength detail, and corrects these labels. It does not alter trading orders, the final gate, calibration, or predicted outcome.
+
+## What research supports
+
+1. **Settlement first.** Kalshi specifies that 15-minute crypto markets compare minute-averaged CF Benchmarks indexes (BRTI for Bitcoin), not a Binance last price. Primary source: https://help.kalshi.com/en/articles/13823838-crypto-markets
+2. **Order flow, with limitations.** Cont, Kukanov and Stoikov find order-flow imbalance informative for *short-term price moves* in equity order books; this is a transferable feature hypothesis, **not direct validation for 480-second Kalshi BTC settlement**. https://academic.oup.com/jfec/article-abstract/12/1/47/816163
+3. **Technical indicator caution.** Sullivan, Timmermann and White show the danger of data-snooping when choosing technical rules; raw RSI/MACD/candle patterns alone are not calibrated 15-minute outcome probabilities. https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00163
+4. **TradingView API limitation.** TradingView says it currently has no user-facing API for directly retrieving its data or indicator values. Reproducibly calculate selected candle and technical indicators from existing timestamped exchange bars instead. https://www.tradingview.com/support/solutions/43000474413-i-need-access-to-your-api-in-order-to-get-data-or-indicator-values/
+5. **Calibration requirements.** Hold out disjoint later calibration data and monitor log loss and Brier score; isotonic can overfit when the calibration sample is small. https://scikit-learn.org/stable/modules/calibration.html
+
+## Future direct live-model integration contract (not yet implemented)
+
+- **Define target:** `P(BRTI close-minute mean >= open-minute mean | features available at exactly 480 seconds before close)`. Maintain both probabilities, one frozen decision per ticker, and the existing fail-closed input checks.
+- **One fitted fusion, not several uncalibrated percentages:** train/recalibrate the **existing** production pipeline to consume causally aligned features for signed BRTI-to-strike distance, rolling BRTI volatility, reversal/flip risk, Binance candle momentum and exhaustively time-stamped signed trade flow. Reversal risk should enter as a learned feature with a measurable effect; continue to expose the existing coin-flip veto separately. Model weights must come from training/independent calibration, **not arbitrary user-selected percentages**.
+- **No double counting:** document which features appear in the current structural model, Kalshi prior, and ML candidate. Evaluate conditional incremental information of new features; high correlations and multiple overlapping RSI/MACD/EMA features are not independent votes.
+- **Large BTC trades:** existing 1-second Binance bar aggregate `taker_buy_base` measures net aggressor volume, **not individual whale print count**. A genuine large-trade signal needs exchange public trades or diff-depth feed, persistent point-in-time historical parity, identification of taker direction and market-normalized thresholds. Do not infer the identities of buyers or sellers from candles.
+- **History and integrity:** only finalized candles at or before checkpoint; publication latency, timestamp coherence, venue divergence, source freshness, missing/invalid data, provenance and exact settlement join must be audited. Never feed future candles, revised settlement values or after-checkpoint order flows into the historical feature row.
+- **Evidence gates:** strictly chronological evaluation at exactly the 480-second checkpoint, an independent untouched or newly collected forward validation interval, paired directional accuracy **and coverage**, Brier score, log loss, expected calibration error and fee-adjusted realized execution outcomes. Preserve deployment rollback and never promise higher hit rate or profits.
+
+## Current blocker
+
+The repository contains code and tests but not the user's private local historical feature matrices, current promoted model-bundle weights, or a representative independent set of labeled, time-aligned BRTI/reversal/large-trade observations. That makes it impossible to fit, calibrate and verify new numerical fusion weights through GitHub-only tools. Changing the order-driving `p_yes` without those inputs would invent probabilities. **Do not merge an unverified probability rewrite or claim that all requested new signals are active.**
