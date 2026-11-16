@@ -79,6 +79,7 @@ class GateSnapshot(BaseModel):
     qualified_markets: int = Field(ge=0)
     qualified_correct: int = Field(ge=0)
     minimum_confidence: float = Field(default=.69, ge=0, le=1)
+    gate_kind: str = "model_strength"  # archived default for old reports
 
     @model_validator(mode="after")
     def valid_counts(self) -> "GateSnapshot":
@@ -104,6 +105,7 @@ class GateSnapshot(BaseModel):
 def checkpoint_gate_snapshot(
     labels: Sequence[int], probabilities: Sequence[float],
     *, minimum_confidence: float = .69,
+    gate_kind: str = "model_strength",
 ) -> GateSnapshot:
     """Evaluate a frozen confidence threshold on matched verified outcomes."""
     if (type(minimum_confidence) not in (int, float)
@@ -111,13 +113,18 @@ def checkpoint_gate_snapshot(
             or not 0 <= minimum_confidence <= 1
             or len(labels) == 0 or len(labels) != len(probabilities)):
         raise ValueError("confidence gate requires equal nonempty matched data")
+    if gate_kind not in ("model_strength", "predicted_side_probability"):
+        raise ValueError("unknown confidence gate semantics")
     qualified = correct = 0
     for label, raw in zip(labels, probabilities):
         if (type(label) is not int or label not in (0, 1)
                 or type(raw) not in (float, int) or not math.isfinite(raw)
                 or not 0 <= raw <= 1):
             raise ValueError("invalid label or probability for confidence gate")
-        if 2 * abs(raw - .5) >= minimum_confidence:
+        eligible = (max(raw,1-raw) > minimum_confidence
+                    if gate_kind == "predicted_side_probability"
+                    else 2 * abs(raw-.5) >= minimum_confidence)
+        if eligible:
             qualified += 1
             correct += int((raw >= .5) == bool(label))
     return GateSnapshot(
@@ -125,6 +132,7 @@ def checkpoint_gate_snapshot(
         qualified_markets=qualified,
         qualified_correct=correct,
         minimum_confidence=float(minimum_confidence),
+        gate_kind=gate_kind,
     )
 
 
@@ -418,6 +426,8 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         and cand_gate.total_markets >= 80
         and abs(cand_gate.minimum_confidence - RETRAIN_LIVE_GATE_CONFIDENCE) <= 1e-9
         and abs(inc_gate.minimum_confidence - RETRAIN_LIVE_GATE_CONFIDENCE) <= 1e-9
+        and cand_gate.gate_kind == "predicted_side_probability"
+        and inc_gate.gate_kind == "predicted_side_probability"
     )
     if not valid_gate:
         if "RETRAIN_480_CONFIDENCE_GATE_MISMATCH" not in reasons:
@@ -1127,15 +1137,18 @@ def run_lockbox_evaluation(
                 })
                 gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
                     labels, candidate_p, minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
+                    gate_kind="predicted_side_probability",
                 )
                 gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
                     labels, incumbent_p, minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
+                    gate_kind="predicted_side_probability",
                 )
                 from . import promotion_audit
                 paired_480_audit = promotion_audit.paired_480_evidence(
                     [row.market_ticker for row in horizon_rows],
                     labels, candidate_p, incumbent_p,
                     minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
+                    gate_kind="predicted_side_probability",
                 )
             report = report.model_copy(update={
                 "metrics": enriched, "decision_metrics": gate_reports,
