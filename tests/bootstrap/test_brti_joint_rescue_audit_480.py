@@ -63,7 +63,7 @@ def _record(root: Path, i: int, *, p: float=.8, actual: bool=True,
             market_ticker=ticker,checkpoint_ts_ns=ts,label_yes=0,
             features={
                 "brti_distance_to_strike_bps":brti,
-                "brti_binance_gap_bps":brti-.2,
+                "brti_binance_gap_bps":brti-(btc-100_000.)/10.,
                 "btc_close":btc,
             },
             source_max_ts_ns={
