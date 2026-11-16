@@ -20,7 +20,7 @@ $Pinned = "00f6c52b74aa17dcb69971b4c9480db7d173bfcc"
 if ($Mode -eq "Install") {
     New-Item -ItemType Directory -Force -Path $Bench | Out-Null
     if (-not (Test-Path (Join-Path $Checkout ".git"))) {
-        & git clone --no-checkout $Source $Checkout
+        & git clone $Source $Checkout
         if ($LASTEXITCODE -ne 0) { throw "Unable to clone original SiddhaBot repository." }
     }
     $remote = (& git -C $Checkout remote get-url origin).Trim()
