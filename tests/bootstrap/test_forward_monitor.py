@@ -181,3 +181,23 @@ def test_market_baseline_comparison_stays_separate_by_model_version():
     assert result["market_midpoint_by_model"]["v6"]["matched_markets"] == 1
     assert result["market_midpoint_by_model"]["v5"]["brier_improvement"] > 0
     assert result["market_midpoint_by_model"]["v6"]["brier_improvement"] < 0
+
+
+def test_current_63_gate_and_near_strike_skips_count_in_probability_reliability():
+    # Probability scoring includes all healthy, timestamped, settled
+    # model probabilities, even if a safety/coverage rule skipped issuance.
+    rows=[
+        record("current",.60,"ABOVE",decision="SKIP",
+               reason="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"),
+        record("old63",.61,"BELOW",decision="SKIP",
+               reason="CONFIDENCE_BELOW_63_PERCENT"),
+        record("flip",.86,"ABOVE",decision="SKIP",
+               reason="COIN_FLIP_RISK_HIGH"),
+        record("unhealthy",.95,"ABOVE",decision="SKIP",
+               reason="STALE_BRTI"),
+    ]
+    out=evaluate_forward_reliability(rows,min_sample=3)
+    assert out["markets_scored"]==3
+    assert out["ineligible_excluded"]==1
+    assert out["confidence_groups"][0]["markets"]==3
+    assert out["metrics"]["accuracy"]==2/3
