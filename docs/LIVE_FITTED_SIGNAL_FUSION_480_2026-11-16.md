@@ -2,7 +2,7 @@
 
 ## Deployment contract
 
-This implementation adds **one optionally fitted probability layer to the existing live prediction**; it does not generate an alternate prediction, an AutoTrade order, or a shadow/challenger path. If no validated local fusion artifact exists for the **exact active promoted model hash**, the existing calibrated forecast and existing 63% model-strength rule remain unchanged.
+This implementation adds **one optionally fitted probability layer to the existing live prediction**; it does not generate an alternate prediction, an AutoTrade order, or a shadow/challenger path. If no validated local fusion artifact exists for the **exact active promoted model hash**, the existing calibrated forecast and existing >63% predicted-side probability rule remain unchanged.
 
 **The code can be merged without implying the fusion coefficients are already trained or deployed on a user's laptop.** GitHub does not have the user's active hash-sealed local model bundle or immutable forward signal/settlement data. Do not claim improved accuracy, increased coverage, or new numeric signal contributions until local fit reports `DEPLOYED_RESTART_PREDICTOR` and a new official settlement evaluation independently supports them.
 
@@ -39,7 +39,7 @@ The local supervised fit is fixed in code (no parameter search): minimum 480 eli
 
 A local fusion artifact is only activated if the final paired holdout demonstrates:
 - at least 0.0001 absolute improvement in Brier score and log loss;
-- no reduction in 63%-strength decision coverage or number of correct forecasts under the **same** coin-flip veto;
+- no reduction in live >63% predicted-side-probability decision coverage or number of correct forecasts under the **same** coin-flip veto;
 - conditional qualified accuracy no more than 0.5 percentage points lower.
 
 This is an engineering gate, **not a guarantee of future profits**. Signal selection and evaluation design should be reviewed on genuinely new data rather than repeatedly optimizing the same observations.
@@ -62,7 +62,7 @@ before retrying:
 ```powershell
 cd "$HOME\Desktop\KalshiEdge"
 $py = ".\.venv\Scripts\python.exe"
-$root = "data\bootstrap"
+$root = (& $py -c "from kalshi_edge.bootstrap.config import BootstrapSettings; print(BootstrapSettings().bootstrap_dir)").Trim()
 $hash = (& $py -c "from kalshi_edge.bootstrap.live import load_default_bundle; from kalshi_edge.bootstrap.config import BootstrapSettings; print(load_default_bundle(BootstrapSettings().bootstrap_dir).bundle_sha256)").Trim()
 $src = Join-Path $root "models\fusion\$hash.json"
 if (Test-Path $src) {
