@@ -76,13 +76,9 @@ $env:WHALE_SCANNER_ENABLED = "false"
 $env:DATABASE_URL = "sqlite:///" + ((Join-Path $Checkout "siddhabot_benchmark.sqlite3").Replace("\","/"))
 Push-Location $Checkout
 try {
-    if ($Mode -eq "Serve") {
-        Write-Host "Starting SiddhaBot's original data service (trade execution disabled)."
-        & $Python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8001
-        if ($LASTEXITCODE -ne 0) { throw "SiddhaBot service ended with code $LASTEXITCODE" }
-    } elseif ($Mode -eq "Capture") {
-        Write-Host "Capturing original SiddhaBot model at 480s. Keep KalshiEdge running separately."
-        & $Python (Join-Path $Project "scripts\siddhabot_capture.py") --root (Join-Path $Project "data\bootstrap") --repo $Checkout
-        if ($LASTEXITCODE -ne 0) { throw "SiddhaBot capture ended with code $LASTEXITCODE" }
-    }
+    # Serve and Capture are aliases, not two separate processes:
+    # upstream tick history is kept in process memory and must be shared.
+    Write-Host "Starting SiddhaBot's original data scheduler AND 480s recorder in ONE process (NO ORDERS)."
+    & $Python (Join-Path $Project "scripts\siddhabot_capture.py") --root (Join-Path $Project "data\bootstrap") --repo $Checkout
+    if ($LASTEXITCODE -ne 0) { throw "SiddhaBot benchmark service ended with code $LASTEXITCODE" }
 } finally { Pop-Location }
