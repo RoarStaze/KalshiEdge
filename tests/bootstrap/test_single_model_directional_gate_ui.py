@@ -29,6 +29,7 @@ def _final(p_yes: float, *, risk: float | None = None):
         predicted_side="ABOVE" if p_yes >= .5 else "BELOW",
         confidence=min(1., 2 * abs(p_yes - .5)),
         feed_quality=FeedQuality(healthy=True),
+        model_hash='test-sealed-model',
         brti_shadow_risk_ratio=risk,
     )
     return FinalForecastGate().evaluate(market, now_ns=DUE, prediction=prediction)
