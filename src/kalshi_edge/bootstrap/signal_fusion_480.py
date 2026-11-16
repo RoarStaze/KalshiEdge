@@ -25,7 +25,7 @@ from .final_forecast import (
 )
 from .metrics import probability_metrics
 
-POLICY = "live-480-fitted-multisignal-v2"
+POLICY = "live-480-fitted-multisignal-v3"
 FEATURE_NAMES = (
     "base_logit",
     "brti_distance_bps",
@@ -70,7 +70,7 @@ def build_signal_vector(
     volume over 60 seconds, NOT individual whale trades or trader identity.
     A separate whaletrade stream would require its own verified history.
     """
-    if not _number(model_p_yes, 0, 1) or not _number(risk_z, 0, 100):
+    if not _number(model_p_yes, 0, 1) or not _number(risk_z, 0, math.inf):
         return None
     required = {
         "brti_distance_to_strike_bps": (-3000, 3000),
@@ -197,13 +197,15 @@ def load_active_fusion(root: Path, model_hash: str) -> FusionModel | None:
             raise FusionError("oversized active fusion artifact")
         raw = path.read_bytes()
         parsed = json.loads(raw)
-        if (isinstance(parsed, dict)
-                and parsed.get("policy") == "live-480-fitted-multisignal-v1"):
+        if (isinstance(parsed, dict) and parsed.get("policy") in (
+            "live-480-fitted-multisignal-v1",
+            "live-480-fitted-multisignal-v2",
+        )):
             raise FusionError(
-                "legacy v1 fusion artifact used the obsolete 63% strength gate; "
+                "legacy v1/v2 fusion artifact is not compatible with v3 validation; "
                 "back up its models/fusion/<model_hash>.json file, move it out "
                 "of the active models/fusion directory, and re-fit with the "
-                "current 63% directional-probability validation"
+                "current full chronological holdout before reactivation"
             )
         model = FusionModel.model_validate_json(raw)
     except FusionError:
@@ -237,7 +239,7 @@ def summarize_decisions(
         raise FusionError("nonfinite evaluation probability")
     if any(y not in (0, 1) for y in actual_yes):
         raise FusionError("invalid evaluation class")
-    if any(not _number(z, 0, 100) for z in risks):
+    if any(not _number(z, 0, math.inf) for z in risks):
         raise FusionError("invalid flip risk")
     # Use the EXACT locked final-forecast decision threshold; the previous
     # v1 strength score (>=0.63, i.e. >=81.5% predicted-side probability)
@@ -262,43 +264,95 @@ class _Example:
     actual_yes: int
 
 
-def _verified_examples(root: Path, model_hash: str) -> tuple[list[_Example], dict[str, int]]:
-    """Require immutable forecast, digest-checked snapshot and official result."""
-    from .final_history import _forecasts, _load_saved_settlement, _close_ns, SettlementIntegrityError
+def _verified_examples(root: Path, model_hash: str) -> tuple[list[_Example], dict[str, Any]]:
+    """Count exact reasons same-model settled checkpoint evidence cannot be used.
+
+    Each final is counted under ONE exclusion reason. The caller gets aggregate
+    statistics only; no ticker, settlement, or point-in-time data are rewritten.
+    This also keeps valid z>100 risk observations which the original final
+    forecast schema and other BRTI forensics already accept.
+    """
+    from .final_history import (
+        _forecasts, _load_saved_settlement, _close_ns, SettlementIntegrityError,
+    )
     from .forward_feature_evidence_480 import load_forward_snapshot
-    counts = {"same_model_finals": 0, "eligible": 0, "missing_or_invalid": 0}
-    rows = []
-    seen = set()
+
+    reasons = {
+        "snapshot_missing_or_invalid": 0,
+        "snapshot_unavailable": 0,
+        "settlement_missing": 0,
+        "settlement_invalid": 0,
+        "probability_missing_or_invalid": 0,
+        "risk_missing_or_invalid": 0,
+        "signal_inputs_missing_or_invalid": 0,
+        "duplicate_ticker": 0,
+    }
+    counts: dict[str, Any] = {
+        "same_model_finals": 0, "eligible": 0, "missing_or_invalid": 0,
+        "exclusion_reasons": reasons,
+    }
+    rows: list[_Example] = []
+    seen: set[str] = set()
     for final in _forecasts(root):
-        if final.model_hash != model_hash or final.checkpoint_seconds != FINAL_CHECKPOINT_SECONDS:
+        if (final.model_hash != model_hash
+                or final.checkpoint_seconds != FINAL_CHECKPOINT_SECONDS):
             continue
         counts["same_model_finals"] += 1
         try:
             snapshot = load_forward_snapshot(root, final)
+        except (OSError, ValueError):
+            reasons["snapshot_missing_or_invalid"] += 1
+            continue
+        if snapshot.status != "FEATURES_OK":
+            reasons["snapshot_unavailable"] += 1
+            continue
+        try:
             settled = _load_saved_settlement(root, final)
-            if (settled is None or snapshot.status != "FEATURES_OK"
-                    or not _number(final.p_yes, 0, 1)
-                    or not _number(final.coin_flip_risk_z, 0, 100)
-                    or settled.fetched_ts_ns <= _close_ns(final)):
-                raise FusionError("snapshot, probability, risk or official settlement unavailable")
-            vector = build_signal_vector(
-                final.unfused_p_yes if final.unfused_p_yes is not None else final.p_yes,
-                snapshot.features, risk_z=final.coin_flip_risk_z,
-            )
-            if vector is None or snapshot.market_ticker in seen:
-                raise FusionError("required causal signal absent or duplicate")
-            seen.add(snapshot.market_ticker)
-            rows.append(_Example(
-                ticker=final.market_ticker, checkpoint_ts_ns=snapshot.prediction_ts_ns,
-                fetched_ts_ns=settled.fetched_ts_ns,
-                probability=float(final.unfused_p_yes if final.unfused_p_yes is not None else final.p_yes),
-                risk_z=float(final.coin_flip_risk_z), vector=vector,
-                actual_yes=int(settled.result == "yes"),
-            ))
-            counts["eligible"] += 1
         except (OSError, ValueError, SettlementIntegrityError):
-            counts["missing_or_invalid"] += 1
+            reasons["settlement_invalid"] += 1
+            continue
+        if settled is None:
+            reasons["settlement_missing"] += 1
+            continue
+        if settled.fetched_ts_ns <= _close_ns(final):
+            reasons["settlement_invalid"] += 1
+            continue
+        base_probability = (
+            final.unfused_p_yes if final.unfused_p_yes is not None
+            else final.p_yes
+        )
+        if (not _number(final.p_yes, 0, 1)
+                or not _number(base_probability, 0, 1)):
+            reasons["probability_missing_or_invalid"] += 1
+            continue
+        if not _number(final.coin_flip_risk_z, 0, math.inf):
+            reasons["risk_missing_or_invalid"] += 1
+            continue
+        vector = build_signal_vector(
+            float(base_probability), snapshot.features,
+            risk_z=final.coin_flip_risk_z,
+        )
+        if vector is None:
+            reasons["signal_inputs_missing_or_invalid"] += 1
+            continue
+        if snapshot.market_ticker in seen:
+            reasons["duplicate_ticker"] += 1
+            continue
+        seen.add(snapshot.market_ticker)
+        rows.append(_Example(
+            ticker=final.market_ticker,
+            checkpoint_ts_ns=snapshot.prediction_ts_ns,
+            fetched_ts_ns=settled.fetched_ts_ns,
+            probability=float(base_probability),
+            risk_z=float(final.coin_flip_risk_z),
+            vector=vector,
+            actual_yes=int(settled.result == "yes"),
+        ))
+        counts["eligible"] += 1
     rows.sort(key=lambda item: (item.checkpoint_ts_ns, item.ticker))
+    counts["missing_or_invalid"] = sum(reasons.values())
+    if counts["eligible"] + counts["missing_or_invalid"] != counts["same_model_finals"]:
+        raise FusionError("fusion readiness accounting violated")
     return rows, counts
 
 
