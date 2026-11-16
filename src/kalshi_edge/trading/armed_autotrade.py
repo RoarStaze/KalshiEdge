@@ -22,7 +22,9 @@ from .autotrade_pnl import enrich_history
 from .autotrade_scorecard import summarize_autotrade_performance
 from .profit_intelligence import build_profit_intelligence
 from .auto_edge import assess_auto_buy_edge, suggest_auto_stake
-from .autotrade_execution_audit import sanitize_quote_snapshot
+from .autotrade_execution_audit import (
+    sanitize_quote_snapshot, classify_auto_order_rejection,
+)
 from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted, ManualTrader
 from kalshi_edge.bootstrap.final_forecast import (
     FINAL_CHECKPOINT_SECONDS, MINIMUM_FINAL_CONFIDENCE,
@@ -369,7 +371,9 @@ class ArmedAutoTrader:
                 try:
                     self.history_store.record_stage_result(
                         ticker=ticker,stage=stage,status="NOT_SUBMITTED",
-                        order_id=None,fill_count=None)
+                        order_id=None,fill_count=None,
+                        rejection_reason_code=classify_auto_order_rejection(str(exc)),
+                    )
                     if first:
                         self.history_store.record_result(
                             ticker=ticker,status="NOT_SUBMITTED")
