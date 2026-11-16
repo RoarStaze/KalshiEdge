@@ -124,5 +124,7 @@ def test_train_legacy_69_percent_is_not_shown_as_current_live_threshold():
     assert 'historical strength gate' not in PAGE
     assert 'Archived 69% model-strength gate result' not in PAGE
     assert 'historical strength evaluation' in PAGE
+    assert 'info.className="training-comparison-note"' in PAGE
+    assert '.training-comparison-note{grid-column:1/-1}' in PAGE
     assert 'gatePercent+"% historical strength gate"' not in PAGE
     assert 'Math.round(gateConfidence*100):69' not in PAGE
