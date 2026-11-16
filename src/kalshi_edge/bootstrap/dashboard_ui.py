@@ -773,9 +773,17 @@ function renderTrainingSession(run,running){
    const strong=document.createElement("strong");
    strong.textContent=trainPercent(data.qualified_accuracy);
    const caption=document.createElement("small");
-   caption.textContent=String(data.correct||0)+"/"+String(data.qualified||0)+
-    " correct · "+String(data.qualified||0)+" forecasts · "+
-    trainPercent(data.coverage)+" coverage";
+   // Completed continuation runs store raw GateSnapshot field names, while
+   // earlier full-retrain snapshots store compact counts. Preserve either.
+   // Missing counts must never be presented as a fabricated 0/0.
+   const qualified=data.qualified??data.qualified_markets;
+   const correct=data.correct??data.qualified_correct;
+   const validCounts=Number.isInteger(qualified)&&Number.isInteger(correct)&&
+    correct>=0&&qualified>=correct;
+   caption.textContent=(validCounts
+    ?String(correct)+"/"+String(qualified)+" correct · "+String(qualified)+" forecasts"
+    :"Counts unavailable")+
+    " · "+trainPercent(data.coverage)+" coverage";
    card.append(h,strong,caption);comparison.append(card);
   }
  }
