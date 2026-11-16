@@ -194,7 +194,7 @@ def compare(root: Path) -> dict[str, Any]:
     }
     if len(source_models) > 1 or len(source_commits) > 1:
         result["warning"] = "SiddhaBot source/model versions changed during the scored period"
-    if not paired:
+    if labels and not paired:
         result["status"] = "NO_PAIRED_PROBABILITIES"
         result["limitation"] = "No contemporaneous settled markets with both probabilities; comparison is not yet meaningful"
     return result
