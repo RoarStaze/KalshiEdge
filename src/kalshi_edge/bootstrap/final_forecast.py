@@ -54,6 +54,10 @@ class FinalForecastRecord(BaseModel):
     directional_probability: float | None = Field(default=None, ge=0, le=1)
     p_yes: float | None = Field(default=None, ge=0, le=1)
     p_no: float | None = Field(default=None, ge=0, le=1)
+    # The optional fitted checkpoint fusion is separately hash-bound to the base bundle.
+    # Earlier historical records parse with None and retain original semantics.
+    fusion_hash: str | None = None
+    unfused_p_yes: float | None = Field(default=None, ge=0, le=1)
     # Captured at the immutable model checkpoint, not reconstructed after settlement.
     kalshi_yes_bid: float | None = Field(default=None, ge=0, le=1)
     kalshi_yes_ask: float | None = Field(default=None, ge=0, le=1)
@@ -147,6 +151,8 @@ class FinalForecastGate:
             directional_probability=directional_probability,
             p_yes=p_yes,
             p_no=p_no,
+            fusion_hash=prediction.fusion_hash,
+            unfused_p_yes=prediction.unfused_p_yes,
             coin_flip_risk_z=risk_z,
             coin_flip_assessment=assessment,
             coin_flip_policy=COIN_FLIP_POLICY,
