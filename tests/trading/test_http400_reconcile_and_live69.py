@@ -39,9 +39,12 @@ def _record(outcome="DOWN", client_order_id=CID):
 
 class ReadOnlyExchange:
     def __init__(self, *, client_id=CID, order_side="ask", count="3.74",
+                 outcome_side=None, legacy_side=None,
                  order_ticker=TICKER, exchange_online=True):
         self.client_id=client_id
         self.order_side=order_side
+        self.outcome_side=outcome_side if outcome_side is not None else ("no" if order_side=="ask" else "yes")
+        self.legacy_side=legacy_side if legacy_side is not None else self.outcome_side
         self.count=count
         self.order_ticker=order_ticker
         self.exchange_online=exchange_online
@@ -56,7 +59,11 @@ class ReadOnlyExchange:
                 "orders":[{
                     "client_order_id":self.client_id,"ticker":self.order_ticker,
                     "order_id":"verified-order-id",
-                    "side":self.order_side,
+                    # Kalshi GET /portfolio/orders V2 fields; deprecated
+                    # side means yes/no, NOT bid/ask.
+                    "book_side":self.order_side,
+                    "outcome_side":self.outcome_side,
+                    "side":self.legacy_side,
                     "initial_count_fp":"3.74",
                     "fill_count_fp":self.count,
                     "status":"executed",
@@ -80,7 +87,8 @@ class ReadOnlyExchange:
 def test_false_not_submitted_no_position_promoted_without_exact_exchange_order_identity():
     for kw in (
         {"client_id":"different-id"}, {"order_ticker":"WRONG-TICKER"},
-        {"order_side":"bid"}, {"count":"0"},
+        {"order_side":"bid"}, {"outcome_side":"yes"},
+        {"legacy_side":"yes"}, {"count":"0"},
         {"count":"3.75"},
     ):
         exchange=ReadOnlyExchange(**kw)
@@ -209,3 +217,5 @@ def test_ui_marks_unverified_exchange_rejection_never_as_skipped_or_no_trade():
     assert '?"VERIFY KALSHI":autoHistoryStatusLabel(entry.status);' in page
     assert "more than 69% predicted-direction probability" in page
     assert "Current live gate: >69%" in page
+    assert "at or below 69% are skipped" in page
+    assert "at or below 63% are skipped" not in page
