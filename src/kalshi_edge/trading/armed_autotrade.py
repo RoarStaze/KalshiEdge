@@ -275,88 +275,33 @@ class ArmedAutoTrader:
             except (KeyError, InvalidOperation, ValueError):
                 return "NO_QUOTE", {}
         if action == "BUY":
-            # The production ManualTrader has a second, mandatory
-            # fresh-quote value guard immediately before the signed POST.
-            # Legacy fake exchanges retain the historical interface.
-            value_first = callable(getattr(self.manual, "place_auto_value", None))
+            # The locked eight-minute final is the authorization signal.
+            # Record the fee-inclusive model EV for visibility, but never
+            # silently convert a directional AutoTrade into an EV-gated SKIP.
             edge = assess_auto_buy_edge(preview, confidence)
-            evidence_preview = preview
-            maker_approved = False
-            # A negative taker-ask EV is NOT sufficient to reject a
-            # cheaper maker limit. Check its independently sized EV before
-            # journaling, keeping malformed taker quotes fail-closed.
-            if (value_first and stage == "FINAL_BUY"
-                    and edge["reason"] != "INVALID_QUOTE"):
-                preflight = getattr(self.manual, "preview_auto_maker", None)
-                if callable(preflight):
-                    try:
-                        maker_plan = preflight(preview, confidence)
-                    except Exception:
-                        maker_plan = None
-                    if (isinstance(maker_plan, dict)
-                            and isinstance(maker_plan.get("edge_diagnostics"), dict)
-                            and maker_plan["edge_diagnostics"].get("approved") is True):
-                        maker_approved = True
-                        edge = maker_plan["edge_diagnostics"]
-                        # Journal the actual contemplated maker limit rather
-                        # than the rejected taker ask. This is still only a
-                        # quote; authenticated fills remain authoritative.
-                        evidence_preview = {**preview, **{
-                            key: maker_plan[key]
-                            for key in ("unit_price", "count",
-                                        "fee_estimate", "amount_estimate")
-                        }}
-            if value_first and edge["approved"] and not maker_approved:
-                sized = suggest_auto_stake(preview, confidence, amount)
-                if sized is None:
-                    edge = {**edge, "approved": False, "reason": "INSUFFICIENT_EDGE"}
-                elif sized < Decimal(amount):
-                    try:
-                        amount = format(sized, ".2f")
-                        preview = self.manual.preview(
-                            ticker, action, side, units, amount,
-                        )
-                        preview_received_at_ns = self.now_ns()
-                        if (preview.get("ticker") != ticker
-                                or preview.get("action") != action
-                                or preview.get("outcome") != side
-                                or not isinstance(preview.get("preview_id"), str)):
-                            return "NO_QUOTE", {}
-                        edge = assess_auto_buy_edge(preview, confidence)
-                    except Exception:
-                        return "NO_QUOTE", {}
             quote_evidence = sanitize_quote_snapshot(
-                evidence_preview, edge, preview_received_at_ns=preview_received_at_ns,
+                preview, edge, preview_received_at_ns=preview_received_at_ns,
             )
-            if value_first:
-                route = ("MAKER_FIRST" if maker_approved else
-                         "TAKER_IOC" if edge["approved"] else "NO_TRADE")
-                self._set(latest_opportunity={
-                    "ticker": ticker, "route": route,
-                    "reason": edge.get("reason"),
-                    "expected_net_dollars": edge.get("expected_net_dollars"),
-                    "model_win_probability": edge.get("model_win_probability"),
-                    "quote_received_at_ns": preview_received_at_ns,
-                    "estimated_only": True,
-                })
-            if edge["reason"] == "INVALID_QUOTE" or (value_first and not edge["approved"]):
+            self._set(latest_opportunity={
+                "ticker": ticker, "route": "FORECAST_ONLY_IOC",
+                "reason": "FINAL_SIGNAL_ONLY",
+                "model_edge_reason": edge.get("reason"),
+                "expected_net_dollars": edge.get("expected_net_dollars"),
+                "model_win_probability": edge.get("model_win_probability"),
+                "quote_received_at_ns": preview_received_at_ns,
+                "estimated_only": True,
+            })
+            if edge["reason"] == "INVALID_QUOTE":
                 if self.history_store is not None:
                     try:
                         self.history_store.record_quote_rejection(
-                            ticker=ticker, stage=stage, reason=edge["reason"],
+                            ticker=ticker, stage=stage, reason="INVALID_QUOTE",
                             observed_at_ns=preview_received_at_ns,
                             quote=quote_evidence,
                         )
                     except Exception:
                         LOG.warning("Rejected quote evidence unavailable", exc_info=True)
-                return ("NO_QUOTE" if edge["reason"] == "INVALID_QUOTE"
-                        else "NO_EDGE"), {"edge_diagnostics": edge}
-            if not edge["approved"]:
-                LOG.warning(
-                    "Legacy fake AutoTrade proceeding despite %s; "
-                    "production uses mandatory fresh-price gate",
-                    edge["reason"],
-                )
+                return "NO_QUOTE", {"edge_diagnostics": edge}
         else:
             quote_evidence = sanitize_quote_snapshot(
                 preview, None, preview_received_at_ns=preview_received_at_ns,
@@ -387,22 +332,28 @@ class ArmedAutoTrader:
             LOG.exception("Cannot journal order attempt")
             return "ERROR", {}
         try:
-            # Armed final orders use the fresh, budget-capped AutoTrade path.
-            # Legacy test doubles without place_auto retain their fake place.
-            value_place = getattr(self.manual, "place_auto_value", None)
+            # Final-only AutoTrade uses a fresh IOC with explicit stake and
+            # cash cap. The value-first path is preserved for other callers.
             auto_place = getattr(self.manual, "place_auto", None)
-            if action == "BUY" and callable(value_place):
-                kwargs = {
-                    "confidence": confidence,
-                    "prefer_maker": stage == "FINAL_BUY" and maker_approved,
-                }
+            value_place = getattr(self.manual, "place_auto_value", None)
+            if action == "BUY" and callable(auto_place):
+                if isinstance(self.manual, ManualTrader):
+                    result = auto_place(
+                        preview["preview_id"], ticker,
+                        client_order_id=client_order_id, cash_risk_cap=True,
+                    )
+                else:
+                    result = auto_place(preview["preview_id"], ticker)
+            elif action == "BUY" and callable(value_place):
+                # Compatibility with older test doubles that expose only
+                # value-first order execution. Production ManualTrader
+                # always takes the forecast-only place_auto path above.
+                kwargs = {"confidence": confidence, "prefer_maker": False}
                 if client_order_id is not None:
                     kwargs["client_order_id"] = client_order_id
                 result = value_place(preview["preview_id"], ticker, **kwargs)
-            elif callable(auto_place):
-                result = auto_place(preview["preview_id"],ticker)
             else:
-                result = self.manual.place(preview["preview_id"],ticker)
+                result = self.manual.place(preview["preview_id"], ticker)
         except OrderNotSubmitted as exc:
             # The manual trader has confirmed failure before POST or a
             # definite exchange rejection. Do not mislabel as UNKNOWN.
@@ -529,7 +480,7 @@ class ArmedAutoTrader:
             rejected = armed.get("last_quote_reason")
             self._finish(
                 "EXPIRED",
-                (f"No profitable entry in final quote window ({rejected}); no order sent"
+                (f"Final quote window expired ({rejected}); no order sent"
                  if rejected and not self._attempted(ticker)
                  else "Final forecast too late to execute"),
             )
@@ -568,14 +519,6 @@ class ArmedAutoTrader:
         if status == "NOT_SUBMITTED":
             self._finish("NOT_SUBMITTED",
                          "Final BUY not sent: " + result.get("reason", "pre-submit check failed"))
-            return
-        if status == "NO_EDGE":
-            # Keep the rejection cause visible instead of overwriting it
-            # with a misleading generic "too late" once the window ends.
-            reason = result.get("edge_diagnostics", {}).get("reason", "NO_EDGE")
-            self._set(state="WAITING", final_retry_after_ns=now + RETRY_DELAY_NS,
-                      last_quote_reason=reason,
-                      message=f"Waiting for positive-value quote ({reason}); no order sent")
             return
         if status == "NO_QUOTE":
             if not armed.get("continuous"):
