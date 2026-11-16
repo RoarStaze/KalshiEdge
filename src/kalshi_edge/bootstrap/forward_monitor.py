@@ -25,8 +25,18 @@ def _verified(row: Mapping[str, Any]):
     if row.get("settlement_status") != "SETTLED":
         return None
     forecast = row.get("forecast")
+    # Score originally saved, settled model probabilities even if a valid
+    # confidence or near-strike safety rule prevented issuing a forecast.
+    # Previously only old 69%-strength SKIPs were included, silently hiding
+    # the current 63%-directional and recorded BRTI veto cohorts.
+    eligible_skip_reasons = {
+        "CONFIDENCE_BELOW_69_PERCENT",
+        "CONFIDENCE_BELOW_63_PERCENT",
+        "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+        "COIN_FLIP_RISK_HIGH",
+    }
     if forecast not in ("ABOVE", "BELOW") and not (
-        forecast == "SKIP" and row.get("reason") == "CONFIDENCE_BELOW_69_PERCENT"
+        forecast == "SKIP" and row.get("reason") in eligible_skip_reasons
     ):
         return None
     ticker = row.get("market_ticker")
