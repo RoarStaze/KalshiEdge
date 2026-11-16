@@ -727,7 +727,7 @@ function renderTrainingSession(run,running){
    SPLITTING:"Split fresh markets",
    FITTING:"Continue fitted weights",
    SCORING:"Score 80 fresh markets",
-   COMPARING:"Compare at 63%",
+   COMPARING:"Compare existing models",
    PROMOTION_GATE:"Deployment gate"
   };
   const label=run.mode==="continue_live"?
@@ -752,22 +752,20 @@ function renderTrainingSession(run,running){
  const r=run.results||{};
  const candidateGate=r.candidate_gate||r.candidate_69_gate;
  const incumbentGate=r.incumbent_gate||r.incumbent_69_gate;
- const gateConfidence=Number(r.gate_confidence);
- const gatePercent=Number.isFinite(gateConfidence)&&gateConfidence>0?
-   Math.round(gateConfidence*100):69;
- if(!r.candidate_gate&&r.candidate_69_gate){
-  const note=document.createElement("small");
-  note.textContent="Archived 69% model-strength gate result. Current live SKIP rule uses predicted-direction probability above 63%; these scores cannot be relabeled.";
-  comparison.append(note);
- }
+ // Historical training results were evaluated at the policy in force
+ // when recorded, often a *strength* gate. Do not display that percentage
+ // as if it were today's directional-probability SKIP threshold.
  if(candidateGate&&incumbentGate){
+  const info=document.createElement("small");
+  info.textContent="Current live gate: >63% predicted-direction probability. Training scores below are a historical strength evaluation, not today's live-gate result.";
+  comparison.append(info);
   const metrics=[
    ["Newly trained model",candidateGate],
    ["Current live model",incumbentGate]
   ];
   for(const [title,data] of metrics){
    const card=document.createElement("div");card.className="training-metric";
-   const h=document.createElement("h4");h.textContent=title+" · "+gatePercent+"% historical strength gate";
+   const h=document.createElement("h4");h.textContent=title+" · historical strength evaluation";
    const strong=document.createElement("strong");
    strong.textContent=trainPercent(data.qualified_accuracy);
    const caption=document.createElement("small");
@@ -910,7 +908,7 @@ function renderTraining(info){
  text("training-description",running?
   "The worker is fitting and evaluating with real checkpoint data. Live predictions and trading remain unchanged until an authorized, compatible model is promoted.":
   hasActive?
-  "Continue the current model's existing fitted logistic and boosting classifiers on newly settled 480s markets. Keep structural forecasts, stacking and calibration; no full retrain. Promote only after new independent 63% confidence coverage-first validation. "+String(prospective.reason||""):
+  "Continue the current model's existing fitted logistic and boosting classifiers on newly settled 480s markets. Keep structural forecasts, stacking and calibration; no full retrain. Promote only after independent validation of the configured training policy. "+String(prospective.reason||""):
   mode==="forward_480"?
   "Train on a newly sealed 480s snapshot dataset, test on later independent markets, and report whether accuracy and coverage improved. Research specialists cannot yet replace the full live pipeline.":
   mode==="baseline"?
