@@ -30,38 +30,34 @@ The installer clones the pinned upstream into
 It does not install or modify KalshiEdge's own Python dependencies.
 An active internet connection is required. The checkout is kept out of GitHub.
 
-Launch these **in separate terminals**, alongside your existing
-`kalshiedge start` terminal:
-
-**Terminal 1 — SiddhaBot source feeds, no trading:**
-
-```powershell
-cd "$HOME\Desktop\KalshiEdge"
-.\scripts\siddhabot_benchmark.ps1 -Mode Serve
-```
-
-It runs the upstream data/feature service at `127.0.0.1:8001`. The launcher
-forces `SIMULATION_MODE=true`, `BTC_LIVE_TRADING_ENABLED=false`,
-`BTC_PAPER_TRADING_ENABLED=false`, and disables the unrelated weather
-and whale-scanner operations. Do not change these overrides. Upstream
-may need time to establish its candle, quote, and settlement-bias history.
-
-**Terminal 2 — SiddhaBot read-only inference capture:**
+Start `kalshiedge start` normally and open **one separate PowerShell terminal**
+for SiddhaBot's **combined data service + checkpoint recorder**:
 
 ```powershell
 cd "$HOME\Desktop\KalshiEdge"
 .\scripts\siddhabot_benchmark.ps1 -Mode Capture
 ```
 
-This invokes SiddhaBot's original `_build_live_features()`,
-`_load_model()`, `FEATURE_COLUMNS`, and original Platt/live calibration
-functions, then persists a **single immutable** probability per market.
-Neither process submits an order. Capture requires both the start and finish
-of upstream feature construction to lie within **five seconds** of the exact
-480-second pre-close checkpoint. Late or incomplete inputs result in no
-saved prediction. The first valid capture starts the benchmark period.
+`-Mode Serve` is an alias for `-Mode Capture`; **do not run both**.
+The combined process runs SiddhaBot's original data scheduler and 480-second
+inference at `127.0.0.1:8001` with the **same in-memory Coinbase 1Hz
+tick buffer**. Running the two parts in separate processes would alter
+SiddhaBot's original 60-second TWAP feature, invalidating a faithful
+comparison. The launcher forces `SIMULATION_MODE=true`,
+`BTC_LIVE_TRADING_ENABLED=false`, `BTC_PAPER_TRADING_ENABLED=false`,
+and disables unrelated weather and whale-scanner operations. Do not change
+these overrides. Upstream may need time to establish its candle, quote,
+and settlement-bias history.
 
-**Terminal 3 — side-by-side report:**
+SiddhaBot's original `_build_live_features()`, `_load_model()`,
+`FEATURE_COLUMNS` and Platt/live calibration functions are used in
+the same running process. Neither the capture task nor the service is
+authorized to submit orders. Only one immutable probability per market is
+saved, and the start and finish of feature construction must both lie
+within five seconds of the **480-second pre-close** checkpoint. Late or
+incomplete inputs produce no stored prediction.
+
+**At any time, in another terminal, print the side-by-side report:**
 
 ```powershell
 cd "$HOME\Desktop\KalshiEdge"
@@ -74,9 +70,10 @@ Machine-readable alternative:
 & .\.venv\Scripts\python.exe -m kalshi_edge.bootstrap.siddhabot_comparison --json
 ```
 
-The report reads KalshiEdge's existing immutable final-forecast journal and
-officially verified Kalshi settlement cache. Keep `kalshiedge start` running
-so markets continue to be recorded and settled.
+The report reads KalshiEdge's immutable final-forecast journal and officially
+verified Kalshi settlement cache. Keep KalshiEdge running so each market is
+recorded and settles; the benchmark begins with the first valid SiddhaBot
+checkpoint capture.
 
 ## Metrics and fairness
 
