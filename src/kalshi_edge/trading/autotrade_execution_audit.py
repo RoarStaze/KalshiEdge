@@ -70,7 +70,7 @@ def classify_auto_order_rejection(reason: str) -> str:
         return "DOLLAR_BUDGET_EXCEEDED"
     if msg.startswith("quote expired"):
         return "QUOTE_EXPIRED"
-    if msg.startswith(("market changed", "autotrade refreshed quote identity changed")):
+    if msg.startswith("market changed"):
         return "MARKET_CHANGED"
     if msg.startswith(("market is closing", "market is not open", "market closed")):
         return "MARKET_NOT_OPEN"
