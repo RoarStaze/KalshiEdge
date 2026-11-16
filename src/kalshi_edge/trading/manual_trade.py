@@ -451,11 +451,12 @@ class ManualTrader:
     def place_auto(self, preview_id, current_ticker, *,
                    client_order_id: str | None = None,
                    cash_risk_cap: bool = False):
-        """Final-direction IOC: fresh fee-inclusive budget, no EV selection.
+        """Final-direction IOC: fresh fee-inclusive user budget, no EV gate.
 
-        The armed final forecast is the strategy signal. The optional five
-        percent fresh-cash ceiling is mandatory for armed production calls;
-        the existing direct manual reprice API retains its earlier contract.
+        Armed final-only AutoTrade uses the expressly selected dollar amount
+        (up to the fresh available cash and executable quote). A legacy caller
+        may explicitly opt into the optional percentage cap, but the final
+        production workflow does not. Manual 1-click quote rules are separate.
         """
         return self._place(
             preview_id, current_ticker, auto_reprice_buy=True,
