@@ -5,7 +5,7 @@ No KalshiEdge training, predictor, model promotion, or trading setting is change
 #>
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet("Install","Serve","Capture","Report")]
+    [ValidateSet("Install","Serve","Capture","Report","Historical")]
     [string]$Mode
 )
 $ErrorActionPreference = "Stop"
@@ -47,6 +47,17 @@ if ($Mode -eq "Install") {
     if ($LASTEXITCODE -ne 0) { throw "SiddhaBot dependencies failed to install." }
     Write-Host "Pinned original SiddhaBot installed in isolation: $Checkout"
     Write-Host "Use separate terminals: -Mode Serve, -Mode Capture, then -Mode Report."
+    return
+}
+
+if ($Mode -eq "Historical") {
+    $EdgePython = Join-Path $Project ".venv\\Scripts\\python.exe"
+    if (-not (Test-Path $EdgePython)) { throw "Missing KalshiEdge .venv." }
+    Push-Location $Project
+    try {
+        & $EdgePython -m kalshi_edge.bootstrap.siddhabot_historical
+        if ($LASTEXITCODE -ne 0) { throw "Historical benchmark was unavailable; see reasons above." }
+    } finally { Pop-Location }
     return
 }
 
