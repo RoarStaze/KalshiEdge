@@ -83,7 +83,7 @@ execution, causal superiority, or out-of-sample training claims are made.
 
 - Previously saved KalshiEdge final forecasts and official settlements.
 - Completed and verified Binance 1s archives covering those checkpoints.
-- KalshiEdge research dependencies including XGBoost, pandas, NumPy, and
+- KalshiEdge research dependencies including XGBoost, NumPy, and
   PyArrow installed in `.venv`.
 - The original artifact's immutable source Git blob must verify.
 - **No credentials**, no orders, no model modification, no local data
