@@ -119,15 +119,16 @@ def test_noncausal_snapshot_input_cannot_be_inferred_from_future():
     assert build_signal_vector(.75, features, risk_z=1) is None
 
 
-def test_holdout_decisions_use_same_flip_veto_and_63_strength_gate():
+def test_holdout_decisions_use_same_flip_veto_and_live_63_directional_gate():
     base = [0.9, 0.9, 0.8, 0.1]
     fused = [0.95, 0.88, 0.9, 0.1]
     actual = [1, 1, 1, 0]
     risk = [1.0, 0.1, 1.0, 1.0]
     base_counts = summarize_decisions(base, actual, risk)
     fused_counts = summarize_decisions(fused, actual, risk)
-    assert base_counts["qualified"] == 2
+    assert base_counts["qualified"] == 3
     assert fused_counts["qualified"] == 3
+    assert base_counts["correct"] == 3
     assert fused_counts["correct"] == 3
 
 
