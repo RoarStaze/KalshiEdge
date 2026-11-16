@@ -12,7 +12,7 @@ from pathlib import Path
 import sqlite3
 from contextlib import closing
 
-from .autotrade_execution_audit import QUOTE_FIELDS
+from .autotrade_execution_audit import QUOTE_FIELDS, AUTO_ORDER_REJECTION_CODES
 
 
 _VALID_STATUS = frozenset(("ATTEMPTED", "FILLED", "PARTIAL", "NO_FILL", "UNKNOWN", "NOT_SUBMITTED"))
@@ -51,6 +51,7 @@ class AutoTradeHistory:
                     order_id TEXT,
                     fill_count TEXT,
                     client_order_id TEXT,
+                    rejection_reason_code TEXT,
                     PRIMARY KEY (ticker, stage)
                 )
             """)
@@ -61,6 +62,8 @@ class AutoTradeHistory:
             )}
             if "client_order_id" not in existing:
                 db.execute("ALTER TABLE auto_trade_stages ADD COLUMN client_order_id TEXT")
+            if "rejection_reason_code" not in existing:
+                db.execute("ALTER TABLE auto_trade_stages ADD COLUMN rejection_reason_code TEXT")
             for name in QUOTE_FIELDS:
                 if name not in existing:
                     kind = "INTEGER" if name == "preview_received_at_ns" else "TEXT"
@@ -191,15 +194,22 @@ class AutoTradeHistory:
 
     def record_stage_result(self, *, ticker: str, stage: str,
                             status: str, order_id: str | None,
-                            fill_count: str | None) -> None:
+                            fill_count: str | None,
+                            rejection_reason_code: str | None = None) -> None:
         if status not in ("FILLED", "PARTIAL", "NO_FILL", "UNKNOWN", "NOT_SUBMITTED"):
             raise ValueError("Invalid exchange execution status")
+        if rejection_reason_code is not None and (
+            status != "NOT_SUBMITTED"
+            or rejection_reason_code not in AUTO_ORDER_REJECTION_CODES
+        ):
+            raise ValueError("Invalid non-submission reason code")
         with closing(sqlite3.connect(self.path, timeout=5.0)) as db:
             with db:
                 row = db.execute("""
-                    UPDATE auto_trade_stages SET status=?, order_id=?, fill_count=?
+                    UPDATE auto_trade_stages SET status=?, order_id=?,
+                        fill_count=?, rejection_reason_code=?
                     WHERE ticker=? AND stage=? AND status='ATTEMPTED'
-                """, (status,order_id,fill_count,ticker,stage))
+                """, (status,order_id,fill_count,rejection_reason_code,ticker,stage))
                 if row.rowcount != 1:
                     raise ValueError("Stage already finalized or missing")
 
@@ -210,7 +220,8 @@ class AutoTradeHistory:
                        status,order_id,fill_count,client_order_id,
                        preview_received_at_ns,quoted_unit_price_dollars,
                        quoted_count_fp,quoted_fee_dollars,quoted_total_dollars,
-                       model_win_probability,model_expected_net_dollars,quote_gate
+                       model_win_probability,model_expected_net_dollars,quote_gate,
+                       rejection_reason_code
                 FROM auto_trade_stages
                 WHERE ticker=? ORDER BY attempted_at_ns,
                     CASE stage WHEN 'EARLY_BUY' THEN 0
@@ -219,7 +230,8 @@ class AutoTradeHistory:
                     WHEN 'FINAL_BUY' THEN 3 ELSE 4 END
             """, (ticker,)).fetchall()
         names = ("ticker","stage","attempted_at_ns","outcome","amount",
-                 "confidence","status","order_id","fill_count","client_order_id",*QUOTE_FIELDS)
+                 "confidence","status","order_id","fill_count","client_order_id",
+                 *QUOTE_FIELDS,"rejection_reason_code")
         return [{**dict(zip(names,r)),
                  "status":"UNKNOWN" if r[6]=="ATTEMPTED" else r[6]} for r in rows]
 
