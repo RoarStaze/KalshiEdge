@@ -32,7 +32,8 @@ from .final_history import (
 # retroactively eligible trade.
 _GATE_REASONS = {
     None, "CONFIDENCE_BELOW_69_PERCENT", "CONFIDENCE_BELOW_63_PERCENT",
-    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT", "COIN_FLIP_RISK_HIGH",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT", "COIN_FLIP_RISK_HIGH",
 }
 _EXCLUSIONS = (
     "non_480_checkpoint", "different_model", "unsettled",
