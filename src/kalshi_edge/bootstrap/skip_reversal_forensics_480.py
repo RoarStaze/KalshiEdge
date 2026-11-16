@@ -26,6 +26,7 @@ from .forward_feature_evidence_480 import load_forward_snapshot
 _POLICY = "read-only-480s-false-skips-brti-reference-v1"
 _CONFIDENCE_SKIP_REASONS = frozenset({
     "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT",
     "CONFIDENCE_BELOW_63_PERCENT",
     "CONFIDENCE_BELOW_69_PERCENT",
 })
