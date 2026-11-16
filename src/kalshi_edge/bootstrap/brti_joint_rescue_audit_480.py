@@ -34,6 +34,7 @@ _LEGACY_STRENGTH_SKIP = frozenset({
 })
 _ALL_HEALTHY_SKIPS = _LEGACY_STRENGTH_SKIP | {
     "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT",
     "COIN_FLIP_RISK_HIGH",
 }
 _BANDS = (
@@ -106,7 +107,7 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
 
     In particular, historical 69% and 63% *strength* SKIPs are not current
     live 63% *predicted-direction-probability* SKIPs. We replay the currently
-    specified 63% live probability + recorded BRTI veto as a distinct
+    specified 69% live probability + recorded BRTI veto as a distinct
     counterfactual policy on all available healthy, settled checkpoints.
     """
     root = Path(root).resolve()
@@ -310,10 +311,10 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
         "limitation": (
             "DESCRIPTIVE ONLY; previously inspected historical 480-second "
             "markets are NOT independent validation. The original 63% and 69% "
-            "SKIPs used the STRENGTH gate; current 63% checks PREDICTED-SIDE "
+            "SKIPs used the STRENGTH gate; current 69% checks PREDICTED-SIDE "
             "PROBABILITY. This is a replay on eligible saved model outputs, "
             "not new issued decisions or real trades. In particular, rescued "
-            "markets at/below the current 63% live gate must NOT be deployed. "
+            "markets at/below the current 69% live gate must NOT be deployed. "
             "Missing, stale, tied or hash-invalid historical reference data "
             "stays unavailable rather than filled with hindsight. Signal "
             "confirmation is not calibrated evidence of profitability."
@@ -334,7 +335,7 @@ def _print_report(r: dict[str, Any]) -> None:
         ("HISTORICAL STRENGTH SKIPs", "historical_strength_skips"),
         ("JOINT: z>1 AND BRTI/Binance agree", "joint_risk_gt_1_and_reference_agreement"),
         ("JOINT PLUS MODEL-SIDE AGREEMENT", "joint_plus_model_side_agreement"),
-        ("JOINT ABOVE LIVE 63% GATE", "joint_above_current_gate"),
+        ("JOINT ABOVE LIVE 69% GATE", "joint_above_current_gate"),
         ("JOINT BELOW OR EQUAL TO LIVE GATE", "joint_at_or_below_current_gate"),
     ):
         item = r[key]
@@ -342,7 +343,7 @@ def _print_report(r: dict[str, Any]) -> None:
               f'wrong={item["wrong"]}, accuracy={_pct(item["accuracy"])}')
     gate = r["current_63_gate_counterfactual"]
     print(
-        f'LIVE 63% REPLAY: qualified={gate["qualified"]}, skipped={gate["skipped"]}, '
+        f'LIVE 69% REPLAY: qualified={gate["qualified"]}, skipped={gate["skipped"]}, '
         f'correct={gate["correct"]}, wrong={gate["incorrect"]}, '
         f'accuracy={_pct(gate["accuracy"])}, coverage={_pct(gate["coverage"])}'
     )
