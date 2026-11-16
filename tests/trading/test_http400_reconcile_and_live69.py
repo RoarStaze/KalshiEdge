@@ -169,3 +169,42 @@ def test_69_percent_gate_is_on_predicted_side_probability_not_strength():
     assert decision(.69).reason=="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
     assert decision(.691).forecast=="ABOVE"
     assert decision(.81).forecast=="ABOVE"  # 62% strength does NOT veto a valid >69% probability
+
+
+def test_new_training_gate_uses_predicted_side_probability_not_legacy_strength():
+    from kalshi_edge.bootstrap.evaluate import checkpoint_gate_snapshot
+    labels=[1,1,1,0]
+    probabilities=[.68,.69,.70,.30]
+    report=checkpoint_gate_snapshot(
+        labels,probabilities,
+        minimum_confidence=.69,
+        gate_kind="predicted_side_probability",
+    )
+    assert report.gate_kind=="predicted_side_probability"
+    assert report.qualified_markets==2
+    assert report.qualified_correct==2
+
+
+def test_new_paired_lockbox_counts_use_same_strict_69_probability_as_final():
+    from kalshi_edge.bootstrap.promotion_audit import paired_480_evidence
+    market=["KXBTC15M-TEST-"+str(i) for i in range(4)]
+    report=paired_480_evidence(
+        market,[1,1,1,0],
+        [.68,.69,.70,.30],[.69,.69,.69,.31],
+        minimum_confidence=.69,gate_kind="predicted_side_probability",
+        resamples=5,
+    )
+    assert report["gate_kind"]=="predicted_side_probability"
+    assert report["candidate_qualified"]==2
+    assert report["incumbent_qualified"]==0
+
+
+def test_ui_marks_unverified_exchange_rejection_never_as_skipped_or_no_trade():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
+    page=integrate_manual_trade(PAGE)
+    assert 'case "NOT_SUBMITTED":return "NOT SENT"' in page
+    assert 'entry.reconciliation_status==="EXCHANGE_ORDER_VERIFIED"' in page
+    assert '?"VERIFY KALSHI":autoHistoryStatusLabel(entry.status);' in page
+    assert "more than 69% predicted-direction probability" in page
+    assert "Current live gate: >69%" in page
