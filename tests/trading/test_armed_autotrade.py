@@ -205,10 +205,10 @@ def test_simultaneous_ticks_submit_once(env):
     assert len(manual.orders)==1
 
 
-def test_auto_trade_follows_live_63_percent_final_boundary(env):
+def test_auto_trade_follows_live_69_percent_legacy_strength_boundary(env):
     _,feed,manual,engine=env
     engine.arm("0.25",start_worker=False)
-    feed.lock("ABOVE",confidence=.63)
+    feed.lock("ABOVE",confidence=.69)
     engine.tick()
     assert manual.previews==[(TICKER,"BUY","UP","DOLLARS","0.25")]
     assert manual.orders==[("preview-once",TICKER)]
