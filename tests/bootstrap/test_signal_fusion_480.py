@@ -119,13 +119,53 @@ def test_noncausal_snapshot_input_cannot_be_inferred_from_future():
     assert build_signal_vector(.75, features, risk_z=1) is None
 
 
-def test_holdout_decisions_use_same_flip_veto_and_63_strength_gate():
+def test_holdout_decisions_use_same_flip_veto_and_live_63_directional_gate():
     base = [0.9, 0.9, 0.8, 0.1]
     fused = [0.95, 0.88, 0.9, 0.1]
     actual = [1, 1, 1, 0]
     risk = [1.0, 0.1, 1.0, 1.0]
     base_counts = summarize_decisions(base, actual, risk)
     fused_counts = summarize_decisions(fused, actual, risk)
-    assert base_counts["qualified"] == 2
+    assert base_counts["qualified"] == 3
     assert fused_counts["qualified"] == 3
+    assert base_counts["correct"] == 3
     assert fused_counts["correct"] == 3
+
+
+def test_fusion_holdout_uses_live_directional_probability_gate_not_strength_gate():
+    """This must disagree with the obsolete strength-based acceptance metric."""
+    probabilities = [0.640001, 0.359999, 0.63, 0.37, 0.90, 0.75]
+    actual = [1, 0, 1, 0, 1, 1]
+    risk = [1.0, 1.0, 1.0, 1.0, 0.20, 1.0]
+    summary = summarize_decisions(probabilities, actual, risk)
+
+    # 0.640001 and 0.359999 qualify; equality at 0.63 and its NO
+    # complement (0.37) do not; high coin-flip risk vetoes 0.90.
+    # The final 0.75 is valid under the real >0.63 directional gate.
+    assert summary["qualified"] == 3
+    assert summary["correct"] == 3
+    assert summary["coverage"] == pytest.approx(0.5)
+
+
+def test_fusion_new_artifacts_mark_the_current_policy_version():
+    from kalshi_edge.bootstrap.signal_fusion_480 import POLICY
+
+    assert POLICY == "live-480-fitted-multisignal-v2"
+    assert _artifact().policy == POLICY
+
+
+def test_legacy_v1_fusion_artifact_is_rejected_after_policy_gate_changes(tmp_path: Path):
+    """A correctly signed old artifact still used an invalid live acceptance gate."""
+    import hashlib
+    import json
+
+    current = _artifact().model_dump(mode="json")
+    current["policy"] = "live-480-fitted-multisignal-v1"
+    content_to_sign = {key: value for key, value in current.items() if key != "sha256"}
+    encoded = json.dumps(content_to_sign, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    current["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    path = tmp_path / "models" / "fusion" / ("a"*64 + ".json")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(current), encoding="utf-8")
+    with pytest.raises(FusionError, match="legacy|obsolete|v1"):
+        load_active_fusion(tmp_path, "a"*64)
