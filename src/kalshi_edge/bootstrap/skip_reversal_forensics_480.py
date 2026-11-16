@@ -72,7 +72,7 @@ def _with_accuracy(group: dict[str, Any]) -> dict[str, Any]:
 
 
 def _risk_bucket(z: object) -> str:
-    if not _number(z, minimum=0, maximum=100):
+    if not _number(z, minimum=0, maximum=math.inf):
         return "unavailable"
     if z <= COIN_FLIP_MAX_RISK_Z:
         return "at_or_below_0_20"
@@ -248,7 +248,7 @@ def analyze_skip_reversal_forensics(
             "trades_executed": False,
             "model_retraining": False,
             "live_gate_changed": False,
-            "btri_or_binance_prices_backfilled": False,
+            "brti_or_binance_prices_backfilled": False,
         },
         "limitation": (
             "DESCRIPTIVE ONLY. Counterfactual correct/wrong counts for SKIPs "
