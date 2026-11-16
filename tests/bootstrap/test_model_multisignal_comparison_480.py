@@ -336,9 +336,10 @@ def test_three_way_text_json_and_no_model_mutation(monkeypatch,tmp_path,capsys):
     assert main(args)==0
     table=capsys.readouterr().out
     assert "MODEL vs SIGNALS ONLY vs COMBINED" in table
-    assert table.count("signal_only")==8
-    assert table.count("multisignal")==8
-    assert table.count("model")==8
+    data_lines=[line.split() for line in table.splitlines() if line.lstrip().startswith(("63%","68%","70%","73%","75%","78%","80%","82%"))]
+    assert sum(fields[1]=="signal_only" for fields in data_lines)==8
+    assert sum(fields[1]=="multisignal" for fields in data_lines)==8
+    assert sum(fields[1]=="model" for fields in data_lines)==8
     assert main(args+["--json"])==0
     j=json.loads(capsys.readouterr().out)
     assert "signal_only" in j["predictors"]
