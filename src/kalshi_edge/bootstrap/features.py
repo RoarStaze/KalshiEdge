@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timezone
-from typing import Literal, Sequence
+from typing import Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,77 @@ NS = 1_000_000_000
 _RETURN_HORIZONS = (5, 10, 15, 30, 60, 120, 300, 600)
 _VOL_HORIZONS = (15, 30, 60, 180, 300, 900)
 _FLOW_HORIZONS = (15, 30, 60, 300)
+
+# Deterministic interactions computed from SAME-checkpoint, existing Binance
+# features. This is a single-classifier feature transform, not another model,
+# extra probability vote, BRTI substitute or prospective fusion.
+CAUSAL_INTERACTION_POLICY = "btc-flow-reversal-interactions-v1"
+CAUSAL_INTERACTION_SOURCE_NAMES = (
+    "btc_return_15s_available", "btc_return_60s_available",
+    "btc_return_15s", "btc_realized_vol_60s",
+    "btc_base_volume_15s", "btc_base_volume_60s",
+    "btc_taker_buy_imbalance_15s", "btc_taker_buy_imbalance_60s",
+    "btc_normalized_distance",
+)
+CAUSAL_INTERACTION_FEATURE_NAMES = (
+    "btc_interaction_available",
+    "btc_signed_taker_volume_60s",
+    "btc_flow_imbalance_change_15v60",
+    "btc_volume_burst_15v60",
+    "btc_near_strike_signed_flow_60s",
+    "btc_near_strike_reversal_15s",
+)
+
+
+def derive_causal_interactions(values: Mapping[str, float]) -> dict[str, float]:
+    """Add causal multi-signal interactions to ONE existing trained classifier.
+
+    The source is already derived at the exact forecast checkpoint; no future
+    candles, outcome, label, BRTI or individual whale-trade identities are read.
+    Missing *source columns* mean the dataset is incompatible and cannot be
+    augmented. Invalid/unavailable source values explicitly map to zero with
+    an availability flag, never to fabricated directional conviction.
+
+    Re-deriving a saved historical feature row is idempotent and gives live /
+    historical parity without rebuilding the >30k-market verified Parquet.
+    """
+    if not all(name in values for name in CAUSAL_INTERACTION_SOURCE_NAMES):
+        return {}
+    zero = {name: 0.0 for name in CAUSAL_INTERACTION_FEATURE_NAMES}
+    if any(type(values[name]) not in (float, int)
+           or not math.isfinite(values[name])
+           for name in CAUSAL_INTERACTION_SOURCE_NAMES):
+        return zero
+    if (
+        values["btc_return_15s_available"] != 1.0
+        or values["btc_return_60s_available"] != 1.0
+        or not -1 <= values["btc_taker_buy_imbalance_15s"] <= 1
+        or not -1 <= values["btc_taker_buy_imbalance_60s"] <= 1
+        or values["btc_base_volume_15s"] < 0
+        or values["btc_base_volume_60s"] <= 0
+        or values["btc_realized_vol_60s"] <= 0
+        or abs(values["btc_return_15s"]) > 1
+    ):
+        return zero
+    dist = max(-100., min(100., float(values["btc_normalized_distance"])))
+    signed = 1.0 if dist > 0 else -1.0 if dist < 0 else 0.0
+    r15 = float(values["btc_return_15s"])
+    sigma = float(values["btc_realized_vol_60s"])
+    vol15 = float(values["btc_base_volume_15s"])
+    vol60 = float(values["btc_base_volume_60s"])
+    imbalance15 = float(values["btc_taker_buy_imbalance_15s"])
+    imbalance60 = float(values["btc_taker_buy_imbalance_60s"])
+    return {
+        "btc_interaction_available": 1.,
+        "btc_signed_taker_volume_60s": max(-100_000., min(100_000., vol60 * imbalance60)),
+        "btc_flow_imbalance_change_15v60": imbalance15 - imbalance60,
+        "btc_volume_burst_15v60": min(8., 4. * vol15 / vol60),
+        "btc_near_strike_signed_flow_60s": imbalance60 / (1. + abs(dist)),
+        "btc_near_strike_reversal_15s": max(
+            -8., min(8., -signed * r15 / (sigma * math.sqrt(15.)))
+        ),
+    }
+
 
 
 class FeatureConstructionError(RuntimeError):
@@ -247,6 +318,10 @@ def build_feature_row(
     if last_candle:
         source_max["kalshi_candles"] = last_candle.end_ts_ns
 
+    # Same pure transform is also applied when loading older, already-verified
+    # Parquet rows for training. Active model bundles only use these fields
+    # after independent fit and promotion; old bundles remain unchanged.
+    features.update(derive_causal_interactions(features))
     market_date = datetime.fromtimestamp(label.open_ts_ns / NS, tz=timezone.utc).date().isoformat()
     return FeatureRow(
         market_ticker=label.ticker,
