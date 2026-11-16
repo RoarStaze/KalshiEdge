@@ -260,7 +260,7 @@ SCRIPT = r"""
    FILLED:"Bought · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
    NO_FILL:"No shares filled · no automatic retry",
-   SKIPPED:autoCurrent.message||"Final forecast SKIP or predicted-direction probability at/below 63% · no trade",
+   SKIPPED:autoCurrent.message||"Final forecast SKIP or predicted-direction probability at/below 69% · no trade",
    EXPIRED:autoCurrent.message||"Market changed or final forecast too late · no trade",
    CANCELLED:"AutoTrade cancelled. Nothing submitted.",
    ERROR:"AutoTrade stopped before order · check live market and quote",
