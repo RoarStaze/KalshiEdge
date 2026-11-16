@@ -108,7 +108,7 @@ def test_full_continuation_flow_retains_sha_sealed_checkpoint_after_rejection(tm
     def finalize(root,experiment_path,report):
         assert report.requires_retrain_480_gate
         assert report.decision_metrics["retrain_480_candidate"].total_markets==80
-        assert report.decision_metrics["retrain_480_candidate"].minimum_confidence==.63
+        assert report.decision_metrics["retrain_480_candidate"].minimum_confidence==.69
         assert report.dataset_sha256 != active.input_hashes["derived/features.parquet"]
         calls.append((experiment_path, report))
         return SimpleNamespace(

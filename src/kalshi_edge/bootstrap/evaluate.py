@@ -36,10 +36,10 @@ REQUIRED_ABLATIONS = (
 )
 
 LEGACY_PROMOTION_RULE_ID = "kalshi-lockbox-v2:nondegenerate-prior-both-nonworse-one-improves-ece-bounded"
-PROMOTION_RULE_ID = "kalshi-lockbox-v3:coverage-first-63pct-bounded-accuracy-and-probability-loss"
+PROMOTION_RULE_ID = "kalshi-lockbox-v4:coverage-first-69pct-bounded-accuracy-and-probability-loss"
 # These tolerances are prospective policy choices, not tuned on the already
 # inspected Model 1/Model 2 holdout. Applies to fresh full retrains only.
-RETRAIN_LIVE_GATE_CONFIDENCE = 0.63
+RETRAIN_LIVE_GATE_CONFIDENCE = 0.69
 RETRAIN_MAX_QUALIFIED_ACCURACY_DROP = 0.005  # 0.5 percentage points
 RETRAIN_MAX_OVERALL_ACCURACY_DROP = 0.01  # 1.0 percentage point
 RETRAIN_MAX_BRIER_DROP = 0.005
@@ -79,6 +79,7 @@ class GateSnapshot(BaseModel):
     qualified_markets: int = Field(ge=0)
     qualified_correct: int = Field(ge=0)
     minimum_confidence: float = Field(default=.69, ge=0, le=1)
+    gate_kind: str = "model_strength"  # archived default for old reports
 
     @model_validator(mode="after")
     def valid_counts(self) -> "GateSnapshot":
@@ -104,6 +105,7 @@ class GateSnapshot(BaseModel):
 def checkpoint_gate_snapshot(
     labels: Sequence[int], probabilities: Sequence[float],
     *, minimum_confidence: float = .69,
+    gate_kind: str = "model_strength",
 ) -> GateSnapshot:
     """Evaluate a frozen confidence threshold on matched verified outcomes."""
     if (type(minimum_confidence) not in (int, float)
@@ -111,13 +113,18 @@ def checkpoint_gate_snapshot(
             or not 0 <= minimum_confidence <= 1
             or len(labels) == 0 or len(labels) != len(probabilities)):
         raise ValueError("confidence gate requires equal nonempty matched data")
+    if gate_kind not in ("model_strength", "predicted_side_probability"):
+        raise ValueError("unknown confidence gate semantics")
     qualified = correct = 0
     for label, raw in zip(labels, probabilities):
         if (type(label) is not int or label not in (0, 1)
                 or type(raw) not in (float, int) or not math.isfinite(raw)
                 or not 0 <= raw <= 1):
             raise ValueError("invalid label or probability for confidence gate")
-        if 2 * abs(raw - .5) >= minimum_confidence:
+        eligible = (max(raw,1-raw) > minimum_confidence
+                    if gate_kind == "predicted_side_probability"
+                    else 2 * abs(raw-.5) >= minimum_confidence)
+        if eligible:
             qualified += 1
             correct += int((raw >= .5) == bool(label))
     return GateSnapshot(
@@ -125,6 +132,7 @@ def checkpoint_gate_snapshot(
         qualified_markets=qualified,
         qualified_correct=correct,
         minimum_confidence=float(minimum_confidence),
+        gate_kind=gate_kind,
     )
 
 
@@ -380,7 +388,7 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
 
     Old v2 reports are evaluated ONLY with their original strict gate.
     V3 full-retrain candidates instead maximize forecast coverage at the
-    actual 63% live gate, while bounding every allowed quality degradation.
+    actual 69% live gate, while bounding every allowed quality degradation.
     Non-retrain/volatility paths retain the established strict policy.
     """
     if report.comparison_rule == LEGACY_PROMOTION_RULE_ID:
@@ -418,12 +426,14 @@ def promotion_decision(report: BootstrapEvaluationReport) -> PromotionDecision:
         and cand_gate.total_markets >= 80
         and abs(cand_gate.minimum_confidence - RETRAIN_LIVE_GATE_CONFIDENCE) <= 1e-9
         and abs(inc_gate.minimum_confidence - RETRAIN_LIVE_GATE_CONFIDENCE) <= 1e-9
+        and cand_gate.gate_kind == "predicted_side_probability"
+        and inc_gate.gate_kind == "predicted_side_probability"
     )
     if not valid_gate:
         if "RETRAIN_480_CONFIDENCE_GATE_MISMATCH" not in reasons:
             reasons.append("RETRAIN_480_CONFIDENCE_GATE_MISMATCH")
     else:
-        # Unlike v2, the live gate is 63%. Explicitly enforce a strict
+        # Unlike v2, the live gate is 69%. Explicitly enforce a strict
         # coverage improvement; the v2 69% branch is intentionally bypassed.
         assert cand_gate is not None and inc_gate is not None
         if cand_gate.qualified_markets <= inc_gate.qualified_markets:
@@ -1127,15 +1137,18 @@ def run_lockbox_evaluation(
                 })
                 gate_reports[prefix + "candidate"] = checkpoint_gate_snapshot(
                     labels, candidate_p, minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
+                    gate_kind="predicted_side_probability",
                 )
                 gate_reports[prefix + "incumbent"] = checkpoint_gate_snapshot(
                     labels, incumbent_p, minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
+                    gate_kind="predicted_side_probability",
                 )
                 from . import promotion_audit
                 paired_480_audit = promotion_audit.paired_480_evidence(
                     [row.market_ticker for row in horizon_rows],
                     labels, candidate_p, incumbent_p,
                     minimum_confidence=RETRAIN_LIVE_GATE_CONFIDENCE,
+                    gate_kind="predicted_side_probability",
                 )
             report = report.model_copy(update={
                 "metrics": enriched, "decision_metrics": gate_reports,

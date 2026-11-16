@@ -155,6 +155,93 @@ def _pages(client, path: str, *, params: dict, field: str) -> list[dict]:
     raise ValueError("Exchange pagination incomplete; do not show profit")
 
 
+
+def _recover_exchange_confirmed_orders(entries: list[dict], client) -> list[dict]:
+    """Read-only recovery of locally UNKNOWN/NOT_SUBMITTED orders.
+
+    Never attribute an unrelated manual trade merely because the same BTC
+    ticker has a fill. Exchange order MUST match the journal's exact
+    pre-POST client_order_id, ticker, bid/ask direction and bounded size.
+    Exchange account GET only; no order requests or durable journal rewrite.
+    """
+    rows = [dict(row) for row in entries]
+    uncertain = []
+    for row in rows:
+        stages = row.get("stages")
+        if not isinstance(stages, list):
+            continue
+        row["stages"] = [dict(stage) for stage in stages]
+        for stage in row["stages"]:
+            cid = stage.get("client_order_id")
+            if (stage.get("status") in ("NOT_SUBMITTED", "UNKNOWN", "ATTEMPTED")
+                    and isinstance(cid, str) and 1 <= len(cid) <= 64
+                    and isinstance(row.get("ticker"), str)):
+                uncertain.append((row, stage))
+                row["reconciliation_status"] = "EXCHANGE_NOT_VERIFIED"
+    if not uncertain or not callable(getattr(client, "get", None)):
+        return rows
+
+    try:
+        # GET is explicitly read-only. The orders endpoint includes executed
+        # orders, unlike listing only currently resting orders. A page cap
+        # prevents an incomplete history from being silently treated as proof.
+        orders = _pages(client, "/portfolio/orders",
+                        params={"limit": 1000}, field="orders")
+    except Exception:
+        return rows
+    by_id = defaultdict(list)
+    for order in orders:
+        if isinstance(order, dict) and isinstance(order.get("client_order_id"), str):
+            by_id[order["client_order_id"]].append(order)
+    for row, stage in uncertain:
+        matching = by_id.get(stage["client_order_id"], [])
+        if len(matching) != 1:
+            continue
+        order = matching[0]
+        ticker = row["ticker"]
+        outcome = stage.get("outcome")
+        # The GET order's legacy `side` field is yes/no, NOT bid/ask.
+        # Modern Kalshi order records use two canonical direction fields.
+        # Require both to agree with the journaled AutoTrade BUY direction.
+        expected_book = "bid" if outcome == "UP" else "ask" if outcome == "DOWN" else None
+        expected_outcome = "yes" if outcome == "UP" else "no" if outcome == "DOWN" else None
+        if (order.get("ticker") != ticker
+                or order.get("book_side") != expected_book
+                or order.get("outcome_side") != expected_outcome
+                or (order.get("side") is not None
+                    and order.get("side") != expected_outcome)
+                or stage.get("stage") not in (
+                    "EARLY_BUY", "EARLY_BUY_2", "FINAL_BUY", "FINAL_BUY_2"
+                )):
+            continue
+        order_id = order.get("order_id")
+        if not isinstance(order_id, str) or not order_id:
+            continue
+        try:
+            fill = _positive(
+                order.get("fill_count_fp", order.get("fill_count"))
+            )
+            initial = _positive(
+                order.get("initial_count_fp", order.get("initial_count"))
+            )
+            if fill > initial:
+                continue
+            original_quote_count = stage.get("quoted_count_fp")
+            if original_quote_count is not None and (
+                initial > _positive(original_quote_count)
+            ):
+                continue
+        except (ValueError, TypeError, InvalidOperation):
+            continue
+        stage.update(
+            status="FILLED" if fill == initial else "PARTIAL",
+            order_id=order_id,
+            fill_count=_four(fill),
+        )
+        row["reconciliation_status"] = "EXCHANGE_ORDER_VERIFIED"
+    return rows
+
+
 def _calculate(contracts, stages, fills, result: str, ticker: str) -> str:
     if result not in ("yes", "no"):
         raise ValueError("Market not conclusively settled")
@@ -297,7 +384,12 @@ def enrich_history(
     """
     result = []
     candidates = {}
-    for original in entries:
+    # Inspect exchange records before interpreting a local 400/UNKNOWN as
+    # evidence of non-execution. This only changes READ-ONLY UI evidence.
+    # A matching order ID still requires independently verified fills and
+    # official settlement before publishing any realized profit or loss.
+    recovered_entries = _recover_exchange_confirmed_orders(entries, client)
+    for original in recovered_entries:
         row = dict(original)
         row.update(max_payout_dollars=None, realized_pnl_dollars=None,
                    pnl_status="UNAVAILABLE", pnl_reason=None,

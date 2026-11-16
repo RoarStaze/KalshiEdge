@@ -203,7 +203,7 @@ def test_no_data_writes_and_table_json_cli(tmp_path,capsys):
     shown=capsys.readouterr().out
     assert "JOINT BRTI RESCUE" in shown
     assert "HISTORICAL STRENGTH SKIPs" in shown
-    assert "LIVE 63% REPLAY" in shown
+    assert "ARCHIVED 63% REPLAY" in shown
     assert main(args+["--json"])==0
     report=json.loads(capsys.readouterr().out)
     assert report["matched_settled_markets"]==10

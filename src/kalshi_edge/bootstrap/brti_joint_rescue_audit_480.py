@@ -19,7 +19,6 @@ from .final_forecast import (
     COIN_FLIP_MAX_RISK_Z,
     FINAL_CHECKPOINT_SECONDS,
     MAX_CHECKPOINT_LATENESS_NS,
-    MINIMUM_FINAL_DIRECTIONAL_PROBABILITY,
 )
 from .final_history import (
     SettlementIntegrityError, _close_ns, _forecasts, _load_saved_settlement,
@@ -28,12 +27,15 @@ from .forward_feature_evidence_480 import load_forward_snapshot
 
 NS = 1_000_000_000
 _POLICY = "read-only-joint-brti-legacy-rescue-480-v1"
+# This older read-only report was predeclared at 63%; NEVER relabel it as a live 69% replay.
+_ARCHIVED_REPLAY_GATE = 0.63
 _LEGACY_STRENGTH_SKIP = frozenset({
     "CONFIDENCE_BELOW_69_PERCENT",
     "CONFIDENCE_BELOW_63_PERCENT",
 })
 _ALL_HEALTHY_SKIPS = _LEGACY_STRENGTH_SKIP | {
     "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT",
     "COIN_FLIP_RISK_HIGH",
 }
 _BANDS = (
@@ -106,7 +108,7 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
 
     In particular, historical 69% and 63% *strength* SKIPs are not current
     live 63% *predicted-direction-probability* SKIPs. We replay the currently
-    specified 63% live probability + recorded BRTI veto as a distinct
+    originally specified 63% replay probability + recorded BRTI veto as a distinct
     counterfactual policy on all available healthy, settled checkpoints.
     """
     root = Path(root).resolve()
@@ -210,7 +212,7 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
 
         z = final.coin_flip_risk_z
         veto = _number(z, 0., COIN_FLIP_MAX_RISK_Z)
-        current_allowed = conf > MINIMUM_FINAL_DIRECTIONAL_PROBABILITY and not veto
+        current_allowed = conf > _ARCHIVED_REPLAY_GATE and not veto
         if current_allowed:
             current["qualified"] += 1
             current["correct" if correct else "incorrect"] += 1
@@ -220,7 +222,7 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
         else:
             current["skipped"] += 1
             # Live gate checks probability first, then the BRTI veto.
-            current["skipped_probability" if conf <= MINIMUM_FINAL_DIRECTIONAL_PROBABILITY
+            current["skipped_probability" if conf <= _ARCHIVED_REPLAY_GATE
                     else "skipped_recorded_flip_risk"] += 1
 
         reference_type = _reference_alignment(root, final, side)
@@ -310,10 +312,10 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
         "limitation": (
             "DESCRIPTIVE ONLY; previously inspected historical 480-second "
             "markets are NOT independent validation. The original 63% and 69% "
-            "SKIPs used the STRENGTH gate; current 63% checks PREDICTED-SIDE "
+            "SKIPs used the STRENGTH gate; archived 63% replay checks PREDICTED-SIDE "
             "PROBABILITY. This is a replay on eligible saved model outputs, "
             "not new issued decisions or real trades. In particular, rescued "
-            "markets at/below the current 63% live gate must NOT be deployed. "
+            "markets at/below the archived 63% replay gate must NOT be deployed. "
             "Missing, stale, tied or hash-invalid historical reference data "
             "stays unavailable rather than filled with hindsight. Signal "
             "confirmation is not calibrated evidence of profitability."
@@ -334,7 +336,7 @@ def _print_report(r: dict[str, Any]) -> None:
         ("HISTORICAL STRENGTH SKIPs", "historical_strength_skips"),
         ("JOINT: z>1 AND BRTI/Binance agree", "joint_risk_gt_1_and_reference_agreement"),
         ("JOINT PLUS MODEL-SIDE AGREEMENT", "joint_plus_model_side_agreement"),
-        ("JOINT ABOVE LIVE 63% GATE", "joint_above_current_gate"),
+        ("JOINT ABOVE ARCHIVED 63% GATE", "joint_above_current_gate"),
         ("JOINT BELOW OR EQUAL TO LIVE GATE", "joint_at_or_below_current_gate"),
     ):
         item = r[key]
@@ -342,7 +344,7 @@ def _print_report(r: dict[str, Any]) -> None:
               f'wrong={item["wrong"]}, accuracy={_pct(item["accuracy"])}')
     gate = r["current_63_gate_counterfactual"]
     print(
-        f'LIVE 63% REPLAY: qualified={gate["qualified"]}, skipped={gate["skipped"]}, '
+        f'ARCHIVED 63% REPLAY: qualified={gate["qualified"]}, skipped={gate["skipped"]}, '
         f'correct={gate["correct"]}, wrong={gate["incorrect"]}, '
         f'accuracy={_pct(gate["accuracy"])}, coverage={_pct(gate["coverage"])}'
     )

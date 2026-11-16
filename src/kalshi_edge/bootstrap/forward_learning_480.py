@@ -22,14 +22,14 @@ from typing import Any, Callable, Mapping, Sequence
 from .forward_feature_evidence_480 import _joined
 from .frozen_specialist_480 import fit_frozen_specialist, score_frozen_specialist
 from .final_history import _forecasts
-from .final_forecast import MINIMUM_FINAL_CONFIDENCE
+from .final_forecast import MINIMUM_FINAL_DIRECTIONAL_PROBABILITY
 from .metrics import probability_metrics
 from .specialist_480 import MIN_TRAIN_MARKETS, select_eight_minute_rows
 from .types import FeatureRow
 
 MIN_VALIDATION_MARKETS = 40
 REQUIRED_MARKETS = MIN_TRAIN_MARKETS + MIN_VALIDATION_MARKETS
-CONFIDENCE_GATE = MINIMUM_FINAL_CONFIDENCE
+CONFIDENCE_GATE = MINIMUM_FINAL_DIRECTIONAL_PROBABILITY  # strict predicted-side probability
 
 
 def _eligible(rows: Sequence[FeatureRow]) -> tuple[list[FeatureRow], dict[str, int]]:
@@ -126,7 +126,7 @@ def _gate(labels: Sequence[int], probs: Sequence[float], *,
         if (issued is not None and not issued[i]) or (
             issued is None and (
                 (forbidden is not None and forbidden[i])
-                or 2 * abs(p - 0.5) < CONFIDENCE_GATE
+                or max(p,1-p) <= CONFIDENCE_GATE
             )
         ):
             continue
@@ -224,7 +224,7 @@ def evaluate_forward_candidate(
     incumbent = [x[2] for x in paired]
     veto = [x[3] for x in paired]
     # Issuance was recorded under potentially older (69%) live settings.
-    # For a fair 63% counterfactual, re-gate BOTH saved probability streams.
+    # For a fair strict >69% probability counterfactual, re-gate BOTH saved streams.
     candidate_score = probability_metrics(labels, candidate)
     incumbent_score = probability_metrics(labels, incumbent)
     candidate_gate = _gate(labels, candidate, forbidden=veto)

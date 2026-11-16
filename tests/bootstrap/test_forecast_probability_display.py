@@ -23,8 +23,8 @@ def test_trade_hero_uses_locked_or_live_directional_probability_not_strength() -
 
 
 def test_trade_copy_explains_actual_63pct_strength_gate_and_coinflip_veto() -> None:
-    assert MINIMUM_FINAL_CONFIDENCE == 0.63
-    assert "63% predicted-direction probability" in PAGE
+    assert MINIMUM_FINAL_CONFIDENCE == 0.69
+    assert "69% predicted-direction probability" in PAGE
     assert "81.5% predicted-side probability" not in PAGE
     assert "69% produce SKIP" not in PAGE
     assert "near-strike" in PAGE

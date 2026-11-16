@@ -116,7 +116,7 @@ def test_real_manual_trader_executes_final_up_despite_negative_model_edge(tmp_pa
     clock[0] = checkpoint + NS
     feed["final_forecast"] = {
         "market_ticker": ticker, "scheduled_ts_ns": checkpoint,
-        "forecast": "ABOVE", "confidence": 0.68,
+        "forecast": "ABOVE", "confidence": 0.70,
     }
 
     bot.tick()

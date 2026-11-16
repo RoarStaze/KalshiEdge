@@ -97,9 +97,9 @@ def test_real_routes_and_existing_api_remain_available(tmp_path):
         thread.join(timeout=3)
 
 
-def test_live_trade_page_displays_63_percent_confidence_gate():
+def test_live_trade_page_displays_69_percent_probability_gate():
     page=render_site_page(integrate_manual_trade(integrate_round_price_hero(PAGE)),"trade")
-    assert "63% predicted-direction probability" in page
+    assert "69% predicted-direction probability" in page
     assert "69% confidence" not in page
     assert "81.5% predicted-side probability" not in page
 
@@ -118,9 +118,9 @@ def test_train_panels_share_same_grid_row_column_width_and_top_edges():
     assert 'body[data-page="train"] .training-live-panel' in page
 
 
-def test_train_legacy_69_percent_is_not_shown_as_current_live_threshold():
+def test_train_new_69_percent_gate_is_distinguished_from_legacy_strength():
     from kalshi_edge.bootstrap.site_pages import STYLE
-    assert 'Current live gate: >63% predicted-direction probability' in PAGE
+    assert 'Current live gate: >69% predicted-direction probability' in PAGE
     assert 'historical strength gate' not in PAGE
     assert 'Archived 69% model-strength gate result' not in PAGE
     assert 'historical strength evaluation' in PAGE

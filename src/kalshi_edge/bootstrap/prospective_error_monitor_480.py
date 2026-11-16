@@ -37,12 +37,12 @@ from .forward_feature_evidence_480 import load_forward_snapshot
 from .metrics import probability_metrics
 
 NS = 1_000_000_000
-SCHEMA = "KALSHIEDGE_FROZEN_PROSPECTIVE_480_V1"
-MANIFEST_FILE = Path("research/prospective_monitor_480/frozen_baseline.json")
+SCHEMA = "KALSHIEDGE_FROZEN_PROSPECTIVE_480_V2_LIVE69"
+MANIFEST_FILE = Path("research/prospective_monitor_480/frozen_69_baseline.json")
 HORIZON_RECORDED_MARKETS = 480
 PRIMARY_COMPARISON = "REFERENCE_DISAGREEMENT_VS_AGREEMENT"
 _SHA_CHARS = frozenset("0123456789abcdef")
-_PROBABILITY_SKIP = "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+_PROBABILITY_SKIP = "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
 _FLIP_SKIP = "COIN_FLIP_RISK_HIGH"
 _REFERENCE_CLASSES = ("agree_with_model", "agree_against_model",
                       "disagree", "unavailable")
@@ -65,7 +65,7 @@ def freeze_prospective_monitor(
     root: Path, *, model_hash: str, now_ns: int,
     target_recorded_markets: int = HORIZON_RECORDED_MARKETS,
 ) -> dict[str, Any]:
-    """Register once with the *current* clock; refuse overwrite/re-anchor.
+    """Register a NEW live-69 baseline; never rewrite the saved 63% study.
 
     The timestamp is injectable for deterministic tests. Production CLI
     provides no timestamp override to avoid a backdated fake holdout.
@@ -134,7 +134,7 @@ def load_frozen_manifest(root: Path) -> dict[str, Any]:
             or body.get("model_fusion_hash") is not None
             or type(body.get("fixed_horizon_recorded_markets")) is not int
             or not 1 <= body["fixed_horizon_recorded_markets"] <= 100000
-            or body.get("minimum_directional_probability") != .63
+            or body.get("minimum_directional_probability") != .69
             or body.get("brti_flip_veto_z") != .20
             or body.get("brti_flip_policy") != "brti-near-strike-z0.20-v1"):
         raise ValueError("frozen manifest integrity: unsupported policy or schema")

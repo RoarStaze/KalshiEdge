@@ -69,7 +69,7 @@ def test_continued_candidate_is_checkpointed_without_false_failed_training(tmp_p
             "experiment_sha256":"d"*64,
             "evaluation_report":str(root / "reports" / ("evaluation-"+"d"*64+".json")),
             "reason_codes":["RETRAIN_480_COVERAGE_NOT_INCREASED"],
-            "gate_confidence":.63,
+            "gate_confidence":.69,
             "candidate_gate":{"qualified":20},"incumbent_gate":{"qualified":21},
         }
     monkeypatch.setattr(model_continuation_run,"run_continuation",fake)
@@ -79,7 +79,7 @@ def test_continued_candidate_is_checkpointed_without_false_failed_training(tmp_p
     assert state["decision"]=="TRAINED_NOT_PROMOTED"
     assert state["promoted"] is False
     assert state["progress_percent"]==100
-    assert state["results"]["gate_confidence"]==.63
+    assert state["results"]["gate_confidence"]==.69
     assert "checkpoint" in " ".join(state["reasons"]).lower()
 
 
@@ -89,4 +89,4 @@ def test_train_page_tells_truth_about_continuation_not_full_retrain():
     assert 'Continue Training' in PAGE
     assert 'run.decision==="TRAINED_NOT_PROMOTED"' in PAGE
     assert "No full retrain" in PAGE
-    assert "63% confidence" in PAGE
+    assert ">69% predicted-direction probability" in PAGE

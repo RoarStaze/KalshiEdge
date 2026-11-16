@@ -38,7 +38,7 @@ def _record(root: Path, index: int, *, p:float|None=.85,
         reason=None
     elif kind=="prob_skip":
         decision="SKIP"
-        reason="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+        reason="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
     elif kind=="veto":
         decision="SKIP"
         reason="COIN_FLIP_RISK_HIGH"
@@ -100,14 +100,14 @@ def test_freeze_first_and_refuse_in_sample_tuning_and_tamper(tmp_path):
     frozen=freeze_prospective_monitor(tmp_path,model_hash=MODEL,now_ns=START)
     assert frozen["model_hash"]==MODEL
     assert frozen["started_at_ns"]==START
-    assert frozen["minimum_directional_probability"]==pytest.approx(.63)
+    assert frozen["minimum_directional_probability"]==pytest.approx(.69)
     assert frozen["brti_flip_veto_z"]==pytest.approx(.2)
     assert frozen["fixed_horizon_recorded_markets"]==480
     assert frozen["primary_comparison"]=="REFERENCE_DISAGREEMENT_VS_AGREEMENT"
     assert load_frozen_manifest(tmp_path)==frozen
     with pytest.raises(FileExistsError):
         freeze_prospective_monitor(tmp_path,model_hash=MODEL,now_ns=START+NS)
-    manifest=tmp_path/"research"/"prospective_monitor_480"/"frozen_baseline.json"
+    manifest=tmp_path/"research"/"prospective_monitor_480"/"frozen_69_baseline.json"
     body=json.loads(manifest.read_text())
     body["minimum_directional_probability"]=.50
     manifest.write_text(json.dumps(body))
@@ -204,7 +204,7 @@ def test_prospective_status_cli_is_read_only_and_freeze_is_one_time(tmp_path,cap
     assert main(args+["--freeze","--json"])==0
     x=json.loads(capsys.readouterr().out)
     assert x["started_at_ns"]==START
-    manifest=tmp_path/"research"/"prospective_monitor_480"/"frozen_baseline.json"
+    manifest=tmp_path/"research"/"prospective_monitor_480"/"frozen_69_baseline.json"
     before=manifest.read_bytes()
     monkeypatch.setattr(monitor.time,"time_ns",lambda:START+NS)
     assert main(args+["--json"])==0
@@ -222,3 +222,14 @@ def test_model_hash_change_never_mix_versions(tmp_path):
     r=evaluate_prospective_monitor(tmp_path,now_ns=START+10_000*NS)
     assert r["recorded_post_freeze"]==0
     assert r["recorded_exclusions"]["different_model"]==1
+
+
+def test_old_frozen_63_manifest_is_never_edited_by_new_69_registration(tmp_path):
+    old=tmp_path/"research"/"prospective_monitor_480"/"frozen_baseline.json"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b'{"archived_policy":"63%-probability","sha256":"not-modified"}\n')
+    saved=old.read_bytes()
+    new=freeze_prospective_monitor(tmp_path,model_hash=MODEL,now_ns=START)
+    assert new["minimum_directional_probability"]==.69
+    assert old.read_bytes()==saved
+    assert (old.parent/"frozen_69_baseline.json").is_file()

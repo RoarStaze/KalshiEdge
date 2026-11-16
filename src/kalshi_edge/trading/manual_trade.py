@@ -682,10 +682,15 @@ class ManualTrader:
             try:
                 result = self.client.send_order(order)
             except httpx.HTTPStatusError as exc:
-                # Explicit client-error responses mean Kalshi rejected the
-                # request. Timeouts, server errors, and conflicts are still
-                # UNKNOWN: they might have been accepted.
-                if exc.response.status_code in (400, 401, 403, 404, 422):
+                # Do NOT infer no fill from HTTP 400 after POST. The
+                # exchange may have processed an earlier submission with the
+                # same client_order_id, or an accepted order may require
+                # reconciliation. Until the journal's exact client ID is
+                # checked against authenticated exchange orders/fills, an
+                # HTTP 400 outcome is UNKNOWN: never retry automatically.
+                # Authentication / not-found / validation refusals remain
+                # definite non-submissions for this specific POST.
+                if exc.response.status_code in (401, 403, 404, 422):
                     raise OrderNotSubmitted(
                         f"Kalshi rejected order (HTTP {exc.response.status_code})"
                     ) from exc

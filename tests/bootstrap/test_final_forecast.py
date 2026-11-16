@@ -76,25 +76,25 @@ def test_final_forecast_is_not_published_early_and_locks_once_at_480s() -> None:
 
 
 def test_final_forecast_skip_rule_exact_threshold_and_below() -> None:
-    assert MINIMUM_FINAL_CONFIDENCE == 0.63
+    assert MINIMUM_FINAL_CONFIDENCE == 0.69
     below = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
         prediction=_prediction(DUE, probability=0.62, confidence=0.24),
     )
     assert below.forecast == "SKIP"
-    assert below.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+    assert below.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
     assert below.directional_probability == pytest.approx(0.62)
 
     boundary = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.63, confidence=0.26),
+        prediction=_prediction(DUE, probability=0.69, confidence=0.38),
     )
     assert boundary.forecast == "SKIP"
-    assert boundary.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+    assert boundary.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
 
     above = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.631, confidence=0.262),
+        prediction=_prediction(DUE, probability=0.691, confidence=0.382),
     )
     assert above.forecast == "ABOVE"
     assert above.reason is None
@@ -294,7 +294,7 @@ def test_low_directional_probability_skip_keeps_original_reason_and_coinflip_ris
         prediction=_prediction(DUE, probability=0.62, confidence=0.24, risk_ratio=0.05),
     )
     assert final.forecast == "SKIP"
-    assert final.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+    assert final.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT"
     assert final.coin_flip_assessment == "HIGH"
 
 

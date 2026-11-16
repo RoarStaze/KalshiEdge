@@ -28,8 +28,8 @@ FINAL_CHECKPOINT_SECONDS = 480
 LEGACY_FINAL_CHECKPOINT_SECONDS = 240
 # Gate is on the displayed predicted-side probability, not the legacy
 # normalized model-strength score 2*abs(P(YES)-0.5).
-MINIMUM_FINAL_DIRECTIONAL_PROBABILITY = 0.63
-MINIMUM_FINAL_CONFIDENCE = 0.63  # compatibility for archived strength reports
+MINIMUM_FINAL_DIRECTIONAL_PROBABILITY = 0.69
+MINIMUM_FINAL_CONFIDENCE = 0.69  # fallback for legacy finals without directional probability
 # Heuristic live veto: <= 0.20 expected remaining BRTI standard deviations
 # from strike. NOT a calibrated coin-flip probability; validate prospectively.
 COIN_FLIP_MAX_RISK_Z = 0.20
@@ -173,7 +173,7 @@ class FinalForecastGate:
         if directional_probability <= MINIMUM_FINAL_DIRECTIONAL_PROBABILITY:
             return FinalForecastRecord(
                 **base, **fields, forecast="SKIP",
-                reason="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+                reason="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT",
             )
         # Active 480s gate: a high-confidence prediction can still be near
         # the strike relative to realized BRTI volatility. Fail safe to SKIP

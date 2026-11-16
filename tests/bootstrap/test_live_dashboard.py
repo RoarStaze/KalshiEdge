@@ -58,7 +58,7 @@ def test_unified_dashboard_reads_live_preview_without_fabricating_lock(tmp_path:
     assert snapshot["latest_prediction"]["predicted_side"] == "ABOVE"
     assert snapshot["final_forecast"] is None
     assert snapshot["checkpoint_ts_ns"] == DUE
-    assert snapshot["minimum_confidence"] == 0.63
+    assert snapshot["minimum_confidence"] == 0.69
 
 
 def test_locked_checkpoint_uses_immutable_final_record(tmp_path: Path):

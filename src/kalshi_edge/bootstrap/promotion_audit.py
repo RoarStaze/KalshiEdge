@@ -44,6 +44,7 @@ def paired_480_evidence(
     seed: int = 73115,
     resamples: int = 2000,
     minimum_confidence: float = .69,
+    gate_kind: str = "model_strength",
 ) -> dict[str, Any]:
     """One market per row; diagnostic paired bootstrap and exact McNemar test.
 
@@ -66,11 +67,17 @@ def paired_480_evidence(
         raise ValueError("paired bootstrap resample count invalid")
     if type(minimum_confidence) not in (float, int) or not 0 <= minimum_confidence <= 1:
         raise ValueError("paired confidence threshold invalid")
+    if gate_kind not in ("model_strength", "predicted_side_probability"):
+        raise ValueError("paired gate kind is unsupported")
 
     c_correct = [(p >= .5) == bool(y) for p, y in zip(candidate_probabilities, labels)]
     i_correct = [(p >= .5) == bool(y) for p, y in zip(incumbent_probabilities, labels)]
-    c_qual = [2 * abs(p - .5) >= minimum_confidence for p in candidate_probabilities]
-    i_qual = [2 * abs(p - .5) >= minimum_confidence for p in incumbent_probabilities]
+    def qualified(p: float) -> bool:
+        return (max(p,1-p) > minimum_confidence
+                if gate_kind == "predicted_side_probability"
+                else 2 * abs(p-.5) >= minimum_confidence)
+    c_qual = [qualified(p) for p in candidate_probabilities]
+    i_qual = [qualified(p) for p in incumbent_probabilities]
 
     both_correct = sum(c and i for c, i in zip(c_correct, i_correct))
     c_only = sum(c and not i for c, i in zip(c_correct, i_correct))
@@ -106,6 +113,7 @@ def paired_480_evidence(
         "method": "one_to_one_verified_480s_lockbox",
         "market_count": n,
         "minimum_confidence": float(minimum_confidence),
+        "gate_kind": gate_kind,
         "both_correct": both_correct,
         "candidate_only_correct": c_only,
         "incumbent_only_correct": i_only,
