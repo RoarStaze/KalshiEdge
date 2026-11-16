@@ -628,12 +628,18 @@ class ManualTrader:
                         or estimate <= 0 or budget <= 0
                         or count * unit + fee > budget or estimate > budget):
                     raise TradingError("Fresh quote exceeds AutoTrade dollar budget")
+                # Never exceed the latest *actual available cash*, even
+                # when a final-only AutoTrade uses the user's full selected
+                # dollar budget rather than the older 5% risk fraction.
+                cash = Decimal(fresh["available_balance"])
+                if (not cash.is_finite() or cash <= 0
+                        or max(estimate, count * unit + fee) > cash):
+                    raise TradingError("Fresh AutoTrade quote exceeds available cash")
                 if cash_risk_cap:
+                    # Kept for explicitly percentage-capped legacy callers,
+                    # not armed final-only AutoTrade (user-sized orders).
                     from .auto_edge import MAX_BANKROLL_FRACTION
-                    cash = Decimal(fresh["available_balance"])
-                    if (not cash.is_finite() or cash <= 0
-                            or max(estimate, count * unit + fee)
-                            > cash * MAX_BANKROLL_FRACTION):
+                    if max(estimate, count * unit + fee) > cash * MAX_BANKROLL_FRACTION:
                         raise TradingError("Fresh AutoTrade quote exceeds 5% cash risk ceiling")
                 if edge_confidence is not None:
                     # The original expected-value decision NEVER authorizes
