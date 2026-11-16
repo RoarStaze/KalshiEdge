@@ -1,4 +1,4 @@
-"""Maker/taker opportunity choice is exercised without Kalshi credentials."""
+"""The final-only execution route is independent of maker expected-value quotes."""
 from decimal import Decimal
 
 from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
@@ -44,9 +44,11 @@ def _run(tmp_path, *, maker_exists: bool):
                     "expected_net_dollars": "0.030000",
                 },
             }
-        def place_auto_value(self, preview_id, ticker, *, confidence, prefer_maker):
-            self.placed.append(prefer_maker)
+        def place_auto(self, preview_id, ticker):
+            self.placed.append("IOC")
             return {"status": "FILLED", "fill_count": "0.10", "order_id": "offline"}
+        def place_auto_value(self, preview_id, ticker, *, confidence, prefer_maker):
+            raise AssertionError("Final-only AutoTrade must not call the value-first path")
 
     exchange = OfflineExchange()
     bot = ArmedAutoTrader(exchange, lambda: live, now_ns=lambda: now[0],
@@ -61,17 +63,17 @@ def _run(tmp_path, *, maker_exists: bool):
     return exchange, bot.status()
 
 
-def test_approved_maker_is_considered_even_when_taker_has_positive_ev(tmp_path):
+def test_final_signal_routes_ioc_even_if_profitable_maker_is_available(tmp_path):
     exchange, status = _run(tmp_path, maker_exists=True)
-    assert exchange.maker_previews == 1
-    assert exchange.placed == [True]
-    assert status["latest_opportunity"]["route"] == "MAKER_FIRST"
+    assert exchange.maker_previews == 0
+    assert exchange.placed == ["IOC"]
+    assert status["latest_opportunity"]["route"] == "FORECAST_ONLY_IOC"
     assert Decimal(status["latest_opportunity"]["expected_net_dollars"]) > 0
 
 
-def test_approved_taker_directly_routes_ioc_when_no_maker_edge(tmp_path):
+def test_final_signal_routes_ioc_without_maker_edge(tmp_path):
     exchange, status = _run(tmp_path, maker_exists=False)
-    assert exchange.maker_previews == 1
-    assert exchange.placed == [False]
-    assert status["latest_opportunity"]["route"] == "TAKER_IOC"
+    assert exchange.maker_previews == 0
+    assert exchange.placed == ["IOC"]
+    assert status["latest_opportunity"]["route"] == "FORECAST_ONLY_IOC"
     assert Decimal(status["latest_opportunity"]["expected_net_dollars"]) > 0
