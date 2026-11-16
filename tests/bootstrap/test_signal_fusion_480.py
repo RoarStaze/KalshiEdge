@@ -150,7 +150,7 @@ def test_fusion_holdout_uses_live_directional_probability_gate_not_strength_gate
 def test_fusion_new_artifacts_mark_the_current_policy_version():
     from kalshi_edge.bootstrap.signal_fusion_480 import POLICY
 
-    assert POLICY == "live-480-fitted-multisignal-v2"
+    assert POLICY == "live-480-fitted-multisignal-v3"
     assert _artifact().policy == POLICY
 
 
@@ -169,3 +169,114 @@ def test_legacy_v1_fusion_artifact_is_rejected_after_policy_gate_changes(tmp_pat
     path.write_text(json.dumps(current), encoding="utf-8")
     with pytest.raises(FusionError, match="legacy|obsolete|v1"):
         load_active_fusion(tmp_path, "a"*64)
+
+
+@pytest.mark.parametrize("risk", [100.00001, 500.0, 1e9])
+def test_valid_large_finite_brti_distance_is_retained_and_bounded(risk):
+    """Strike distance may exceed 100 during very low realized volatility."""
+    vector = build_signal_vector(.75, _features(), risk_z=risk)
+    assert vector is not None
+    assert all(math.isfinite(x) for x in vector)
+    assert vector[FEATURE_NAMES.index("brti_signed_risk_z")] == 10.
+    results = summarize_decisions([.75], [1], [risk])
+    assert results["qualified"] == 1 and results["correct"] == 1
+
+
+@pytest.mark.parametrize("risk", [-1., float("inf"), -float("inf"), True])
+def test_bad_or_nonfinite_brti_risk_remains_invalid(risk):
+    assert build_signal_vector(.75, _features(), risk_z=risk) is None
+    with pytest.raises(FusionError, match="risk"):
+        summarize_decisions([.75], [1], [risk])
+
+
+def test_valid_signed_fusion_v2_artifact_is_not_silently_reused(tmp_path: Path):
+    """Expanded risk-domain scoring needs fresh v3 holdout validation."""
+    import hashlib
+    import json
+
+    payload = _artifact().model_dump(mode="json")
+    payload["policy"] = "live-480-fitted-multisignal-v2"
+    unsigned = {k: v for k, v in payload.items() if k != "sha256"}
+    raw = json.dumps(unsigned, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    payload["sha256"] = hashlib.sha256(raw.encode()).hexdigest()
+    path = tmp_path / "models" / "fusion" / ("a" * 64 + ".json")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(FusionError, match="v2|legacy|refit|re-fit"):
+        load_active_fusion(tmp_path, "a" * 64)
+
+
+def _fusion_case(
+    root: Path, index: int, *, risk: float | None = 1.0,
+    include_snapshot: bool = True, include_settlement: bool = True,
+    missing_signals: bool = False,
+) -> None:
+    from kalshi_edge.bootstrap.final_forecast import FinalForecastRecord, FinalForecastWriter
+    from kalshi_edge.bootstrap.final_history import OfficialSettlement, _save_settlement
+    from kalshi_edge.bootstrap.forward_feature_evidence_480 import (
+        Forward480FeatureWriter, build_forward_snapshot,
+    )
+    from kalshi_edge.bootstrap.types import FeatureRow
+
+    ns = 1_000_000_000
+    ts = (1_900_000_000 + index * 900) * ns
+    ticker = f"KXBTC15M-FUSION-{index:04d}"
+    close = ts + 480 * ns
+    forecast = FinalForecastRecord(
+        market_ticker=ticker, strike=100000., scheduled_ts_ns=ts,
+        prediction_ts_ns=ts, checkpoint_seconds=480, seconds_remaining=480.,
+        forecast="ABOVE", p_yes=.85, p_no=.15,
+        directional_probability=.85, confidence=.70,
+        coin_flip_risk_z=risk,
+        coin_flip_assessment="LOW" if risk is not None else "UNAVAILABLE",
+        model_hash="a" * 64,
+    )
+    path = FinalForecastWriter(root).save(forecast, market_close_ts_ns=close)
+    assert path is not None
+    if include_snapshot:
+        feature_values = _features()
+        if missing_signals:
+            feature_values.pop("btc_return_60s_available")
+        row = FeatureRow(
+            market_ticker=ticker, checkpoint_ts_ns=ts, label_yes=0,
+            features=feature_values,
+            source_max_ts_ns={"binance": ts - ns, "brti": ts - ns},
+        )
+        Forward480FeatureWriter(root).save(
+            build_forward_snapshot(forecast, path, row)
+        )
+    if include_settlement:
+        _save_settlement(root, forecast, OfficialSettlement(
+            market_ticker=ticker, market_close_ts_ns=close,
+            result="yes", actual_side="ABOVE",
+            source="kalshi-public-market-api",
+            fetched_ts_ns=close + 60 * ns, market_status="settled",
+        ))
+
+
+def test_fusion_readiness_explains_missing_cases_without_fake_data(tmp_path: Path):
+    from kalshi_edge.bootstrap.signal_fusion_480 import _verified_examples
+
+    _fusion_case(tmp_path, 1, risk=500.)
+    _fusion_case(tmp_path, 2, include_snapshot=False)
+    _fusion_case(tmp_path, 3, include_settlement=False)
+    _fusion_case(tmp_path, 4, risk=None)
+    _fusion_case(tmp_path, 5, missing_signals=True)
+
+    before = {str(p): p.read_bytes() for p in tmp_path.rglob("*.json")}
+    rows, counts = _verified_examples(tmp_path, "a" * 64)
+    assert len(rows) == 1 and rows[0].risk_z == 500.
+    assert counts["same_model_finals"] == 5
+    assert counts["eligible"] == 1
+    assert counts["missing_or_invalid"] == 4
+    assert counts["exclusion_reasons"] == {
+        "snapshot_missing_or_invalid": 1,
+        "snapshot_unavailable": 0,
+        "settlement_missing": 1,
+        "settlement_invalid": 0,
+        "probability_missing_or_invalid": 0,
+        "risk_missing_or_invalid": 1,
+        "signal_inputs_missing_or_invalid": 1,
+        "duplicate_ticker": 0,
+    }
+    assert {str(p): p.read_bytes() for p in tmp_path.rglob("*.json")} == before
