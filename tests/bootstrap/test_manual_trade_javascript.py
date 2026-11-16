@@ -46,3 +46,9 @@ def test_manual_controls_and_account_ids_still_present_in_rendered_card():
     for action in ("refreshMarket();refreshAuto();", 'addEventListener("click",selectAuto)',
                    'addEventListener("click",armOrCancel)'):
         assert action in page
+
+
+def test_auto_ui_states_amount_is_user_selected_not_five_percent_capped():
+    """No hidden 5% ceiling is advertised in the final-only AUTO workflow."""
+    assert "entered dollar amount, up to available cash" in SCRIPT
+    assert "fresh quote and cash-risk checks apply" not in SCRIPT

@@ -451,11 +451,12 @@ class ManualTrader:
     def place_auto(self, preview_id, current_ticker, *,
                    client_order_id: str | None = None,
                    cash_risk_cap: bool = False):
-        """Final-direction IOC: fresh fee-inclusive budget, no EV selection.
+        """Final-direction IOC: fresh fee-inclusive user budget, no EV gate.
 
-        The armed final forecast is the strategy signal. The optional five
-        percent fresh-cash ceiling is mandatory for armed production calls;
-        the existing direct manual reprice API retains its earlier contract.
+        Armed final-only AutoTrade uses the expressly selected dollar amount
+        (up to the fresh available cash and executable quote). A legacy caller
+        may explicitly opt into the optional percentage cap, but the final
+        production workflow does not. Manual 1-click quote rules are separate.
         """
         return self._place(
             preview_id, current_ticker, auto_reprice_buy=True,
@@ -628,12 +629,18 @@ class ManualTrader:
                         or estimate <= 0 or budget <= 0
                         or count * unit + fee > budget or estimate > budget):
                     raise TradingError("Fresh quote exceeds AutoTrade dollar budget")
+                # Never exceed the latest *actual available cash*, even
+                # when a final-only AutoTrade uses the user's full selected
+                # dollar budget rather than the older 5% risk fraction.
+                cash = Decimal(fresh["available_balance"])
+                if (not cash.is_finite() or cash <= 0
+                        or max(estimate, count * unit + fee) > cash):
+                    raise TradingError("Fresh AutoTrade quote exceeds available cash")
                 if cash_risk_cap:
+                    # Kept for explicitly percentage-capped legacy callers,
+                    # not armed final-only AutoTrade (user-sized orders).
                     from .auto_edge import MAX_BANKROLL_FRACTION
-                    cash = Decimal(fresh["available_balance"])
-                    if (not cash.is_finite() or cash <= 0
-                            or max(estimate, count * unit + fee)
-                            > cash * MAX_BANKROLL_FRACTION):
+                    if max(estimate, count * unit + fee) > cash * MAX_BANKROLL_FRACTION:
                         raise TradingError("Fresh AutoTrade quote exceeds 5% cash risk ceiling")
                 if edge_confidence is not None:
                     # The original expected-value decision NEVER authorizes
