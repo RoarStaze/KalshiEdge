@@ -228,3 +228,33 @@ def test_unexpected_label_field_is_rejected_even_if_other_hash_fields_untouched(
     output.write_text(json.dumps(raw),encoding="utf-8")
     with pytest.raises(ValueError):
         load_forward_snapshot(tmp_path,r)
+
+
+def test_older_hash_verified_snapshot_is_enriched_only_after_verification(tmp_path: Path):
+    """Do not mutate immutable snapshots to recover previously recorded inputs."""
+    from kalshi_edge.bootstrap.forward_feature_evidence_480 import (
+        Forward480FeatureWriter, build_forward_snapshot,
+        load_forward_snapshot, verified_forward_feature_examples,
+    )
+    r, p = final_at(tmp_path, 25)
+    original = features(r)
+    raw = {
+        **original.features,
+        "btc_return_15s_available": 1.,
+        "btc_return_60s_available": 1.,
+        "btc_realized_vol_60s": .0004,
+        "btc_base_volume_15s": 30.,
+        "btc_base_volume_60s": 90.,
+        "btc_taker_buy_imbalance_15s": -.4,
+    }
+    legacy = original.model_copy(update={"features": raw})
+    saved = build_forward_snapshot(r, p, legacy)
+    Forward480FeatureWriter(tmp_path).save(saved)
+    settle(tmp_path, r, "BELOW")
+    augmented, = verified_forward_feature_examples(tmp_path)
+    assert augmented.label_yes == 0
+    assert augmented.features["btc_signed_taker_volume_60s"] == pytest.approx(20.7)
+    assert augmented.features["btc_interaction_available"] == 1.
+    # No changes to original label-free evidence or digest.
+    assert load_forward_snapshot(tmp_path, r) == saved
+    assert "btc_signed_taker_volume_60s" not in saved.features
