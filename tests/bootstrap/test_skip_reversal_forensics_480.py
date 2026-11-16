@@ -118,7 +118,7 @@ def test_brti_flip_veto_and_reference_disagreement_have_separate_denominators(tm
     fixture(tmp_path)
     r=analyze_skip_reversal_forensics(tmp_path,model_hash=MODEL)
     high=r["risk_strata"]["at_or_below_0_20"]
-    assert high["total"]==2 and high["would_be_correct"]==1
+    assert high["total"]==2 and high["would_have_been_correct"]==1
     assert r["reference_alignment"]["verified_checkpoints"]==3
     assert r["reference_alignment"]["brti_vs_binance_side_disagreements"]==1
     assert r["reference_alignment"]["disagreement_model_wrong"]==1
