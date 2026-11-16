@@ -102,3 +102,29 @@ def test_live_trade_page_displays_63_percent_confidence_gate():
     assert "63% predicted-direction probability" in page
     assert "69% confidence" not in page
     assert "81.5% predicted-side probability" not in page
+
+
+def test_train_panels_share_same_grid_row_column_width_and_top_edges():
+    from kalshi_edge.bootstrap.site_pages import STYLE
+    page=render_site_page(
+        integrate_manual_trade(integrate_round_price_hero(PAGE)), "train"
+    )
+    assert 'grid-template-columns:repeat(2,minmax(0,1fr));' in STYLE
+    assert 'body[data-page="train"] .training-forward,' in STYLE
+    assert 'body[data-page="train"] .training-live-panel{margin:0!important;' in STYLE
+    assert 'grid-row:2;' in STYLE
+    assert 'align-items:stretch' in STYLE
+    assert 'body[data-page="train"] .training-forward' in page
+    assert 'body[data-page="train"] .training-live-panel' in page
+
+
+def test_train_legacy_69_percent_is_not_shown_as_current_live_threshold():
+    from kalshi_edge.bootstrap.site_pages import STYLE
+    assert 'Current live gate: >63% predicted-direction probability' in PAGE
+    assert 'historical strength gate' not in PAGE
+    assert 'Archived 69% model-strength gate result' not in PAGE
+    assert 'historical strength evaluation' in PAGE
+    assert 'info.className="training-comparison-note"' in PAGE
+    assert '.training-comparison-note{grid-column:1/-1}' in PAGE
+    assert 'gatePercent+"% historical strength gate"' not in PAGE
+    assert 'Math.round(gateConfidence*100):69' not in PAGE
