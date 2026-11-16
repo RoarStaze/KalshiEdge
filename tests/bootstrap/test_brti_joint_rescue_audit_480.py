@@ -154,8 +154,8 @@ def test_individual_probability_bins_reject_spurious_coverage_claims(tmp_path):
     _fixture(tmp_path)
     r=evaluate_brti_joint_rescue(tmp_path,model_hash=MODEL)
     bands={b["band"]:b for b in r["historical_skip_probability_bands"]}
-    assert bands["(0.50,0.63]"]["historical_skips"]["total"]==1
-    assert bands["(0.50,0.63]"]["joint_high_risk_agree"]["correct"]==1
+    assert bands["[0.50,0.63]"]["historical_skips"]["total"]==1
+    assert bands["[0.50,0.63]"]["joint_high_risk_agree"]["correct"]==1
     assert bands["(0.63,0.70]"]["historical_skips"]["total"]==0
     assert bands["(0.70,0.80]"]["historical_skips"]["total"]==6
     assert bands["(0.70,0.80]"]["joint_high_risk_agree"]["total"]==3
@@ -209,3 +209,13 @@ def test_no_data_writes_and_table_json_cli(tmp_path,capsys):
     assert report["matched_settled_markets"]==10
     assert {p:p.read_bytes() for p in tmp_path.rglob("*.json")}==before
 
+
+
+def test_exactly_half_probability_is_accounted_for_in_first_fixed_band(tmp_path):
+    _record(tmp_path,1,p=.5,actual=True,z=2.)
+    out=evaluate_brti_joint_rescue(tmp_path,model_hash=MODEL)
+    bands={r["band"]:r for r in out["historical_skip_probability_bands"]}
+    assert bands["[0.50,0.63]"]["historical_skips"]["total"]==1
+    assert sum(row["historical_skips"]["total"]
+               for row in out["historical_skip_probability_bands"])==1
+    assert out["current_63_gate_counterfactual"]["qualified"]==0
