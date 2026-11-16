@@ -123,8 +123,33 @@ async def _sample(root: Path, repo: Path, commit: str, np: object,
     return ticker
 
 
+async def _capture_loop(root: Path, repo: Path, commit: str, np: object,
+                        paper: object, inference: tuple) -> None:
+    last_error = None
+    while True:
+        # Keep this recorder in the SAME Python process as upstream's
+        # scheduler. _build_live_features() reads its in-memory 1Hz Coinbase
+        # TWAP tick buffer, which is NOT shared across separate processes.
+        phase = time.time() % 900
+        if abs(phase - 420.0) > 5:
+            await asyncio.sleep(0.5)
+            continue
+        try:
+            ticker = await _sample(root, repo, commit, np, paper, inference)
+            if ticker:
+                print("Captured original SiddhaBot probability for", ticker, flush=True)
+                last_error = None
+                await asyncio.sleep(10)  # never overwrite a market
+        except Exception as exc:
+            error = type(exc).__name__ + ": " + str(exc)
+            if error != last_error:
+                print("Capture unavailable:", error[:220], file=sys.stderr, flush=True)
+                last_error = error
+        await asyncio.sleep(0.5)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="SiddhaBot prospective read-only predictor capture")
+    parser = argparse.ArgumentParser(description="SiddhaBot source service + 480s recorder, same process")
     parser.add_argument("--root", type=Path, required=True, help="KalshiEdge data/bootstrap root")
     parser.add_argument("--repo", type=Path, required=True, help="Pinned SiddhaBot checkout")
     args = parser.parse_args()
@@ -134,29 +159,32 @@ def main() -> int:
     commit = subprocess.check_output(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
     ).strip()
-    print("SiddhaBot capture (NO ORDERS) source:", commit, flush=True)
-    print("Only snapshots within +/- 5s of the 480s checkpoint are saved.", flush=True)
-    last_error = None
-    while True:
-        # KXBTC15M closes on the standard 15-minute UTC grid.
-        # The actual close timestamp from the original upstream feed is
-        # checked independently before a sample can be persisted.
-        phase = time.time() % 900
-        if abs(phase - 420.0) > 5:
-            time.sleep(0.5)
-            continue
-        try:
-            ticker = asyncio.run(_sample(root, repo, commit, np, paper, inference))
-            if ticker:
-                print("Captured original SiddhaBot probability for", ticker, flush=True)
-                last_error = None
-                time.sleep(10)  # at most one attempt per market
-        except (Exception,) as exc:
-            name = type(exc).__name__ + ": " + str(exc)
-            if name != last_error:
-                print("Capture unavailable:", name[:220], file=sys.stderr, flush=True)
-                last_error = name
-        time.sleep(0.5)
+    print("SiddhaBot native source + 480s capture (NO ORDERS):", commit, flush=True)
+    print("The data scheduler and recorder share the original live 1Hz price buffer.", flush=True)
+
+    # Upstream registers its own data/scheduler startup before this callback.
+    # Neither original upstream modules nor its trading configuration are changed.
+    from backend.api.main import app
+    import uvicorn
+
+    @app.on_event("startup")
+    async def _start_siddha_recorder() -> None:
+        app.state.siddha_benchmark_task = asyncio.create_task(
+            _capture_loop(root, repo, commit, np, paper, inference)
+        )
+
+    @app.on_event("shutdown")
+    async def _stop_siddha_recorder() -> None:
+        task = getattr(app.state, "siddha_benchmark_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    uvicorn.run(app, host="127.0.0.1", port=8001)
+    return 0
 
 
 if __name__ == "__main__":
