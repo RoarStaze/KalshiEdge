@@ -43,9 +43,18 @@ def compare_brti_alignment(
         if forecast.get("actual_side") not in ("ABOVE", "BELOW"):
             continue
 
+        # Match valid historical gate SKIPs including the current >63%
+        # predicted-side rule and the BRTI near-strike flip veto. The old
+        # 69%-strength-only filter hid the current most actionable records.
+        # Unhealthy / missing-prediction SKIPs still fail closed.
         if (
             forecast.get("forecast") == "SKIP"
-            and forecast.get("reason") != "CONFIDENCE_BELOW_69_PERCENT"
+            and forecast.get("reason") not in {
+                "CONFIDENCE_BELOW_69_PERCENT",
+                "CONFIDENCE_BELOW_63_PERCENT",
+                "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+                "COIN_FLIP_RISK_HIGH",
+            }
         ):
             rejected += 1
             continue
