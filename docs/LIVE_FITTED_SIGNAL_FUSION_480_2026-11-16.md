@@ -78,7 +78,7 @@ $hash = (& $py -c "from kalshi_edge.bootstrap.live import load_default_bundle; f
 $src = Join-Path $root "models\fusion\$hash.json"
 if (Test-Path $src) {
     New-Item -ItemType Directory -Force (Join-Path $root "models\fusion\legacy-backups") | Out-Null
-    $backup = "$hash-legacy-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
+    $backup = "${hash}-legacy-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
     Move-Item $src (Join-Path $root "models\fusion\legacy-backups\$backup")
 }
 & $py -m kalshi_edge.bootstrap.signal_fusion_480 status
