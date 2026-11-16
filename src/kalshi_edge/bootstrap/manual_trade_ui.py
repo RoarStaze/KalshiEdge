@@ -436,7 +436,14 @@ SCRIPT = r"""
         const name=String(stage.stage||"").replaceAll("_"," ");
         const dir=stage.outcome==="UP"?"UP":"DOWN";
         const outcome=String(stage.status||"UNKNOWN").replaceAll("_"," ");
-        return name+" "+dir+": "+outcome+(stage.fill_count!=null?" ("+stage.fill_count+" shares)":"");
+        // The server persists ONLY an allowlisted reason code for definite
+        // NOT_SUBMITTED results; never render raw exchange exception text.
+        const rejection=stage.status==="NOT_SUBMITTED"&&
+         typeof stage.rejection_reason_code==="string"&&
+         /^[A-Z_]{4,64}$/.test(stage.rejection_reason_code)
+          ?" ("+stage.rejection_reason_code.replaceAll("_"," ")+")":"";
+        return name+" "+dir+": "+outcome+rejection+
+         (stage.fill_count!=null?" ("+stage.fill_count+" shares)":"");
       });
       details.textContent=words.join(" · ");
       item.appendChild(details);
