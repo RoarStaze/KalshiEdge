@@ -261,7 +261,7 @@ SCRIPT = r"""
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
    NO_FILL:"No shares filled · no automatic retry",
    SKIPPED:autoCurrent.message||"Final forecast SKIP or confidence under 63% · no trade",
-   EXPIRED:"Market changed or final forecast too late · no trade",
+   EXPIRED:autoCurrent.message||"Market changed or final forecast too late · no trade",
    CANCELLED:"AutoTrade cancelled. Nothing submitted.",
    ERROR:"AutoTrade stopped before order · check live market and quote",
    UNKNOWN:"Order outcome unknown · check Kalshi orders; do not retry",
@@ -276,7 +276,7 @@ SCRIPT = r"""
    " (estimate, not actual P/L)"
   ):"";
   shown("manual-auto-status",
-   (messages[autoCurrent.state]||"AutoTrade buys only after the eight-minute final forecast; live fee/edge checks apply.")+quoteInfo);
+   (messages[autoCurrent.state]||"AutoTrade buys only after the eight-minute final forecast; fresh quote and cash-risk checks apply.")+quoteInfo);
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
   if(selected)renderAutoPayout();
  }
