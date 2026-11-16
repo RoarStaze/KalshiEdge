@@ -727,7 +727,7 @@ def run_continuation_worker(root: Path, *, git_sha: str) -> int:
             codes = result.get("reason_codes") or []
             reasons = (
                 ["Continued the existing fitted classifier weights; passed new "
-                 "independent 63% coverage-first validation. Model #"
+                 "independent 69% coverage-first validation. Model #"
                  + str(active_id["model_number"]) + " installed. Restart to load."]
                 if result["promoted"] else
                 ["Continued trained classifier saved as a resume checkpoint; "
