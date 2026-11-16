@@ -17,7 +17,6 @@ from .config import BootstrapSettings
 from .final_forecast import (
     COIN_FLIP_MAX_RISK_Z,
     FINAL_CHECKPOINT_SECONDS,
-    MINIMUM_FINAL_CONFIDENCE,
     MINIMUM_FINAL_DIRECTIONAL_PROBABILITY,
 )
 from .final_history import (
@@ -193,11 +192,12 @@ def evaluate_saved_policy(
         z = forecast.coin_flip_risk_z
         veto = (forecast.coin_flip_assessment == "HIGH"
                 or (z is not None and z <= COIN_FLIP_MAX_RISK_Z))
-        # Old: 63% model-strength (requires 81.5% predicted-side probability).
+        # Archived 63%-strength baseline is frozen: never reinterpret the
+        # old saved results through the newly deployed 69%-probability gate.
         old_qualifies = (
-            not veto and 2 * abs(yes - .5) >= MINIMUM_FINAL_CONFIDENCE
+            not veto and 2 * abs(yes - .5) >= 0.63
         )
-        # New: strict >63% predicted-direction probability, not confidence.
+        # Live policy: strict >69% predicted-direction probability, not model strength.
         new_qualifies = (
             not veto and probability > MINIMUM_FINAL_DIRECTIONAL_PROBABILITY
         )
