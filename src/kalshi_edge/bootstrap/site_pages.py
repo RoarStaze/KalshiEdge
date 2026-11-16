@@ -203,6 +203,10 @@ body[data-page="train"] .training-card{display:block}
  .kpi-num{font-size:26px}
  .context>.manual-trade{min-height:540px}
 }
+/* Both Train surfaces are peers: the old 22px/20px default margins
+   caused a visibly offset top edge in viewport/fallback layouts. */
+body[data-page="train"] .training-forward,
+body[data-page="train"] .training-live-panel{margin:0!important;box-sizing:border-box;align-self:stretch;min-width:0}
 /* Train: fit the two actual dashboard surfaces within one desktop viewport.
    The previous full-width vertical stack was taller than the screen even at
    1080p. Keep all seven stages and action buttons visible without page scroll.
@@ -212,8 +216,8 @@ body[data-page="train"] .training-card{display:block}
  body[data-page="train"] .shell{display:flex;flex-direction:column;height:100dvh;
   max-height:100dvh;padding-bottom:12px}
  body[data-page="train"] .site-header{flex:none;padding:10px 0}
- body[data-page="train"] .training-card{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);
-  grid-template-rows:auto minmax(0,1fr);gap:12px;flex:1;min-height:0;
+ body[data-page="train"] .training-card{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:auto minmax(0,1fr);gap:12px;flex:1;min-height:0;align-items:stretch;
   margin:0;padding:14px 16px;overflow:hidden;align-content:stretch}
  body[data-page="train"] .training-head{grid-column:1/-1;grid-row:1;min-height:0;gap:12px}
  body[data-page="train"] .training-head h2{font-size:20px;margin:3px 0}
