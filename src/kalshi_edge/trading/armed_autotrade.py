@@ -335,15 +335,18 @@ class ArmedAutoTrader:
             LOG.exception("Cannot journal order attempt")
             return "ERROR", {}
         try:
-            # Final-only AutoTrade uses a fresh IOC with explicit stake and
-            # cash cap. The value-first path is preserved for other callers.
+            # Final-only AutoTrade respects the user's explicitly armed
+            # fee-inclusive dollar budget, subject to *fresh available cash*,
+            # executable liquidity and exchange validation. No hidden 5%
+            # bankroll fraction rejects an otherwise affordable order.
+            # Value-first / Kelly sizing remains separate for other callers.
             auto_place = getattr(self.manual, "place_auto", None)
             value_place = getattr(self.manual, "place_auto_value", None)
             if action == "BUY" and callable(auto_place):
                 if isinstance(self.manual, ManualTrader):
                     result = auto_place(
                         preview["preview_id"], ticker,
-                        client_order_id=client_order_id, cash_risk_cap=True,
+                        client_order_id=client_order_id,
                     )
                 else:
                     result = auto_place(preview["preview_id"], ticker)
