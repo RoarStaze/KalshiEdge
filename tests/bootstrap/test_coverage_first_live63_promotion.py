@@ -18,6 +18,7 @@ def gate(qualified: int,correct: int, *, threshold: float=.69):
     return evaluate.GateSnapshot(
         total_markets=1000,qualified_markets=qualified,
         qualified_correct=correct,minimum_confidence=threshold,
+        gate_kind="predicted_side_probability",
     )
 
 
@@ -130,3 +131,15 @@ def test_no_retroactive_validation_for_old_69_report():
     b=evaluate.promotion_decision(old)
     assert a==b and a.comparison_rule==evaluate.LEGACY_PROMOTION_RULE_ID
     assert not a.promoted
+
+
+def test_old_strength_gate_cannot_disguise_itself_as_live_69_percent_policy():
+    r=report()
+    gates=dict(r.decision_metrics)
+    gates["retrain_480_candidate"]=gates["retrain_480_candidate"].model_copy(
+        update={"gate_kind":"model_strength"}
+    )
+    invalid=r.model_copy(update={"decision_metrics":gates})
+    d=evaluate.promotion_decision(invalid)
+    assert not d.promoted
+    assert "RETRAIN_480_CONFIDENCE_GATE_MISMATCH" in d.reason_codes
