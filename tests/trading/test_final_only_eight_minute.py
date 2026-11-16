@@ -167,3 +167,45 @@ def test_armed_autotrade_never_buys_after_live_coinflip_final_skip(tmp_path):
     trader.tick()
     assert exchange.orders == []
     assert exchange.previews == []
+
+
+def test_final_autotrade_uses_directional_probability_not_legacy_strength(tmp_path):
+    clock = [OPEN]
+    feed = {
+        "market_ticker": TICKER, "market_close_ts_ns": CLOSE,
+        "checkpoint_ts_ns": DUE, "status": "LIVE", "final_forecast": None,
+    }
+    exchange = FakeExchange()
+    trader = ArmedAutoTrader(exchange, lambda: feed, now_ns=lambda: clock[0],
+                             history_path=tmp_path / "directional.sqlite3")
+    trader.arm("0.25", start_worker=False)
+    clock[0] = DUE + NS
+    feed["final_forecast"] = {
+        "market_ticker": TICKER, "scheduled_ts_ns": DUE, "forecast": "ABOVE",
+        "confidence": .5676, "directional_probability": .7838,
+        "checkpoint_seconds": 480,
+    }
+    trader.tick()
+    assert exchange.orders == [("snapshot", TICKER)]
+    assert trader.status()["state"] == "FILLED"
+
+
+def test_final_autotrade_does_not_submit_at_exactly_63pct_directional(tmp_path):
+    clock = [OPEN]
+    feed = {
+        "market_ticker": TICKER, "market_close_ts_ns": CLOSE,
+        "checkpoint_ts_ns": DUE, "status": "LIVE", "final_forecast": None,
+    }
+    exchange = FakeExchange()
+    trader = ArmedAutoTrader(exchange, lambda: feed, now_ns=lambda: clock[0],
+                             history_path=tmp_path / "boundary.sqlite3")
+    trader.arm("0.25", start_worker=False)
+    clock[0] = DUE + NS
+    feed["final_forecast"] = {
+        "market_ticker": TICKER, "scheduled_ts_ns": DUE, "forecast": "ABOVE",
+        "confidence": .26, "directional_probability": .63,
+        "checkpoint_seconds": 480,
+    }
+    trader.tick()
+    assert exchange.orders == []
+    assert trader.status()["state"] == "SKIPPED"

@@ -24,7 +24,10 @@ from .profit_intelligence import build_profit_intelligence
 from .auto_edge import assess_auto_buy_edge, suggest_auto_stake
 from .autotrade_execution_audit import sanitize_quote_snapshot
 from .manual_trade import MAX_REQUEST_DOLLARS, OrderNotSubmitted, ManualTrader
-from kalshi_edge.bootstrap.final_forecast import FINAL_CHECKPOINT_SECONDS, MINIMUM_FINAL_CONFIDENCE
+from kalshi_edge.bootstrap.final_forecast import (
+    FINAL_CHECKPOINT_SECONDS, MINIMUM_FINAL_CONFIDENCE,
+    MINIMUM_FINAL_DIRECTIONAL_PROBABILITY,
+)
 
 LOG = logging.getLogger(__name__)
 NS = 1_000_000_000
@@ -491,10 +494,27 @@ class ArmedAutoTrader:
             return
         direction = final["forecast"]
         confidence = final.get("confidence")
+        side_probability = final.get("directional_probability")
+        # New immutable finals carry an explicit predicted-side probability.
+        # Never accidentally apply the obsolete 63%-strength gate to it.
+        # Old archived fixtures without that field retain the historical,
+        # more restrictive strength check; malformed present fields fail closed.
+        if side_probability is None:
+            qualified = (
+                type(confidence) in (int, float)
+                and math.isfinite(confidence)
+                and MINIMUM_FINAL_CONFIDENCE <= confidence <= 1
+            )
+        else:
+            qualified = (
+                type(side_probability) in (int, float)
+                and math.isfinite(side_probability)
+                and MINIMUM_FINAL_DIRECTIONAL_PROBABILITY < side_probability <= 1
+            )
         if (direction == "SKIP" or type(confidence) not in (int, float)
-                or not math.isfinite(confidence)
-                or not MINIMUM_FINAL_CONFIDENCE <= confidence <= 1):
-            self._finish("SKIPPED", "Final SKIP or confidence below 63%; no order")
+                or not math.isfinite(confidence) or not 0 <= confidence <= 1
+                or not qualified):
+            self._finish("SKIPPED", "Final SKIP or probability at/below 63%; no order")
             return
         if armed.get("final_attempts", 0) >= MAX_NO_FILL_ATTEMPTS:
             self._finish("NO_FILL", "No executed shares after bounded retries")

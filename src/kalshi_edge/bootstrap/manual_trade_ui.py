@@ -257,10 +257,10 @@ SCRIPT = r"""
   const messages={
    WAITING:"ARMED · "+autoCurrent.amount+" USD each round · "+(autoCurrent.message||"Waiting for eight-minute final forecast")+" ("+(autoCurrent.ticker||"current round")+")",
    EXECUTING:"Executing AutoTrade: "+(autoCurrent.outcome||"—")+" · "+(autoCurrent.message||"checking Kalshi"),
-   FILLED:"Order filled · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
+   FILLED:"Bought · "+(autoCurrent.outcome||"")+" · "+(autoCurrent.order_id||""),
    PARTIAL:"Partially filled · check Kalshi orders for remaining position",
    NO_FILL:"No shares filled · no automatic retry",
-   SKIPPED:autoCurrent.message||"Final forecast SKIP or confidence under 63% · no trade",
+   SKIPPED:autoCurrent.message||"Final forecast SKIP or predicted-direction probability at/below 63% · no trade",
    EXPIRED:autoCurrent.message||"Market changed or final forecast too late · no trade",
    CANCELLED:"AutoTrade cancelled. Nothing submitted.",
    ERROR:"AutoTrade stopped before order · check live market and quote",
@@ -326,6 +326,18 @@ SCRIPT = r"""
   return body;
  }
 
+ // The journal keeps original exchange/order statuses. Only the headline
+ // changes; per-stage and P/L text retains precise execution evidence.
+ function autoHistoryStatusLabel(status){
+  switch(status){
+   case "NOT_SUBMITTED":return "SKIPPED";
+   case "SKIPPED":return "SKIPPED";
+   case "FILLED":return "BOUGHT";
+   case "PARTIAL":return "PARTIALLY BOUGHT";
+   case "NO_FILL":return "NO FILL";
+   default:return String(status||"UNKNOWN").replaceAll("_"," ");
+  }
+ }
  async function refreshAutoHistory(force=false){
   if(!autoSelected||action!=="BUY")return;
   if(!force&&Date.now()-lastHistoryFetch<8000)return;
@@ -387,7 +399,7 @@ SCRIPT = r"""
     side.textContent=entry.outcome==="UP"?"UP":"DOWN";
     const state=document.createElement("span");
     state.className="mt-auto-record-status "+(entry.status==="FILLED"?"filled":"warn");
-    state.textContent=entry.status==="NO_FILL"?"NO FILL":entry.status==="NOT_SUBMITTED"?"NOT SENT":String(entry.status||"UNKNOWN");
+    state.textContent=autoHistoryStatusLabel(entry.status);
     header.append(side,state);item.appendChild(header);
     const meta=document.createElement("div");meta.className="mt-auto-record-sub";
     const amount=document.createElement("span");amount.textContent="Amount "+money(entry.amount);

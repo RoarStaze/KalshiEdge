@@ -79,19 +79,25 @@ def test_final_forecast_skip_rule_exact_threshold_and_below() -> None:
     assert MINIMUM_FINAL_CONFIDENCE == 0.63
     below = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.8, confidence=0.629),
+        prediction=_prediction(DUE, probability=0.62, confidence=0.24),
     )
     assert below.forecast == "SKIP"
-    assert below.reason == "CONFIDENCE_BELOW_63_PERCENT"
-    assert below.confidence == pytest.approx(0.629)
-    assert below.directional_probability == pytest.approx(0.8)
+    assert below.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+    assert below.directional_probability == pytest.approx(0.62)
 
     boundary = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.815, confidence=0.63),
+        prediction=_prediction(DUE, probability=0.63, confidence=0.26),
     )
-    assert boundary.forecast == "ABOVE"
-    assert boundary.reason is None
+    assert boundary.forecast == "SKIP"
+    assert boundary.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
+
+    above = FinalForecastGate().evaluate(
+        _market(), now_ns=DUE,
+        prediction=_prediction(DUE, probability=0.631, confidence=0.262),
+    )
+    assert above.forecast == "ABOVE"
+    assert above.reason is None
 
     below_side = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
@@ -282,13 +288,13 @@ def test_missing_coinflip_inputs_do_not_create_additional_skips():
     assert final.coin_flip_risk_z is None
 
 
-def test_low_confidence_skip_keeps_original_reason_and_records_coinflip_risk():
+def test_low_directional_probability_skip_keeps_original_reason_and_coinflip_risk():
     final = FinalForecastGate().evaluate(
         _market(), now_ns=DUE,
-        prediction=_prediction(DUE, probability=0.8, confidence=0.6, risk_ratio=0.05),
+        prediction=_prediction(DUE, probability=0.62, confidence=0.24, risk_ratio=0.05),
     )
     assert final.forecast == "SKIP"
-    assert final.reason == "CONFIDENCE_BELOW_63_PERCENT"
+    assert final.reason == "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"
     assert final.coin_flip_assessment == "HIGH"
 
 

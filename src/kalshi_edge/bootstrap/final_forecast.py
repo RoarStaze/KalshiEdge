@@ -26,7 +26,10 @@ if TYPE_CHECKING:
 NS = 1_000_000_000
 FINAL_CHECKPOINT_SECONDS = 480
 LEGACY_FINAL_CHECKPOINT_SECONDS = 240
-MINIMUM_FINAL_CONFIDENCE = 0.63
+# Gate is on the displayed predicted-side probability, not the legacy
+# normalized model-strength score 2*abs(P(YES)-0.5).
+MINIMUM_FINAL_DIRECTIONAL_PROBABILITY = 0.63
+MINIMUM_FINAL_CONFIDENCE = 0.63  # compatibility for archived strength reports
 # Heuristic live veto: <= 0.20 expected remaining BRTI standard deviations
 # from strike. NOT a calibrated coin-flip probability; validate prospectively.
 COIN_FLIP_MAX_RISK_Z = 0.20
@@ -165,9 +168,12 @@ class FinalForecastGate:
                 and 0 <= bid <= ask <= 1):
             fields["kalshi_yes_bid"] = bid
             fields["kalshi_yes_ask"] = ask
-        if confidence < MINIMUM_FINAL_CONFIDENCE:
+        # The user-selected gate is on the displayed directional probability.
+        # Equality is a SKIP. Keep the separate BRTI near-strike veto below.
+        if directional_probability <= MINIMUM_FINAL_DIRECTIONAL_PROBABILITY:
             return FinalForecastRecord(
-                **base, **fields, forecast="SKIP", reason="CONFIDENCE_BELOW_63_PERCENT",
+                **base, **fields, forecast="SKIP",
+                reason="DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
             )
         # Active 480s gate: a high-confidence prediction can still be near
         # the strike relative to realized BRTI volatility. Fail safe to SKIP

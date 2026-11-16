@@ -81,6 +81,10 @@ body[data-page="trade"] .context>.manual-trade{
  border-color:rgba(39,220,183,.43)!important;
  box-shadow:0 0 24px rgba(12,217,182,.14),0 24px 55px rgba(0,0,0,.6)!important;
 }
+/* Trade columns must have the same width and top/bottom boundaries. */
+body[data-page="trade"] .layout>.forecast,
+body[data-page="trade"] .layout>.context{min-width:0;min-height:0;align-self:stretch;margin:0}
+body[data-page="trade"] .layout>.context>.manual-trade{margin:0;box-sizing:border-box}
 body[data-page="trade"] .forecast .hero-price-surface{background:rgba(3,23,27,.89)}
 body[data-page="train"] .training-card,
 body[data-page="history"] .card,
@@ -116,7 +120,7 @@ body[data-page="api"] .card{
 .eyebrow{color:#68c5ac;font-size:10px;letter-spacing:2px}
 h1{font-size:clamp(30px,3.7vw,49px);font-weight:760;letter-spacing:-1.9px;line-height:1.13;margin:11px 0}
 .subtitle{font-size:13px;color:#96aab1;line-height:1.75;max-width:780px}
-.layout{grid-template-columns:minmax(0,1fr) minmax(0,1.06fr);gap:22px;align-items:stretch}
+.layout{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;align-items:stretch}
 .card{background:linear-gradient(150deg,#141e24,#0f161c);border:1px solid #29363e;
  box-shadow:0 14px 50px #0000002b;border-radius:20px}
 .forecast{min-height:665px;padding:26px 25px 24px;border-top:1px solid #367c6c}
