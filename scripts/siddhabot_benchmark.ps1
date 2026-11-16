@@ -73,7 +73,7 @@ $env:BTC_LIVE_TRADING_ENABLED = "false"
 $env:BTC_PAPER_TRADING_ENABLED = "false"
 $env:WEATHER_BOT_ENABLED = "false"
 $env:WHALE_SCANNER_ENABLED = "false"
-$env:DATABASE_URL = "sqlite:///" + ((Join-Path $Checkout "siddhabot_benchmark.sqlite3").Replace("\","/"))
+$env:DATABASE_URL = "sqlite:///" + ((Join-Path $Bench "siddhabot_benchmark.sqlite3").Replace("\","/"))
 Push-Location $Checkout
 try {
     # Serve and Capture are aliases, not two separate processes:
