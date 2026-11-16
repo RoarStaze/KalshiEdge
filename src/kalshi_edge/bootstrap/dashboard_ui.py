@@ -148,6 +148,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 .training-stage.current{border-color:#58d7be;background:#1e403b}
 .training-stage.failed{border-color:#b97864;background:#3c2629}
 .training-comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:18px}
+.training-comparison-note{grid-column:1/-1}
 .training-metric{border:1px solid #304b57;background:#172731;border-radius:11px;padding:15px}
 .training-metric h4{margin:0;color:#a5bbbe;font-size:12px;font-weight:600}
 .training-metric strong{display:block;font-size:23px;margin-top:10px;color:#8ae4cc;font-variant-numeric:tabular-nums}
@@ -757,6 +758,7 @@ function renderTrainingSession(run,running){
  // as if it were today's directional-probability SKIP threshold.
  if(candidateGate&&incumbentGate){
   const info=document.createElement("small");
+  info.className="training-comparison-note";
   info.textContent="Current live gate: >63% predicted-direction probability. Training scores below are a historical strength evaluation, not today's live-gate result.";
   comparison.append(info);
   const metrics=[
