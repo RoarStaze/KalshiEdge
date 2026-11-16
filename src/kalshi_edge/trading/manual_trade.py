@@ -448,14 +448,19 @@ class ManualTrader:
         """Strict 1-click manual submit: never worsen the accepted preview."""
         return self._place(preview_id, current_ticker, auto_reprice_buy=False)
 
-    def place_auto(self, preview_id, current_ticker):
-        """Armed final-only dollar BUY: submit at a fresh, budgeted IOC limit.
+    def place_auto(self, preview_id, current_ticker, *,
+                   client_order_id: str | None = None,
+                   cash_risk_cap: bool = False):
+        """Final-direction IOC: fresh fee-inclusive budget, no EV selection.
 
-        Unlike manual one-click orders, AutoTrade has permission to use the
-        contemporaneous executable book even when the preview price worsens.
-        A preview is still consumed once and at most one signed POST is sent.
+        The armed final forecast is the strategy signal. The optional five
+        percent fresh-cash ceiling is mandatory for armed production calls;
+        the existing direct manual reprice API retains its earlier contract.
         """
-        return self._place(preview_id, current_ticker, auto_reprice_buy=True)
+        return self._place(
+            preview_id, current_ticker, auto_reprice_buy=True,
+            client_order_id=client_order_id, cash_risk_cap=cash_risk_cap,
+        )
 
     def preview_auto_maker(self, preview: dict, confidence: float) -> dict | None:
         """Read-only maker-price check, even if the displayed taker quote loses EV.
@@ -583,7 +588,8 @@ class ManualTrader:
 
     def _place(self, preview_id, current_ticker, *, auto_reprice_buy: bool,
                edge_confidence: float | None = None,
-               client_order_id: str | None = None):
+               client_order_id: str | None = None,
+               cash_risk_cap: bool = False):
         # Atomically consume BEFORE doing anything that may submit an order.
         with self._lock:
             data = self._pending.pop(preview_id, None)
@@ -622,6 +628,13 @@ class ManualTrader:
                         or estimate <= 0 or budget <= 0
                         or count * unit + fee > budget or estimate > budget):
                     raise TradingError("Fresh quote exceeds AutoTrade dollar budget")
+                if cash_risk_cap:
+                    from .auto_edge import MAX_BANKROLL_FRACTION
+                    cash = Decimal(fresh["available_balance"])
+                    if (not cash.is_finite() or cash <= 0
+                            or max(estimate, count * unit + fee)
+                            > cash * MAX_BANKROLL_FRACTION):
+                        raise TradingError("Fresh AutoTrade quote exceeds 5% cash risk ceiling")
                 if edge_confidence is not None:
                     # The original expected-value decision NEVER authorizes
                     # buying an adversarially repriced contract.
