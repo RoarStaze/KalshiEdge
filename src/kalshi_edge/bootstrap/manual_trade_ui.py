@@ -276,7 +276,7 @@ SCRIPT = r"""
    " (estimate, not actual P/L)"
   ):"";
   shown("manual-auto-status",
-   (messages[autoCurrent.state]||"AutoTrade buys only after the eight-minute final forecast; fresh quote and cash-risk checks apply.")+quoteInfo);
+   (messages[autoCurrent.state]||"AutoTrade uses your entered dollar amount, up to available cash (including fees) and executable liquidity; buys only after the eight-minute final forecast.")+quoteInfo);
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
   if(selected)renderAutoPayout();
  }
