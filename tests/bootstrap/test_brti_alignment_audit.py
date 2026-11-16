@@ -74,3 +74,28 @@ def test_duplicate_unhealthy_and_missing_data_are_rejected():
     assert result["duplicate_exact_checkpoint_records"] == 1
     assert result["excluded_unhealthy_or_inconsistent"] == 2
     assert result["model_direction_accuracy"] is None
+
+def test_current_63_percent_probability_skips_and_benchmark_flip_skips_are_not_invisible():
+    """Current live-eligible healthy SKIPs belong in BRTI diagnostic samples."""
+    fixtures = [
+        forecast("CURRENT", 500, "BELOW", .62, "SKIP",
+                 "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT"),
+        forecast("OLD63", 600, "ABOVE", .61, "SKIP",
+                 "CONFIDENCE_BELOW_63_PERCENT"),
+        forecast("FLIP", 700, "ABOVE", .9, "SKIP",
+                 "COIN_FLIP_RISK_HIGH"),
+        forecast("STALE", 800, "ABOVE", .92, "SKIP",
+                 "STALE_BRTI"),
+    ]
+    predictions = [
+        prediction("CURRENT", 500, .62, 99, 101),
+        prediction("OLD63", 600, .61, 101, 99),
+        prediction("FLIP", 700, .9, 100, 101),
+        prediction("STALE", 800, .92, 102, 101),
+    ]
+    report = compare_brti_alignment(fixtures, predictions)
+    assert report["settled_forecasts"] == 4
+    assert report["matched_healthy_checkpoints"] == 3
+    assert report["excluded_unhealthy_or_inconsistent"] == 1
+    assert report["missing_exact_checkpoint_records"] == 0
+    assert report["reference_direction_disagreements"] == 2
