@@ -753,13 +753,15 @@ function renderTrainingSession(run,running){
  const r=run.results||{};
  const candidateGate=r.candidate_gate||r.candidate_69_gate;
  const incumbentGate=r.incumbent_gate||r.incumbent_69_gate;
+ const recordedStrengthGate=Number(r.gate_confidence); // historical provenance only
  // Historical training results were evaluated at the policy in force
  // when recorded, often a *strength* gate. Do not display that percentage
  // as if it were today's directional-probability SKIP threshold.
  if(candidateGate&&incumbentGate){
   const info=document.createElement("small");
   info.className="training-comparison-note";
-  info.textContent="Current live gate: >63% predicted-direction probability. Training scores below are a historical strength evaluation, not today's live-gate result.";
+  info.textContent="Current live gate: >63% predicted-direction probability. Training scores below are a historical strength evaluation, not today's live-gate result."+
+   (Number.isFinite(recordedStrengthGate)?" The original evaluation threshold remains in the saved report.":"");
   comparison.append(info);
   const metrics=[
    ["Newly trained model",candidateGate],
