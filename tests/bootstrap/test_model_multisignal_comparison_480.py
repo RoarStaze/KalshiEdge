@@ -208,7 +208,7 @@ def test_cli_read_only_text_and_json_and_explicit_model_filter(monkeypatch, tmp_
     args = ["--root", str(tmp_path), "--model-hash", MODEL]
     assert main(args) == 0
     printed = capsys.readouterr().out
-    assert "MODEL vs MULTISIGNAL" in printed
+    assert "MODEL vs SIGNALS ONLY vs COMBINED" in printed
     assert "63%" in printed and "82%" in printed
     assert "Brier" in printed and "DESCRIPTIVE ONLY" in printed
     assert main(args + ["--json"]) == 0
