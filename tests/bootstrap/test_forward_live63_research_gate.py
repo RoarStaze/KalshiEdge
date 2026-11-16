@@ -1,4 +1,4 @@
-"""Regression: new 480-second research output must use actual live 63% gate.
+"""Regression: new 480-second research output must use actual live 69% gate.
 
 Historical saved 69%-gate snapshots must retain their original label.
 """
@@ -9,21 +9,21 @@ from kalshi_edge.bootstrap.final_forecast import MINIMUM_FINAL_CONFIDENCE
 from kalshi_edge.bootstrap.dashboard_ui import PAGE
 
 
-def test_63percent_model_confidence_is_shared_with_forward_research():
-    assert MINIMUM_FINAL_CONFIDENCE == .63
+def test_69percent_model_strength_fallback_is_shared_with_forward_research():
+    assert MINIMUM_FINAL_CONFIDENCE == .69
     assert forward_learning_480.CONFIDENCE_GATE == MINIMUM_FINAL_CONFIDENCE
     labels=[1,0,1]
-    probabilities=[.82,.18,.80]
+    probabilities=[.90,.10,.80]
     result=forward_learning_480._gate(labels,probabilities)
     assert result["qualified"] == 2
     assert result["correct"] == 2
     assert result["skipped"] == 1
 
 
-def test_research_reasons_read_generic_63percent_gate():
+def test_research_reasons_read_generic_69percent_gate():
     report={
         "status":"NO_VALIDATED_JOINT_GAIN",
-        "gate_confidence":.63,
+        "gate_confidence":.69,
         "candidate_gate":{"qualified":36,"correct":34,"coverage":36/191,"qualified_accuracy":34/36},
         "incumbent_gate":{"qualified":65,"correct":61,"coverage":65/191,"qualified_accuracy":61/65},
         "matched_validation_markets":191,
