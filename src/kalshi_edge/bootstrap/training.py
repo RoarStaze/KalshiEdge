@@ -23,6 +23,11 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from . import artifact, calibration, models, structural, volatility
+from .features import (
+    CAUSAL_INTERACTION_FEATURE_NAMES, CAUSAL_INTERACTION_POLICY,
+    CAUSAL_INTERACTION_SOURCE_NAMES,
+    derive_causal_interactions as derive_causal_interactions_from_feature_map,
+)
 from .config import BootstrapSettings
 from .leakage import audit_dataset_rows
 from .metrics import ProbabilityMetrics, probability_metrics
@@ -572,6 +577,10 @@ def _table_to_rows(table, feature_names: Sequence[str]) -> tuple[FeatureRow, ...
             for name in source_columns
             if data[name][index] is not None
         }
+        # Derive identical causal features from existing hash-verified Parquet
+        # columns. No new unlabeled history, hidden future candle or BRTI is
+        # reconstructed, and no raw data/lockbox input is rewritten.
+        features.update(derive_causal_interactions_from_feature_map(features))
         rows.append(
             FeatureRow(
                 market_ticker=str(data["market_ticker"][index]),
@@ -1124,6 +1133,7 @@ def _training_config_hash(
         "settings": settings.model_dump(mode="json"),
         "structural_simulations": STRUCTURAL_SIMULATIONS,
         "minimum_historical_evaluation_seconds": MIN_HISTORICAL_EVALUATION_SECONDS,
+        "single_classifier_signal_interactions": CAUSAL_INTERACTION_POLICY,
         "feature_ablations": ("external_btc_features", "kalshi_flow_features"),
         "component_ablations": ("structural_component", "residual_component", "xgboost_vs_lower_variance"),
     }
@@ -1133,8 +1143,13 @@ def _training_config_hash(
 
 def _required_bundle_features(outcome_features: Sequence[str], dataset_features: Sequence[str]) -> tuple[str, ...]:
     available = set(dataset_features)
+    virtual = set(CAUSAL_INTERACTION_FEATURE_NAMES)
     needed = set(outcome_features) | set(STRUCTURAL_FEATURES) | set(PRIOR_FEATURES)
-    missing = sorted(needed - available)
+    # New features are derived purely from pre-existing point-in-time columns
+    # in both the historical loader and live builder, not from a second model.
+    if needed & virtual and not set(CAUSAL_INTERACTION_SOURCE_NAMES).issubset(available):
+        raise TrainingError("dataset missing causal multi-signal interaction source features")
+    missing = sorted(needed - available - virtual)
     if missing:
         raise TrainingError(f"dataset lacks required live feature {missing[0]}")
     return tuple(sorted(needed))

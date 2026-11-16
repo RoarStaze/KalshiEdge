@@ -28,6 +28,7 @@ from .final_history import (
     _load_saved_settlement,
 )
 from .types import FeatureRow
+from .features import derive_causal_interactions
 
 if TYPE_CHECKING:
     from .live import LiveFeatureState, LivePredictionRecord
@@ -369,7 +370,7 @@ def _joined(root:Path) -> tuple[list[FeatureRow],dict[str,Any]]:
             split_group_id=final.market_ticker,
             checkpoint_ts_ns=snapshot.prediction_ts_ns,
             label_yes=1 if settled.result=="yes" else 0,
-            features=dict(snapshot.features),
+            features={**snapshot.features, **derive_causal_interactions(snapshot.features)},
             source_max_ts_ns=dict(snapshot.source_max_ts_ns),
         ))
         counts["verified_feature_examples"]+=1
