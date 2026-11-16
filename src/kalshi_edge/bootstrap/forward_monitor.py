@@ -28,11 +28,12 @@ def _verified(row: Mapping[str, Any]):
     # Score originally saved, settled model probabilities even if a valid
     # confidence or near-strike safety rule prevented issuing a forecast.
     # Previously only old 69%-strength SKIPs were included, silently hiding
-    # the current 63%-directional and recorded BRTI veto cohorts.
+    # the current 69%-directional and recorded BRTI veto cohorts.
     eligible_skip_reasons = {
         "CONFIDENCE_BELOW_69_PERCENT",
         "CONFIDENCE_BELOW_63_PERCENT",
         "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT",
         "COIN_FLIP_RISK_HIGH",
     }
     if forecast not in ("ABOVE", "BELOW") and not (
