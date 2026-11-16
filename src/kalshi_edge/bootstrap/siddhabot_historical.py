@@ -97,19 +97,66 @@ def trailing_settlement_bias(previous: Sequence[tuple[int, int]], checkpoint_ns:
     return sum(y for _, y in recent) / len(recent) if len(recent) >= 5 else None
 
 
-def build_proxy_features(final: Any, ticks: Any, *, settlement_bias: float | None) -> dict[str, float] | None:
-    """Calculate frozen model's 23 features from checkpoint-causal data only.
+def _ema(values: Any, span: int, min_periods: int):
+    """Match pandas ewm(adjust=False, min_periods=...) without pandas."""
+    import numpy as np
 
-    Requires four complete hours of contiguous Binance 1s bars, 181 full
-    finished minutes, and two finished hours. Never uses a future candle.
+    result = np.full(len(values), math.nan, dtype=float)
+    alpha = 2.0 / (span + 1)
+    prev = 0.0
+    count = 0
+    for index, x in enumerate(values):
+        if not math.isfinite(float(x)):
+            continue
+        prev = float(x) if count == 0 else alpha*float(x) + (1-alpha)*prev
+        count += 1
+        if count >= min_periods:
+            result[index] = prev
+    return result
+
+
+def _minute_and_hour_series(seconds: Any, close: Any, volume: Any, high: Any, low: Any,
+                            anchor_ns: int):
+    """Only use fully completed 1-minute and 1-hour buckets."""
+    import numpy as np
+
+    ids = seconds // MINUTE_NS
+    unique, offsets, counts = np.unique(ids, return_index=True, return_counts=True)
+    wanted = np.arange(anchor_ns//MINUTE_NS - 181, anchor_ns//MINUTE_NS)
+    pos = np.searchsorted(unique, wanted)
+    if np.any(pos >= len(unique)) or np.any(unique[pos] != wanted) or np.any(counts[pos] != 60):
+        return None
+    minutes_close = close[offsets[pos] + counts[pos] - 1]
+    all_volumes = np.add.reduceat(volume, offsets)
+    minutes_volume = all_volumes[pos]
+
+    ids_h = seconds // HOUR_NS
+    keys, beginnings, counts_h = np.unique(ids_h, return_index=True, return_counts=True)
+    needed = np.array([anchor_ns//HOUR_NS - 2, anchor_ns//HOUR_NS - 1])
+    ph = np.searchsorted(keys, needed)
+    if np.any(ph >= len(keys)) or np.any(keys[ph] != needed) or np.any(counts_h[ph] != 3600):
+        return None
+    hour_close = close[beginnings[ph] + counts_h[ph] - 1]
+    last_start = beginnings[ph[-1]]
+    last_end = last_start + counts_h[ph[-1]]
+    hour_range = (max(high[last_start:last_end]) - min(low[last_start:last_end])) / hour_close[-1]
+    hour_return = math.log(hour_close[-1] / hour_close[-2])
+    return minutes_close, minutes_volume, float(hour_return), float(hour_range)
+
+
+def build_proxy_features(final: Any, ticks: Any, *, settlement_bias: float | None) -> dict[str, float] | None:
+    """Original 23 input names, causal Binance reconstruction, NO pandas.
+
+    Requires four contiguous hours of 1s data and completed 1m/1h aggregates.
+    Coinbase source and exact quote-change events remain unavailable proxies.
     """
     import numpy as np
 
     checkpoint = int(final.prediction_ts_ns)
     close_ns = int(final.scheduled_ts_ns) + int(final.checkpoint_seconds) * NS
     if (final.checkpoint_seconds != 480
-            or not 0 <= checkpoint - int(final.scheduled_ts_ns) <= 2 * NS
-            or close_ns - checkpoint < 478 * NS):
+            or not 0 <= checkpoint - int(final.scheduled_ts_ns) <= 2*NS
+            or close_ns - checkpoint < 478*NS):
         return None
     if (settlement_bias is None or not math.isfinite(settlement_bias)
             or not 0 <= settlement_bias <= 1):
@@ -117,109 +164,92 @@ def build_proxy_features(final: Any, ticks: Any, *, settlement_bias: float | Non
     bid = getattr(final, "kalshi_yes_bid", None)
     ask = getattr(final, "kalshi_yes_ask", None)
     strike = getattr(final, "strike", None)
-    if (not all(type(v) in (int, float) and math.isfinite(v) for v in (bid, ask, strike))
+    if (not all(type(v) in (int,float) and math.isfinite(v) for v in (bid,ask,strike))
             or not 0 < bid <= ask <= 1 or strike <= 0):
         return None
-    if not {"ts_ns", "close", "high", "low", "base_volume"}.issubset(ticks.columns):
+    fields = ("ts_ns", "close", "high", "low", "base_volume")
+    if not isinstance(ticks, dict) or not all(name in ticks for name in fields):
         return None
-    # Archived timestamps align on integer seconds; live records have ns.
-    anchor = (checkpoint // NS) * NS
-    prior = ticks.loc[
-        (ticks["ts_ns"] >= anchor - LOOKBACK_NS)
-        & (ticks["ts_ns"] + NS <= anchor)
-    ].sort_values("ts_ns")
-    if len(prior) != LOOKBACK_NS // NS:
+    anchor = (checkpoint // NS)*NS
+    t = np.asarray(ticks["ts_ns"], dtype=np.int64)
+    chosen = (t >= anchor - LOOKBACK_NS) & (t + NS <= anchor)
+    seconds = t[chosen]
+    if (len(seconds) != LOOKBACK_NS//NS
+            or seconds[0] != anchor - LOOKBACK_NS
+            or seconds[-1] + NS != anchor
+            or np.any(np.diff(seconds) != NS)):
         return None
-    ts = prior["ts_ns"].to_numpy(dtype=np.int64)
-    if (ts[0] != anchor - LOOKBACK_NS or ts[-1] + NS != anchor
-            or np.any(np.diff(ts) != NS)):
+    close = np.asarray(ticks["close"], dtype=float)[chosen]
+    high = np.asarray(ticks["high"], dtype=float)[chosen]
+    low = np.asarray(ticks["low"], dtype=float)[chosen]
+    volume = np.asarray(ticks["base_volume"], dtype=float)[chosen]
+    if (not all(np.isfinite(x).all() for x in (close,high,low,volume))
+            or np.any(close <= 0) or np.any(volume < 0)):
         return None
-    raw = prior[["close", "high", "low", "base_volume"]].to_numpy(dtype=float)
-    if not np.isfinite(raw).all() or np.any(raw[:, 0] <= 0) or np.any(raw[:, 3] < 0):
+    series = _minute_and_hour_series(seconds,close,volume,high,low,anchor)
+    if series is None:
         return None
-    spot = float(prior["close"].iloc[-60:].mean())
-    seconds_remaining = (close_ns - checkpoint) / NS
-    elapsed = 1.0 - seconds_remaining / 900.0
+    minute_close, minute_volume, hour_return, hour_range = series
+    ret = np.log(minute_close[1:]/minute_close[:-1])
+    if len(ret) != 180:
+        return None
+    sigma = float(ret.std(ddof=1)/math.sqrt(60))
+    if sigma <= 0 or not math.isfinite(sigma):
+        return None
+    spot = float(close[-60:].mean())
+    remaining = (close_ns-checkpoint)/NS
+    sigma_h = sigma*math.sqrt(remaining)
+    z = (math.log(spot/strike)-.5*sigma_h*sigma_h)/sigma_h
+    gbm = min(.99,max(.01,.5*(1+math.erf(z/math.sqrt(2)))))
+    movement = float(np.abs(ret[-15:]).sum())
+    path = abs(math.log(minute_close[-1]/minute_close[-16]))/movement if movement > 0 else 0.
 
-    minutes = prior.groupby((prior["ts_ns"] // MINUTE_NS).to_numpy(), sort=True).agg(
-        close=("close", "last"), volume=("base_volume", "sum"), n=("close", "size"),
-    )
-    latest = checkpoint // MINUTE_NS - 1
-    selected = minutes.reindex(np.arange(latest - 180, latest + 1))
-    if selected.isna().any().any() or not (selected["n"] == 60).all():
-        return None
-    close = selected["close"].astype(float)
-    volume = selected["volume"].astype(float)
-    returns = np.log(close / close.shift(1)).dropna()
-    if len(returns) != 180:
-        return None
-    sigma = float(returns.std(ddof=1) / math.sqrt(60))
-    if not math.isfinite(sigma) or sigma <= 0:
-        return None
-    sigma_h = sigma * math.sqrt(seconds_remaining)
-    z = (math.log(spot / strike) - .5 * sigma_h ** 2) / sigma_h
-    gbm = min(.99, max(.01, .5 * (1 + math.erf(z / math.sqrt(2)))))
-    movement = float(returns.iloc[-15:].abs().sum())
-    path = (float(abs(math.log(close.iloc[-1] / close.iloc[-16]))) / movement
-            if movement > 0 else 0.0)
-
-    hours = prior.groupby((prior["ts_ns"] // HOUR_NS).to_numpy(), sort=True).agg(
-        close=("close", "last"), high=("high", "max"), low=("low", "min"),
-        n=("close", "size"),
-    )
-    last_hour = checkpoint // HOUR_NS - 1
-    hour_pair = hours.reindex([last_hour - 1, last_hour])
-    if hour_pair.isna().any().any() or not (hour_pair["n"] == 3600).all():
-        return None
-    h1_return = math.log(float(hour_pair["close"].iloc[-1]) / float(hour_pair["close"].iloc[-2]))
-    h1_range = (
-        float(hour_pair["high"].iloc[-1]) - float(hour_pair["low"].iloc[-1])
-    ) / float(hour_pair["close"].iloc[-1])
-
-    delta = close.diff()
-    gains, losses = delta.clip(lower=0), (-delta).clip(lower=0)
-    gain = gains.rolling(14, min_periods=14).mean().iloc[-1]
-    loss = losses.rolling(14, min_periods=14).mean().iloc[-1]
-    rsi = (100.0 if gain > 0 else 50.0) if loss == 0 else 100 - 100 / (1 + gain/loss)
-    ema12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
-    ema26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
-    line = ema12 - ema26
-    signal = line.ewm(span=9, adjust=False, min_periods=9).mean()
-    macd = float(((line - signal) / close).iloc[-1])
-    center = close.iloc[-20:].mean()
-    std = close.iloc[-20:].std(ddof=1)
+    price_delta = np.diff(minute_close[-15:])
+    gain = float(np.maximum(0,price_delta).mean())
+    loss = float(np.maximum(0,-price_delta).mean())
+    rsi = (100. if gain > 0 else 50.) if loss == 0 else 100 - 100/(1+gain/loss)
+    macd_line = _ema(minute_close,12,12) - _ema(minute_close,26,26)
+    macd_signal = _ema(macd_line,9,9)
+    macd_hist = float((macd_line[-1]-macd_signal[-1])/minute_close[-1])
+    middle = float(np.mean(minute_close[-20:]))
+    std = float(np.std(minute_close[-20:],ddof=1))
     if std <= 0:
         return None
-    bollinger = float((close.iloc[-1] - center + 2*std) / (4*std))
-    last60volume = float(volume.iloc[-60:].sum())
-    if last60volume <= 0:
+    bb_pct = float((minute_close[-1]-middle+2*std)/(4*std))
+    vol_sum_60 = float(minute_volume[-60:].sum())
+    if vol_sum_60 <= 0:
         return None
-    vwap = float((close.iloc[-60:] * volume.iloc[-60:]).sum() / last60volume)
-    dt = datetime.fromtimestamp(checkpoint / NS, timezone.utc)
-    hour_fraction = dt.hour + dt.minute / 60
-    features = {
-        "seconds_remaining": seconds_remaining, "elapsed_fraction": elapsed,
-        "distance_log": math.log(spot / strike), "yes_mid": (bid+ask)/2,
-        "spread": ask-bid, "gbm_prob": gbm, "realized_vol_per_second": sigma,
-        "m1_ret_1m": float(math.log(close.iloc[-1]/close.iloc[-2])),
-        "m1_ret_5m": float(math.log(close.iloc[-1]/close.iloc[-6])),
-        "m1_vol_sum_5m": float(volume.iloc[-5:].sum()),
-        "m1_vol_sum_15m": float(volume.iloc[-15:].sum()),
-        "h1_log_return": h1_return, "h1_range_pct": h1_range,
-        # Exact historic quote-change age and spot movement since repricing
-        # are unavailable. Zero proxies are NOT claimed as original inputs.
-        "quote_age_seconds": 0.0, "btc_move_since_quote": 0.0,
-        "path_efficiency_15m": min(1., max(0., path)),
+    vwap = float(np.dot(minute_close[-60:],minute_volume[-60:])/vol_sum_60)
+    dt = datetime.fromtimestamp(checkpoint/NS,timezone.utc)
+    hour_fraction = dt.hour + dt.minute/60
+    result = {
+        "seconds_remaining": remaining,
+        "elapsed_fraction": 1 - remaining/900.,
+        "distance_log": math.log(spot/strike),
+        "yes_mid": (bid+ask)/2.,
+        "spread": ask-bid,
+        "gbm_prob": gbm,
+        "realized_vol_per_second": sigma,
+        "m1_ret_1m": float(math.log(minute_close[-1]/minute_close[-2])),
+        "m1_ret_5m": float(math.log(minute_close[-1]/minute_close[-6])),
+        "m1_vol_sum_5m": float(minute_volume[-5:].sum()),
+        "m1_vol_sum_15m": float(minute_volume[-15:].sum()),
+        "h1_log_return": hour_return,
+        "h1_range_pct": hour_range,
+        "quote_age_seconds": 0.,  # proxy: original Kalshi quote-change history absent
+        "btc_move_since_quote": 0.,  # proxy, NOT a recovered original feature
+        "path_efficiency_15m": min(1., max(0., float(path))),
         "hour_sin": math.sin(2*math.pi*hour_fraction/24),
         "hour_cos": math.cos(2*math.pi*hour_fraction/24),
-        "rsi_14": float(rsi), "macd_histogram_pct": macd,
-        "bollinger_pct_b": bollinger,
-        "vwap_deviation_60m": (float(close.iloc[-1])-vwap)/vwap,
+        "rsi_14": rsi,
+        "macd_histogram_pct": macd_hist,
+        "bollinger_pct_b": bb_pct,
+        "vwap_deviation_60m": (float(minute_close[-1])-vwap)/vwap,
         "settlement_bias": settlement_bias,
     }
-    if set(features) != set(SIDDHA_COLUMNS) or not all(math.isfinite(v) for v in features.values()):
+    if set(result) != set(SIDDHA_COLUMNS) or not all(math.isfinite(v) for v in result.values()):
         return None
-    return features
+    return result
 
 
 class _VerifiedSecondHistory:
@@ -242,25 +272,35 @@ class _VerifiedSecondHistory:
         manifest = self.root / "manifests" / "binance_normalized" / "1s" / (name + ".manifest.json")
         if not file.is_file() or not verify_artifact(file, manifest):
             raise HistoricalBenchmarkError(f"missing/invalid verified Binance archive: {key}")
-        table = pq.read_table(file, columns=["ts_ns", "close", "high", "low", "base_volume"])
-        self.cache[key] = table.to_pandas()
+        import numpy as np
+
+        fields = ["ts_ns", "close", "high", "low", "base_volume"]
+        table = pq.read_table(file, columns=fields)
+        data = table.to_pydict()
+        self.cache[key] = {
+            name: np.asarray(data[name], dtype=(np.int64 if name == "ts_ns" else float))
+            for name in fields
+        }
         if len(self.cache) > self.max_days:
             self.cache.popitem(last=False)
         return self.cache[key]
 
     def before(self, checkpoint_ns: int):
-        import pandas as pd
+        import numpy as np
 
         anchor = (checkpoint_ns // NS) * NS
         start = anchor - LOOKBACK_NS
         current = datetime.fromtimestamp(start/NS, timezone.utc).date()
         end = datetime.fromtimestamp((anchor-NS)/NS, timezone.utc).date()
-        blocks = []
+        fields = ("ts_ns", "close", "high", "low", "base_volume")
+        blocks = {name: [] for name in fields}
         while current <= end:
-            frame = self.day(current)
-            blocks.append(frame[(frame.ts_ns >= start) & (frame.ts_ns + NS <= anchor)])
+            day = self.day(current)
+            mask = (day["ts_ns"] >= start) & (day["ts_ns"] + NS <= anchor)
+            for name in fields:
+                blocks[name].append(day[name][mask])
             current += timedelta(days=1)
-        return pd.concat(blocks, ignore_index=True) if blocks else pd.DataFrame()
+        return {name: np.concatenate(parts) for name, parts in blocks.items()}
 
 
 def evaluate_paired(rows: Sequence[tuple[float, float, int, str]]) -> dict[str, Any]:
