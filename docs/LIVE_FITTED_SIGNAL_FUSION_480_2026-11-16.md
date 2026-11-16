@@ -46,16 +46,27 @@ This is an engineering gate, **not a guarantee of future profits**. Signal selec
 
 The artifact is JSON (no pickle), signed by its content SHA-256, tied to a particular underlying model bundle hash, and exclusive-created. A damaged active file blocks predictor startup; a valid artifact from an old model cannot contaminate a newly promoted model.
 
-### Fusion v2 compatibility and safe migration
+### Fusion v3 compatibility and safe migration
 
-Prior `live-480-fitted-multisignal-v1` artifacts were validated at the
-obsolete strength threshold, not the live final-forecast probability threshold.
-**Do not silently retain them.** The loader explicitly refuses an existing
-signed v1 artifact to avoid applying a model whose live 63% approval was never
-established. This can stop predictor startup until the old optional artifact
-is moved away; the underlying promoted model remains unchanged.
+Fusion v3 fixes a previously overlooked evidence-validity inconsistency: the
+immutable final forecast and BRTI forensics accept any **finite nonnegative**
+volatility-normalized strike-distance z, but optional Fusion v2 refused values
+above 100. In v3, these values are valid; as before, the signed risk feature
+is clipped at 10 while the reversal term remains bounded by `1 + z`.
+No threshold, existing model weights, feature list, training/holdout minimum,
+or numerical acceptance gate is relaxed. Whether this recovers any of the
+user's locally excluded examples is **unknown until the local status command**.
 
-If `status` reports `legacy v1 fusion artifact`, first stop the predictor
+Previously signed v1 artifacts were validated with the obsolete model-strength
+gate; **v2 artifacts were validated for an input domain excluding z>100**.
+These are both different from v3's evidence/inference contract. For safety,
+the v3 loader refuses both v1 and v2 signed active artifacts rather than
+silently changing live inference for an already deployed model. Back up and
+move the old optional artifact, then refit with the same chronological full
+holdout. This can stop predictor startup until the operator migrates the old
+artifact; the underlying promoted base model remains unchanged.
+
+If `status` reports a `legacy v1/v2 fusion artifact`, first stop the predictor
 and disarm AutoTrade. Back up the old **local file for the reported model hash**
 before retrying:
 
@@ -67,18 +78,41 @@ $hash = (& $py -c "from kalshi_edge.bootstrap.live import load_default_bundle; f
 $src = Join-Path $root "models\fusion\$hash.json"
 if (Test-Path $src) {
     New-Item -ItemType Directory -Force (Join-Path $root "models\fusion\legacy-backups") | Out-Null
-    Move-Item $src (Join-Path $root "models\fusion\legacy-backups\$hash-v1.json")
+    $backup = "$hash-legacy-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
+    Move-Item $src (Join-Path $root "models\fusion\legacy-backups\$backup")
 }
 & $py -m kalshi_edge.bootstrap.signal_fusion_480 status
 ```
 
 Check whether **enough independently verified, same-model 480s settlements**
 exist using the status command. Only rerun `fit` if the readiness report
-indicates the data is present. The v2 fit keeps the existing chronological
+indicates the data is present. The v3 fit keeps the existing chronological
 fit/calibration/holdout sizes, unchanged 63% production gate and coin-flip
 veto, and writes a new artifact only after *the current live policy*
 satisfies the existing score and coverage safeguards. This does **not**
 claim a measured improvement on this user's unavailable local history.
+
+### Readiness and exclusion reasons
+
+`signal_fusion_480 status` continues to return `same_model_finals`,
+`eligible`, and `missing_or_invalid`. It now also emits an
+`exclusion_reasons` dictionary with these non-overlapping counts:
+`snapshot_missing_or_invalid`, `snapshot_unavailable`,
+`settlement_missing`, `settlement_invalid`,
+`probability_missing_or_invalid`, `risk_missing_or_invalid`,
+`signal_inputs_missing_or_invalid`, and `duplicate_ticker`.
+
+The sum of these categories must equal `missing_or_invalid`;
+`eligible + missing_or_invalid` must equal `same_model_finals`.
+A missing/invalid category can be a genuine missing earlier checkpoint,
+and may **never** be replaced by synthetic later-available data. A market
+with valid finite z>100 should now contribute if it has all other required
+immutable checkpoint signals and a saved official settlement.
+
+**The readiness status does not run model fitting, place orders, contact an
+exchange, or alter saved training examples.** The local deployment still
+requires 480 qualified historical 480s examples of the same base model hash,
+chronologically separated blocks, and better paired holdout scores.
 
 ### Local commands (Windows PowerShell)
 
