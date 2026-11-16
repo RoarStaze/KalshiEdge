@@ -25,7 +25,7 @@ from .metrics import probability_metrics
 from .signal_fusion_480 import FEATURE_NAMES, _verified_examples
 
 THRESHOLDS_PERCENT = SWEEP_THRESHOLDS_PERCENT
-EXPERIMENT_POLICY = "read-only-no-fit-model-multisignal-480-v1"
+EXPERIMENT_POLICY = "read-only-no-fit-model-vs-signals-vs-combined-480-v2"
 
 # Predeclared illustrative hypothesis; these are NOT fitted / calibrated.
 # Different model components often share inputs; no independent signal votes
@@ -41,27 +41,21 @@ if len(_IDX) != len(FEATURE_NAMES) or abs(sum(FIXED_BLEND.values()) - 1.0) > 1e-
     raise RuntimeError("invalid fixed experimental signal schema")
 
 
-def experimental_multisignal_probability(
-    base_p_yes: float, vector: Sequence[float],
-) -> float:
-    """Unfitted BRTI + flip-risk + candle/reversal + signed buy/sell overlay.
+def _signal_component_probabilities(
+    vector: Sequence[float],
+) -> tuple[float, float, float]:
+    """Standalone checkpoint-time signal components, independent of model p.
 
-    NEVER called by the live predictor. No labels or settlement fields enter.
-    The previously captured `signal_fusion_480.build_signal_vector` supplies
-    the point-in-time verified, schema-checked input vector.
+    No outcome labels, future market prices or model probability participate
+    in these components.  The vector contains a base_logit for compatibility
+    with the existing evidence schema, but it is deliberately NOT used here.
+    These formulas are non-calibrated hypotheses, not learned probabilities.
     """
-    if (type(base_p_yes) not in (float, int)
-            or not math.isfinite(base_p_yes) or not 0 <= base_p_yes <= 1):
-        raise ValueError("invalid frozen base-model probability")
     if len(vector) != len(FEATURE_NAMES) or any(
         type(x) not in (float, int) or not math.isfinite(x) for x in vector
     ):
         raise ValueError("nonfinite or incomplete causal multi-signal vector")
     x = {name: float(vector[index]) for name, index in _IDX.items()}
-    clipped_base = max(1e-5, min(1 - 1e-5, float(base_p_yes)))
-    expected_logit = math.log(clipped_base / (1 - clipped_base))
-    if abs(x["base_logit"] - expected_logit) > 1e-6:
-        raise ValueError("multi-signal feature vector not bound to same base probability")
     if (abs(x["brti_signed_risk_z"]) > 10 or abs(x["brti_distance_bps"]) > 250
             or abs(x["brti_basis_bps"]) > 200
             or abs(x["btc_taker_buy_imbalance_60s"]) > 1
@@ -69,17 +63,12 @@ def experimental_multisignal_probability(
             or abs(x["signed_aggressor_volume_btc"]) > 500):
         raise ValueError("out-of-schema signal evidence")
 
-    # Settlement-referenced strike distance normalized by causal BRTI
-    # volatility, attenuated when BRTI/Binance simultaneously diverge.
-    # This is a proxy, NOT an empirically calibrated P(BRTI settles ABOVE).
     signed_risk = x["brti_signed_risk_z"]
     basis_reliability = 1.0 / (1.0 + abs(x["brti_basis_bps"]) / 25.0)
     brti_probability = (
         0.5 + 0.45 * math.tanh(signed_risk / 1.5) * basis_reliability
     )
 
-    # Signed recent candles and opposite-to-strike-side reversal pressure.
-    # No future bars and no TradingView proprietary indicator API.
     candle_direction = math.tanh(
         0.5 * x["btc_return_15s_bps"] / 15.0
         + 0.5 * x["btc_return_60s_bps"] / 30.0
@@ -87,14 +76,50 @@ def experimental_multisignal_probability(
     )
     candle_probability = 0.5 + 0.22 * candle_direction
 
-    # Aggregate aggressor buys minus sells + Kalshi taker flow; not whales.
     signed_flow = math.tanh(
         0.65 * x["btc_taker_buy_imbalance_60s"]
         + 0.20 * math.tanh(x["signed_aggressor_volume_btc"] / 50.0)
         + 0.15 * x["kalshi_yes_taker_imbalance_60s"]
     )
     flow_probability = 0.5 + 0.22 * signed_flow
+    return brti_probability, candle_probability, flow_probability
 
+
+def experimental_signal_only_probability(vector: Sequence[float]) -> float:
+    """Experimental signal-only forecast; NEVER the live predictor.
+
+    Normalize the EXACT same 15/6/4 component weights used by the original
+    combined experiment. No trained model contribution and no reweighting
+    based on observed historical outcomes.
+    """
+    brti, candle, flow = _signal_component_probabilities(vector)
+    signal_weight = 1.0 - FIXED_BLEND["base_model"]
+    if signal_weight <= 0:
+        raise ValueError("signal-only normalization has zero denominator")
+    result = (
+        FIXED_BLEND["brti_reference"] * brti
+        + FIXED_BLEND["candle_reversal"] * candle
+        + FIXED_BLEND["signed_market_flow"] * flow
+    ) / signal_weight
+    if not 0 <= result <= 1 or not math.isfinite(result):
+        raise ValueError("standalone signal probability invalid")
+    return result
+
+
+def experimental_multisignal_probability(
+    base_p_yes: float, vector: Sequence[float],
+) -> float:
+    """Original fixed combined forecast, numerically unchanged by this test."""
+    if (type(base_p_yes) not in (float, int)
+            or not math.isfinite(base_p_yes) or not 0 <= base_p_yes <= 1):
+        raise ValueError("invalid frozen base-model probability")
+    brti_probability, candle_probability, flow_probability = (
+        _signal_component_probabilities(vector)
+    )
+    clipped_base = max(1e-5, min(1 - 1e-5, float(base_p_yes)))
+    expected_logit = math.log(clipped_base / (1 - clipped_base))
+    if abs(float(vector[_IDX["base_logit"]]) - expected_logit) > 1e-6:
+        raise ValueError("multi-signal vector not bound to same base probability")
     adjusted = (
         FIXED_BLEND["base_model"] * float(base_p_yes)
         + FIXED_BLEND["brti_reference"] * brti_probability
@@ -193,6 +218,7 @@ def evaluate_paired_comparison(
     }
     model: list[float] = []
     multisignal: list[float] = []
+    signal_only: list[float] = []
     labels: list[int] = []
     risks: list[float] = []
     exclusions = {
@@ -215,11 +241,13 @@ def evaluate_paired_comparison(
             exclusions["invalid_or_missing_signal"] += 1
             continue
         try:
+            signals = experimental_signal_only_probability(row.vector)
             updated = experimental_multisignal_probability(row.probability, row.vector)
         except (TypeError, ValueError):
             exclusions["invalid_or_missing_signal"] += 1
             continue
         model.append(row.probability)
+        signal_only.append(signals)
         multisignal.append(updated)
         labels.append(row.actual_yes)
         risks.append(row.risk_z)
@@ -227,25 +255,34 @@ def evaluate_paired_comparison(
     tables: list[dict[str, Any]] = []
     for gate in THRESHOLDS_PERCENT:
         base = _gate_row(model, labels, risks, gate)
+        signal = _gate_row(signal_only, labels, risks, gate)
         adjusted = _gate_row(multisignal, labels, risks, gate)
-        tables.append({
-            "threshold_percent": gate,
-            "model": base, "multisignal": adjusted,
-            "delta_multisignal_minus_model": {
-                "qualified": adjusted["qualified"] - base["qualified"],
-                "skipped": adjusted["skipped"] - base["skipped"],
-                "correct": adjusted["correct"] - base["correct"],
-                "incorrect": adjusted["incorrect"] - base["incorrect"],
+
+        def difference(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "qualified": a["qualified"] - b["qualified"],
+                "skipped": a["skipped"] - b["skipped"],
+                "correct": a["correct"] - b["correct"],
+                "incorrect": a["incorrect"] - b["incorrect"],
                 "accuracy_percentage_points": (
-                    None if base["accuracy"] is None or adjusted["accuracy"] is None
-                    else 100. * (adjusted["accuracy"] - base["accuracy"])
+                    None if a["accuracy"] is None or b["accuracy"] is None
+                    else 100. * (a["accuracy"] - b["accuracy"])
                 ),
                 "coverage_percentage_points": 100. * (
-                    adjusted["coverage"] - base["coverage"]
+                    a["coverage"] - b["coverage"]
                 ),
-            },
+            }
+
+        tables.append({
+            "threshold_percent": gate,
+            "model": base,
+            "signal_only": signal,
+            "multisignal": adjusted,
+            "delta_multisignal_minus_model": difference(adjusted, base),
+            "delta_multisignal_minus_signal_only": difference(adjusted, signal),
+            "delta_signal_only_minus_model": difference(signal, base),
         })
-    for name in ("model", "multisignal"):
+    for name in ("model", "signal_only", "multisignal"):
         _add_incremental(tables, name)
     return {
         "status": "DESCRIPTIVE_ONLY" if model else "NO_VERIFIED_PAIRED_EVIDENCE",
@@ -264,11 +301,23 @@ def evaluate_paired_comparison(
         "fixed_heuristic_blend_NOT_CALIBRATED": FIXED_BLEND,
         "predictors": {
             "model": _overall(model, labels),
+            "signal_only": _overall(signal_only, labels),
             "multisignal": _overall(multisignal, labels),
         },
         "direction_disagreements": sum(
             (a >= 0.5) != (b >= 0.5) for a, b in zip(model, multisignal)
         ),
+        "direction_disagreements_pairs": {
+            "model_vs_multisignal": sum(
+                (a >= 0.5) != (b >= 0.5) for a, b in zip(model, multisignal)
+            ),
+            "model_vs_signal_only": sum(
+                (a >= 0.5) != (b >= 0.5) for a, b in zip(model, signal_only)
+            ),
+            "signal_only_vs_multisignal": sum(
+                (a >= 0.5) != (b >= 0.5) for a, b in zip(signal_only, multisignal)
+            ),
+        },
         "mean_absolute_probability_change": (
             sum(abs(a-b) for a, b in zip(model, multisignal)) / len(model)
             if model else None
@@ -278,8 +327,9 @@ def evaluate_paired_comparison(
         "live_gate_changed": False,
         "trades_executed": False,
         "limitation": (
-            "EXPLORATORY only: fixed uncalibrated signal weights chosen before "
-            "scoring, not a fitted or deployed predictor. This is NOT independent "
+            "EXPLORATORY only: all three probabilities use the same saved checkpoint "
+            "signals and fixed uncalibrated assumptions. No signal-only or "
+            "combined weights were fitted or independently validated. NOT independent "
             "validation or proof of better probabilities, profits or execution. "
             "The same historic settled rows are used across all eight thresholds, "
             "so selecting a winner on these results is subject to selection bias. "
@@ -294,7 +344,7 @@ def _pct(x: float | None) -> str:
 
 
 def _print_table(report: dict[str, Any]) -> None:
-    print("MODEL vs MULTISIGNAL | eight 480s directional-probability gates")
+    print("MODEL vs SIGNALS ONLY vs COMBINED | eight 480s directional-probability gates")
     print("Status:", report["status"], "| Paired markets:", report["matched_settled_markets"])
     print("Model hash:", report["model_hash"])
     print("Threshold is STRICTLY GREATER; identical recorded BRTI flip veto.")
@@ -305,7 +355,7 @@ def _print_table(report: dict[str, Any]) -> None:
           f'{"Incremental accuracy":>21}')
     for row in report["thresholds"]:
         gate = row["threshold_percent"]
-        for name in ("model", "multisignal"):
+        for name in ("model", "signal_only", "multisignal"):
             metrics = row[name]
             print(
                 f'{gate:>4}% {name:<12} {metrics["qualified"]:>9} '
@@ -315,7 +365,7 @@ def _print_table(report: dict[str, Any]) -> None:
                 f'{_pct(metrics["incremental_accuracy"]):>21}'
             )
     print()
-    for name in ("model", "multisignal"):
+    for name in ("model", "signal_only", "multisignal"):
         m = report["predictors"][name]
         print(
             f'{name}: Brier={m["brier"] if m["brier"] is not None else "-"} '
