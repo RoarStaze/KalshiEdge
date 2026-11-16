@@ -151,3 +151,20 @@ def test_fusion_new_artifacts_mark_the_current_policy_version():
 
     assert POLICY == "live-480-fitted-multisignal-v2"
     assert _artifact().policy == POLICY
+
+
+def test_legacy_v1_fusion_artifact_is_rejected_after_policy_gate_changes(tmp_path: Path):
+    """A correctly signed old artifact still used an invalid live acceptance gate."""
+    import hashlib
+    import json
+
+    current = _artifact().model_dump(mode="json")
+    current["policy"] = "live-480-fitted-multisignal-v1"
+    content_to_sign = {key: value for key, value in current.items() if key != "sha256"}
+    encoded = json.dumps(content_to_sign, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    current["sha256"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    path = tmp_path / "models" / "fusion" / ("a"*64 + ".json")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(current), encoding="utf-8")
+    with pytest.raises(FusionError, match="legacy|obsolete|v1"):
+        load_active_fusion(tmp_path, "a"*64)
