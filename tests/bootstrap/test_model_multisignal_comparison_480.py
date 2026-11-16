@@ -266,3 +266,92 @@ def test_real_hash_checked_forecast_snapshot_and_settlement_read_without_rewrite
     damaged = evaluate_paired_comparison(tmp_path, model_hash=MODEL)
     assert damaged["matched_settled_markets"] == 0
     assert damaged["excluded"]["missing_or_invalid_signal_or_settlement"] == 1
+
+
+def test_standalone_signals_ignore_model_probability_and_blend_is_same_as_previous():
+    from kalshi_edge.bootstrap.model_multisignal_comparison_480 import (
+        experimental_signal_only_probability,
+    )
+    # Only the base_logit feature changes. Signal-only forecast must not
+    # inadvertently inherit the model's predicted direction or confidence.
+    signal_a=experimental_signal_only_probability(_vector(.25))
+    signal_b=experimental_signal_only_probability(_vector(.75))
+    assert signal_a == pytest.approx(signal_b, abs=1e-14)
+    assert .0 < signal_a < 1.
+    p=.76
+    combined=experimental_multisignal_probability(p,_vector(p))
+    assert combined == pytest.approx(
+        FIXED_BLEND["base_model"]*p+
+        (1-FIXED_BLEND["base_model"])*signal_a,
+        abs=1e-14,
+    )
+    # No trained/fitted weights; preserve the original 75/15/6/4 blend.
+    assert FIXED_BLEND == {
+        "base_model":.75, "brti_reference":.15,
+        "candle_reversal":.06,"signed_market_flow":.04,
+    }
+
+
+def test_three_predictors_evaluated_on_exactly_same_markets_all_eight_gates(monkeypatch,tmp_path):
+    _sources(monkeypatch,_rows())
+    report=evaluate_paired_comparison(tmp_path,model_hash=MODEL)
+    assert report["matched_settled_markets"]==6
+    assert report["predictors"]["signal_only"]["count"]==6
+    assert report["predictors"]["model"]["count"]==6
+    assert report["predictors"]["multisignal"]["count"]==6
+    assert len(report["thresholds"])==8
+    for row in report["thresholds"]:
+        assert set(("model","signal_only","multisignal")).issubset(row)
+        for name in ("model","signal_only","multisignal"):
+            r=row[name]
+            assert r["qualified"]+r["skipped"]==6
+            assert r["correct"]+r["incorrect"]==r["qualified"]
+            assert r["incremental_qualified"] is None or r["incremental_qualified"]>=0
+        delta=row["delta_multisignal_minus_signal_only"]
+        assert delta["qualified"]==row["multisignal"]["qualified"]-row["signal_only"]["qualified"]
+        assert delta["correct"]==row["multisignal"]["correct"]-row["signal_only"]["correct"]
+        assert delta["skipped"]==row["multisignal"]["skipped"]-row["signal_only"]["skipped"]
+    assert report["predictors"]["signal_only"]["brier"] is not None
+    assert report["direction_disagreements_pairs"]["model_vs_multisignal"]==report["direction_disagreements"]
+    assert report["direction_disagreements_pairs"]["model_vs_signal_only"]>=0
+    assert report["model_retraining"] is False
+    assert report["live_gate_changed"] is False
+    assert report["trades_executed"] is False
+
+
+def test_standalone_signal_reacts_to_signed_brti_flow_and_candle_changes():
+    from kalshi_edge.bootstrap.model_multisignal_comparison_480 import (
+        experimental_signal_only_probability as signal,
+    )
+    x=signal(_vector(.75))
+    assert signal(_vector(.75,brti_distance_to_strike_bps=-7.)) < x
+    assert signal(_vector(.75,btc_return_15s=-.005,btc_return_60s=-.004)) < x
+    assert signal(_vector(.75,btc_taker_buy_imbalance_60s=-.95,
+                          kalshi_yes_taker_imbalance_60s=-.8)) < x
+
+
+def test_three_way_text_json_and_no_model_mutation(monkeypatch,tmp_path,capsys):
+    _sources(monkeypatch,_rows())
+    args=["--root",str(tmp_path),"--model-hash",MODEL]
+    assert main(args)==0
+    table=capsys.readouterr().out
+    assert "MODEL vs SIGNALS ONLY vs COMBINED" in table
+    assert table.count("signal_only")==8
+    assert table.count("multisignal")==8
+    assert table.count("model")==8
+    assert main(args+["--json"])==0
+    j=json.loads(capsys.readouterr().out)
+    assert "signal_only" in j["predictors"]
+    assert "multisignal" in j["predictors"]
+    assert "model" in j["predictors"]
+    assert all("delta_multisignal_minus_signal_only" in row for row in j["thresholds"])
+    assert list(tmp_path.rglob("*"))==[]
+
+
+def test_missing_evidence_reports_all_three_without_inventing_accuracy(monkeypatch,tmp_path):
+    _sources(monkeypatch,[])
+    report=evaluate_paired_comparison(tmp_path,model_hash=MODEL)
+    assert report["status"]=="NO_VERIFIED_PAIRED_EVIDENCE"
+    for name in ("model","signal_only","multisignal"):
+        assert report["predictors"][name]["brier"] is None
+        assert all(row[name]["accuracy"] is None for row in report["thresholds"])
