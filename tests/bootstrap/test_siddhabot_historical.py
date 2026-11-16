@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import hashlib
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from kalshi_edge.bootstrap import siddhabot_historical as historic
@@ -19,10 +18,10 @@ def fixture_ticks():
     ts = np.arange(checkpoint-4*3600*NS, checkpoint, NS, dtype=np.int64)
     n = len(ts)
     close = 100000 + .08*np.arange(n) + 12*np.sin(np.arange(n)/1000)
-    ticks = pd.DataFrame({
+    ticks = {
         "ts_ns": ts, "high": close + .11, "low": close - .11,
         "close": close, "base_volume": np.full(n, .3),
-    })
+    }
     final = SimpleNamespace(
         market_ticker="KXBTC15M-26NOV151215-15",
         scheduled_ts_ns=checkpoint, prediction_ts_ns=checkpoint,
@@ -42,18 +41,18 @@ def test_23_inputs_are_causal_and_finite():
     assert result["spread"] == pytest.approx(.06)
     assert 0 < result["gbm_prob"] < 1
     assert all(np.isfinite(v) for v in result.values())
-    future = pd.DataFrame([{"ts_ns": final.prediction_ts_ns + NS,
-        "high":1e9, "low":1e9, "close":1e9, "base_volume":1e9}])
-    assert historic.build_proxy_features(
-        final, pd.concat([ticks,future],ignore_index=True), settlement_bias=.55
-    ) == result
+    future = {
+        name: np.concatenate([values, np.array([final.prediction_ts_ns + NS if name == "ts_ns" else 1e9])])
+        for name, values in ticks.items()
+    }
+    assert historic.build_proxy_features(final, future, settlement_bias=.55) == result
     final.prediction_ts_ns += NS//2
     assert historic.build_proxy_features(final, ticks, settlement_bias=.55) is not None
 
 
 def test_missing_second_or_quote_is_unscorable_not_imputed():
     final,ticks=fixture_ticks()
-    assert historic.build_proxy_features(final,ticks.iloc[1:],settlement_bias=.5) is None
+    assert historic.build_proxy_features(final,{name: values[1:] for name, values in ticks.items()},settlement_bias=.5) is None
     final.kalshi_yes_bid = None
     assert historic.build_proxy_features(final,ticks,settlement_bias=.5) is None
 
