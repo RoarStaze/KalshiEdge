@@ -200,8 +200,16 @@ def _recover_exchange_confirmed_orders(entries: list[dict], client) -> list[dict
         order = matching[0]
         ticker = row["ticker"]
         outcome = stage.get("outcome")
-        side = "bid" if outcome == "UP" else "ask" if outcome == "DOWN" else None
-        if (order.get("ticker") != ticker or order.get("side") != side
+        # The GET order's legacy `side` field is yes/no, NOT bid/ask.
+        # Modern Kalshi order records use two canonical direction fields.
+        # Require both to agree with the journaled AutoTrade BUY direction.
+        expected_book = "bid" if outcome == "UP" else "ask" if outcome == "DOWN" else None
+        expected_outcome = "yes" if outcome == "UP" else "no" if outcome == "DOWN" else None
+        if (order.get("ticker") != ticker
+                or order.get("book_side") != expected_book
+                or order.get("outcome_side") != expected_outcome
+                or (order.get("side") is not None
+                    and order.get("side") != expected_outcome)
                 or stage.get("stage") not in (
                     "EARLY_BUY", "EARLY_BUY_2", "FINAL_BUY", "FINAL_BUY_2"
                 )):
