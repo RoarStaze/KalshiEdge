@@ -19,10 +19,13 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .final_forecast import COIN_FLIP_MAX_RISK_Z, MINIMUM_FINAL_CONFIDENCE, FINAL_CHECKPOINT_SECONDS
+from .final_forecast import (
+    COIN_FLIP_MAX_RISK_Z, MINIMUM_FINAL_DIRECTIONAL_PROBABILITY,
+    FINAL_CHECKPOINT_SECONDS,
+)
 from .metrics import probability_metrics
 
-POLICY = "live-480-fitted-multisignal-v1"
+POLICY = "live-480-fitted-multisignal-v2"
 FEATURE_NAMES = (
     "base_logit",
     "brti_distance_bps",
@@ -192,7 +195,19 @@ def load_active_fusion(root: Path, model_hash: str) -> FusionModel | None:
     try:
         if path.stat().st_size > 20_000:
             raise FusionError("oversized active fusion artifact")
-        model = FusionModel.model_validate_json(path.read_bytes())
+        raw = path.read_bytes()
+        parsed = json.loads(raw)
+        if (isinstance(parsed, dict)
+                and parsed.get("policy") == "live-480-fitted-multisignal-v1"):
+            raise FusionError(
+                "legacy v1 fusion artifact used the obsolete 63% strength gate; "
+                "back up its models/fusion/<model_hash>.json file, move it out "
+                "of the active models/fusion directory, and re-fit with the "
+                "current 63% directional-probability validation"
+            )
+        model = FusionModel.model_validate_json(raw)
+    except FusionError:
+        raise
     except (OSError, ValueError) as exc:
         raise FusionError("active fusion artifact invalid; fail closed") from exc
     if model.model_hash != model_hash:
@@ -224,8 +239,11 @@ def summarize_decisions(
         raise FusionError("invalid evaluation class")
     if any(not _number(z, 0, 100) for z in risks):
         raise FusionError("invalid flip risk")
+    # Use the EXACT locked final-forecast decision threshold; the previous
+    # v1 strength score (>=0.63, i.e. >=81.5% predicted-side probability)
+    # could approve a fusion that underperforms at the actual >63% live gate.
     qual = [(p, y) for p, y, z in zip(probabilities, actual_yes, risks)
-            if 2 * abs(p - .5) >= MINIMUM_FINAL_CONFIDENCE
+            if max(p, 1. - p) > MINIMUM_FINAL_DIRECTIONAL_PROBABILITY
             and z > COIN_FLIP_MAX_RISK_Z]
     correct = sum((p >= .5) == bool(y) for p, y in qual)
     return {"qualified": len(qual), "correct": correct,
