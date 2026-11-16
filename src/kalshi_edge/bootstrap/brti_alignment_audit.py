@@ -53,6 +53,7 @@ def compare_brti_alignment(
                 "CONFIDENCE_BELOW_69_PERCENT",
                 "CONFIDENCE_BELOW_63_PERCENT",
                 "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_63_PERCENT",
+    "DIRECTIONAL_PROBABILITY_AT_OR_BELOW_69_PERCENT",
                 "COIN_FLIP_RISK_HIGH",
             }
         ):
