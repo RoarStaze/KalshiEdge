@@ -27,6 +27,7 @@ from .live_kalshi import BRTIObservation, KalshiLiveFeed, LiveMarket, LiveQuote,
 from .types import FeedQuality, FeatureRow, MarketLabel, PredictionRecord
 from .v6_risk import compute_brti_strike_risk
 from .v61_shadow_policy import POLICY_ID, risk_adjusted_shadow_probability
+from .signal_fusion_480 import FusionError, build_signal_vector, load_active_fusion
 
 
 NS = 1_000_000_000
@@ -64,6 +65,9 @@ class LivePredictionRecord(PredictionRecord):
     ml_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     residual_probability: float | None = Field(default=None, ge=0.0, le=1.0)
     final_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Only populated when independently validated 480s fusion was applied.
+    unfused_p_yes: float | None = Field(default=None, ge=0.0, le=1.0)
+    fusion_hash: str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     component_disagreement: float | None = Field(default=None, ge=0.0, le=1.0)
     volatility_analytic_probability: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -405,6 +409,11 @@ class LivePredictor:
         self.settings = settings
         self.model_hash = bundle.bundle_sha256
         self._model_feature_mismatch = tuple(bundle.feature_names) != tuple(getattr(pipeline, "required_feature_names", ()))
+        try:
+            self._signal_fusion = load_active_fusion(settings.bootstrap_dir, self.model_hash)
+        except FusionError as exc:
+            # A corrupted or spoofed deployment must not quietly alter trades.
+            raise LiveModelError("Invalid active multi-signal fusion artifact") from exc
 
     def _quality(self, now_ns: int, reasons: Sequence[str] = ()) -> FeedQuality:
         kalshi_stale = None if self.state.latest_quote_ts_ns is None else max(0.0, (now_ns - self.state.latest_quote_ts_ns) / NS)
@@ -586,6 +595,46 @@ class LivePredictor:
             None if shadow_risk is None else shadow_risk.adjusted_distance,
         )
 
+        # Only a fitted, independently validated signal model may adjust the
+        # 480s probability. No challenger, shadow, or ad-hoc signal weights.
+        # Never apply 480s coefficients at other horizons or impute BRTI.
+        unfused_p_yes = None
+        fusion_hash = None
+        if (
+            self._signal_fusion is not None
+            and 479.0 <= seconds_remaining <= 482.0
+            and shadow_risk is not None
+            and self.state.latest_brti_ts_ns is not None
+            and self.state.latest_binance_ts_ns is not None
+            and 0 <= now_ns - self.state.latest_brti_ts_ns <= 5 * NS
+            and 0 <= now_ns - self.state.latest_binance_ts_ns <= 5 * NS
+            and full_row.source_max_ts_ns.get("binance") == self.state.latest_binance_ts_ns
+        ):
+            evidence = {
+                **full_row.features,
+                "brti_distance_to_strike_bps": (
+                    (self.state.latest_brti.value - market.strike) / market.strike * 10_000.0
+                ),
+                "brti_binance_gap_bps": (
+                    (self.state.latest_brti.value - self.state.latest_bar.close)
+                    / market.strike * 10_000.0
+                ),
+            }
+            vector = build_signal_vector(
+                p_yes, evidence, risk_z=shadow_risk.adjusted_distance,
+            )
+            if vector is not None:
+                try:
+                    new_probability = self._signal_fusion.predict(vector)
+                except FusionError:
+                    return self._no_prediction(now_ns, "INVALID_FUSION_SCORE")
+                if not math.isfinite(new_probability) or not 0 <= new_probability <= 1:
+                    return self._no_prediction(now_ns, "INVALID_FUSION_SCORE")
+                unfused_p_yes = p_yes
+                p_yes = new_probability
+                fusion_hash = self._signal_fusion.sha256
+        confidence = min(1.0, 2.0 * abs(p_yes - 0.5))
+
         return LivePredictionRecord(
             prediction_ts_ns=now_ns,
             market_ticker=market.ticker,
@@ -621,6 +670,8 @@ class LivePredictor:
             ml_probability=values["historical_ml"],
             residual_probability=values["residual_corrected"],
             final_probability=p_yes,
+            unfused_p_yes=unfused_p_yes,
+            fusion_hash=fusion_hash,
             confidence=confidence,
             component_disagreement=disagreement,
             brti_shadow_risk_ratio=None if shadow_risk is None else shadow_risk.adjusted_distance,
