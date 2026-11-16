@@ -110,3 +110,12 @@ def test_audit_rejects_non_gold_market_from_api(tmp_path: Path) -> None:
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(GoldContractError, match="unexpected market ticker"):
             collect_contract_audit(tmp_path, client=client)
+
+
+def test_rejects_nested_phase1_raw_output_root_before_requests(tmp_path: Path) -> None:
+    def never_call(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("audit must never use network when output is inside canonical data/raw")
+
+    with httpx.Client(transport=httpx.MockTransport(never_call)) as client:
+        with pytest.raises(ValueError, match="canonical Phase 1 data/raw"):
+            collect_contract_audit(tmp_path / "data" / "raw" / "gold", client=client)
