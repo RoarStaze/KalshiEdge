@@ -158,3 +158,13 @@ def test_command_table_json_no_mutation(tmp_path,capsys):
     data=json.loads(capsys.readouterr().out)
     assert data["matched_settled_with_usable_probability"]==6
     assert {str(p):p.read_bytes() for p in tmp_path.rglob("*.json")}==before
+
+
+def test_very_large_finite_brti_risk_is_not_wrongly_reported_missing(tmp_path):
+    # During exceptionally low realized BRTI volatility a finite z can
+    # legitimately exceed 100. It is valid, and belongs in the >1 bin.
+    record(tmp_path,1,p=.9,result=True,risk=500.)
+    r=analyze_skip_reversal_forensics(tmp_path,model_hash=MODEL)
+    assert r["matched_settled_with_usable_probability"]==1
+    assert r["risk_strata"]["above_1_00"]["total"]==1
+    assert r["risk_strata"]["unavailable"]["total"]==0
