@@ -99,7 +99,7 @@ def test_exact_client_order_id_and_verified_no_fill_loses_three_dollars():
     result=results[0]
     assert original["status"]=="NOT_SUBMITTED"  # journal never rewritten
     assert result["status"]=="FILLED"
-    assert result["fill_count"]=="3.74"
+    assert Decimal(result["fill_count"])==Decimal("3.74")
     assert result["outcome"]=="DOWN"
     assert result["reconciliation_status"]=="EXCHANGE_ORDER_VERIFIED"
     assert result["pnl_status"]=="SETTLED"
@@ -162,6 +162,7 @@ def test_69_percent_gate_is_on_predicted_side_probability_not_strength():
             feed_quality=FeedQuality(healthy=True),
             confidence=2*abs(p-.5),
             final_probability=p,
+            model_hash="synthetic-test-model",
         )
         return FinalForecastGate().evaluate(market,now_ns=scheduled,prediction=prediction)
     assert decision(.68).forecast=="SKIP"
