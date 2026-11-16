@@ -330,7 +330,7 @@ SCRIPT = r"""
  // changes; per-stage and P/L text retains precise execution evidence.
  function autoHistoryStatusLabel(status){
   switch(status){
-   case "NOT_SUBMITTED":return "SKIPPED";
+   case "NOT_SUBMITTED":return "NOT SENT";
    case "SKIPPED":return "SKIPPED";
    case "FILLED":return "BOUGHT";
    case "PARTIAL":return "PARTIALLY BOUGHT";
@@ -399,7 +399,16 @@ SCRIPT = r"""
     side.textContent=entry.outcome==="UP"?"UP":"DOWN";
     const state=document.createElement("span");
     state.className="mt-auto-record-status "+(entry.status==="FILLED"?"filled":"warn");
-    state.textContent=autoHistoryStatusLabel(entry.status);
+    // Exchange-verified evidence overrides local failure labels; a historical
+    // HTTP 400 without a matching exchange ID is NOT proof of no fill.
+    const postReject=Array.isArray(entry.stages)&&entry.stages.some(stage=>
+      stage.status==="NOT_SUBMITTED"&&
+      (stage.rejection_reason_code==="EXCHANGE_REJECTED"||
+       !stage.rejection_reason_code));
+    state.textContent=entry.reconciliation_status==="EXCHANGE_ORDER_VERIFIED"
+      ?(entry.status==="FILLED"?"FILLED · EXCHANGE VERIFIED":"PARTIAL · EXCHANGE VERIFIED")
+      :entry.status==="NOT_SUBMITTED"&&postReject
+      ?"VERIFY KALSHI":autoHistoryStatusLabel(entry.status);
     header.append(side,state);item.appendChild(header);
     const meta=document.createElement("div");meta.className="mt-auto-record-sub";
     const amount=document.createElement("span");amount.textContent="Amount "+money(entry.amount);
@@ -427,7 +436,10 @@ SCRIPT = r"""
      pnl.className="mt-auto-pnl-pending";
      pnl.textContent=entry.pnl_status==="PENDING"?"P/L pending settlement":
        entry.pnl_status==="MIXED"?"P/L unavailable · other market trades":
-       entry.status==="NO_FILL"?"No shares filled":entry.status==="NOT_SUBMITTED"?"No order submitted":"P/L unavailable · verify Kalshi";
+       entry.status==="NO_FILL"?"No shares filled":
+       entry.status==="NOT_SUBMITTED"&&postReject?"Order outcome unverified · check Kalshi":
+       entry.status==="NOT_SUBMITTED"?"Pre-submit check prevented order":
+       "P/L unavailable · verify Kalshi";
     }
     finance.append(pnl);item.appendChild(finance);
     if(Array.isArray(entry.stages)&&entry.stages.length){
