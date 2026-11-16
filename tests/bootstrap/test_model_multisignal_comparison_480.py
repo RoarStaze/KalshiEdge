@@ -216,3 +216,53 @@ def test_cli_read_only_text_and_json_and_explicit_model_filter(monkeypatch, tmp_
     assert result["matched_settled_markets"] == 6
     assert result["policy"] == EXPERIMENT_POLICY
     assert list(tmp_path.rglob("*")) == before
+
+
+def test_real_hash_checked_forecast_snapshot_and_settlement_read_without_rewrite(tmp_path):
+    from kalshi_edge.bootstrap.final_forecast import FinalForecastRecord, FinalForecastWriter
+    from kalshi_edge.bootstrap.final_history import OfficialSettlement, _save_settlement
+    from kalshi_edge.bootstrap.forward_feature_evidence_480 import (
+        Forward480FeatureWriter, build_forward_snapshot,
+    )
+    from kalshi_edge.bootstrap.types import FeatureRow
+    ts = START
+    market = "KXBTC15M-TEST-INTEGRATION-00"
+    final = FinalForecastRecord(
+        market_ticker=market, strike=65000.,
+        scheduled_ts_ns=ts, prediction_ts_ns=ts,
+        checkpoint_seconds=480, seconds_remaining=480.,
+        forecast="ABOVE", reason=None,
+        confidence=.48, directional_probability=.74,
+        p_yes=.74, p_no=.26,
+        coin_flip_risk_z=1., coin_flip_assessment="LOW",
+        model_hash=MODEL,
+    )
+    close = ts + 480_000_000_000
+    forecast_path = FinalForecastWriter(tmp_path).save(final, market_close_ts_ns=close)
+    assert forecast_path is not None
+    feat = FeatureRow(
+        market_ticker=market, checkpoint_ts_ns=ts, label_yes=0,
+        features=_features(),
+        source_max_ts_ns={"binance": ts-1_000_000_000, "brti": ts-1_000_000_000},
+    )
+    snapshot = build_forward_snapshot(final, forecast_path, feat)
+    saved_path = Forward480FeatureWriter(tmp_path).save(snapshot)
+    assert saved_path
+    _save_settlement(tmp_path, final, OfficialSettlement(
+        market_ticker=market, market_close_ts_ns=close,
+        result="yes", actual_side="ABOVE",
+        source="kalshi-public-market-api", market_status="settled",
+        fetched_ts_ns=close + 60_000_000_000,
+    ))
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.json")}
+    report = evaluate_paired_comparison(tmp_path, model_hash=MODEL)
+    assert report["matched_settled_markets"] == 1
+    assert report["predictors"]["model"]["brier"] == pytest.approx((.74-1)**2)
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
+    # Tampering with a saved feature invalidates the entire corresponding pair.
+    contents = json.loads(saved_path.read_text())
+    contents["features"]["btc_return_15s"] = -.005
+    saved_path.write_text(json.dumps(contents))
+    damaged = evaluate_paired_comparison(tmp_path, model_hash=MODEL)
+    assert damaged["matched_settled_markets"] == 0
+    assert damaged["excluded"]["missing_or_invalid_signal_or_settlement"] == 1
