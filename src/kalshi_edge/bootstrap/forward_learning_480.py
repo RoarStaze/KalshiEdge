@@ -224,7 +224,7 @@ def evaluate_forward_candidate(
     incumbent = [x[2] for x in paired]
     veto = [x[3] for x in paired]
     # Issuance was recorded under potentially older (69%) live settings.
-    # For a fair 63% counterfactual, re-gate BOTH saved probability streams.
+    # For a fair strict >69% probability counterfactual, re-gate BOTH saved streams.
     candidate_score = probability_metrics(labels, candidate)
     incumbent_score = probability_metrics(labels, incumbent)
     candidate_gate = _gate(labels, candidate, forbidden=veto)
