@@ -37,7 +37,7 @@ _ALL_HEALTHY_SKIPS = _LEGACY_STRENGTH_SKIP | {
     "COIN_FLIP_RISK_HIGH",
 }
 _BANDS = (
-    ("(0.50,0.63]", 0.5, 0.63),
+    ("[0.50,0.63]", 0.5, 0.63),
     ("(0.63,0.70]", 0.63, 0.70),
     ("(0.70,0.80]", 0.70, 0.80),
     ("(0.80,1.00]", 0.80, 1.00),
@@ -243,8 +243,8 @@ def evaluate_brti_joint_rescue(root: Path, *, model_hash: str) -> dict[str, Any]
                 _add(joint_live, correct)
             else:
                 _add(joint_below, correct)
-        for group, lower, upper in zip(bins, (0.5,0.63,0.70,0.80), (0.63,0.70,0.80,1.0)):
-            if lower < conf <= upper:
+        for group, (_, lower, upper) in zip(bins, _BANDS):
+            if (lower <= conf if lower == 0.5 else lower < conf) and conf <= upper:
                 _add(group["historical_skips"], correct)
                 if qualifies_joint:
                     _add(group["joint_high_risk_agree"], correct)
