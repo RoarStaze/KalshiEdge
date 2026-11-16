@@ -197,19 +197,22 @@ def test_earliest_recorded_horizon_is_fixed_before_outcomes(tmp_path):
     assert r["issued"]["total"]==1  # third forecast cannot replace pending second
 
 
-def test_prospective_status_cli_is_read_only_and_freeze_is_one_time(tmp_path,capsys):
+def test_prospective_status_cli_is_read_only_and_freeze_is_one_time(tmp_path,capsys,monkeypatch):
+    import kalshi_edge.bootstrap.prospective_error_monitor_480 as monitor
+    monkeypatch.setattr(monitor.time,"time_ns",lambda:START)
     args=["--root",str(tmp_path),"--model-hash",MODEL]
-    assert main(args+["--freeze","--now-ns",str(START),"--json"])==0
+    assert main(args+["--freeze","--json"])==0
     x=json.loads(capsys.readouterr().out)
     assert x["started_at_ns"]==START
     manifest=tmp_path/"research"/"prospective_monitor_480"/"frozen_baseline.json"
     before=manifest.read_bytes()
-    assert main(args+["--json","--now-ns",str(START+NS)])==0
+    monkeypatch.setattr(monitor.time,"time_ns",lambda:START+NS)
+    assert main(args+["--json"])==0
     y=json.loads(capsys.readouterr().out)
     assert y["status"]=="COLLECTING_NEW_SETTLEMENTS"
     assert y["recorded_post_freeze"]==0
     assert manifest.read_bytes()==before
-    assert main(args+["--freeze","--now-ns",str(START+NS)])==2
+    assert main(args+["--freeze"])==2
     assert manifest.read_bytes()==before
 
 
