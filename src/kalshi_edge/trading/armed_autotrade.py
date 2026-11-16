@@ -503,7 +503,7 @@ class ArmedAutoTrader:
         confidence = final.get("confidence")
         side_probability = final.get("directional_probability")
         # New immutable finals carry an explicit predicted-side probability.
-        # Never accidentally apply the obsolete 63%-strength gate to it.
+        # Never accidentally apply the obsolete model-strength gate to it.
         # Old archived fixtures without that field retain the historical,
         # more restrictive strength check; malformed present fields fail closed.
         if side_probability is None:
@@ -521,7 +521,7 @@ class ArmedAutoTrader:
         if (direction == "SKIP" or type(confidence) not in (int, float)
                 or not math.isfinite(confidence) or not 0 <= confidence <= 1
                 or not qualified):
-            self._finish("SKIPPED", "Final SKIP or probability at/below 63%; no order")
+            self._finish("SKIPPED", "Final SKIP or predicted-side probability at/below 69%; no order")
             return
         if armed.get("final_attempts", 0) >= MAX_NO_FILL_ATTEMPTS:
             self._finish("NO_FILL", "No executed shares after bounded retries")
