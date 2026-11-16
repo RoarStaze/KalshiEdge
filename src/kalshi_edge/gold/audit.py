@@ -77,7 +77,7 @@ def collect_contract_audit(
     output_root: Path, *, client: httpx.Client | None = None,
     sample_markets: int = 5,
 ) -> dict[str, Any]:
-    """Store a versioned audit with the exact raw API JSON bodies and receipt times.
+    """Store a versioned audit of decoded API JSON objects and receipt times.
 
     This is a bounded market SAMPLE, not a historical dataset. Manual rule
     verification is required even when every request succeeds.
@@ -85,8 +85,9 @@ def collect_contract_audit(
     if not 1 <= sample_markets <= 10:
         raise ValueError("sample_markets must be between 1 and 10")
     root = output_root.resolve()
-    if root.name.lower() == "raw" and root.parent.name.lower() == "data":
-        raise ValueError("gold audit cannot overwrite canonical Phase 1 data/raw")
+    path_parts = tuple(part.lower() for part in root.parts)
+    if any(path_parts[i:i + 2] == ("data", "raw") for i in range(len(path_parts) - 1)):
+        raise ValueError("gold audit cannot write inside canonical Phase 1 data/raw")
     owns_client = client is None
     client = client or httpx.Client(timeout=20.0)
     times: dict[str, int] = {}
