@@ -311,13 +311,27 @@ def inspect_gold_collector_status(output_root: Path, *, limit: int = 20_000) -> 
     latest_quote = None
     latest_micro = None
     sessions: set[str] = set()
+    last_per_session: dict[str, tuple[int, str]] = {}
+    truncated = len(selected) < len(paths)
     for path in selected:
         try:
-            event, _ = _read_hash_snapshot(path)
+            event, digest = _read_hash_snapshot(path)
             _event_check(event)
         except (GoldCaptureError, OSError, TypeError, KeyError) as exc:
             raise GoldContinuousError(f"collector SHA-256 or evidence invalid: {exc}") from exc
-        sessions.add(event["session_id"])
+        session = event["session_id"]
+        prior = last_per_session.get(session)
+        if prior is None:
+            if event["cycle"] == 1:
+                if event["previous_event_sha256"] is not None:
+                    raise GoldContinuousError("collector first cycle chain must start empty")
+            elif not truncated:
+                raise GoldContinuousError("collector cycle chain has missing first event")
+        elif (event["cycle"] != prior[0] + 1
+                or event["previous_event_sha256"] != prior[1]):
+            raise GoldContinuousError("collector cycle chain is missing or reordered")
+        last_per_session[session] = (event["cycle"], digest)
+        sessions.add(session)
         if event["status"] == "CAPTURED":
             success += 1
         else:
