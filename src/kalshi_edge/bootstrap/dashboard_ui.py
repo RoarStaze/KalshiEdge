@@ -425,7 +425,7 @@ function renderLive(data){
  text("confidence-sub",p?.status==="OK"?(p?.fusion_hash?"Fitted multi-signal · live":"Live model · updates until close"):"Awaiting healthy live inputs");
  text("confidence-note","Live probability describes settlement direction, not historical accuracy or short-horizon scalp returns. The separate 8-minute record is immutable for history.");
  text("record-title",locked?"8-minute historical forecast saved":"Waiting to archive 8-minute record");
- text("record-description",locked?"The 8-minute record is fixed for official settlement scoring. The live forecast and reversal monitor continue to update until market close.":"An immutable 480-second checkpoint record will be saved for historical evaluation; live monitoring continues through the full round.");
+ text("record-description",locked?"The 8-minute record is fixed for official settlement scoring. The live forecast and reversal monitor continue to update until market close.":"An immutable 480-second checkpoint record will be saved for historical evaluation; the archived final requires above 69% directional probability at lock. Live monitoring continues through the full round.");
  text("detail-model",f?.model_version||p?.model_version);
  text("detail-probability",pct(locked?f.directional_probability:sideProbability));
  text("detail-method",f?.fusion_hash||p?.fusion_hash?"Fitted multi-signal at 480s":"Base model (no fitted fusion)");
