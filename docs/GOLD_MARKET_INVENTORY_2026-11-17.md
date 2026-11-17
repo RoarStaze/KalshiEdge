@@ -12,12 +12,12 @@ git pull --ff-only origin main
 ```
 
 * Each run first validates the exact gold series and Pyth source identity and reads the historical market cutoff.
-* GET \`/historical/markets\` and GET \`/markets\` are **both** queried with \`series_ticker=KXGOLD15M\`; each is independently paginated using the API's returned cursor. Default cap: 5 pages per tier, 1000 market records per page (API maximum).
-* The collector preserves every page payload, query parameters, and local receipt timestamps in a newly created SHA-256-named file under \`data/gold/market_inventories/\`. It never overwrites a previous run.
+* GET `/historical/markets` and GET `/markets` are **both** queried with `series_ticker=KXGOLD15M`; each is independently paginated using the API's returned cursor. Default cap: 5 pages per tier, 1000 market records per page (API maximum).
+* The collector preserves every page payload, query parameters, and local receipt timestamps in a newly created SHA-256-named file under `data/gold/market_inventories/`. It never overwrites a previous run.
 * The summary reports unique gold tickers, cross-tier overlap, duplicates, contradictions between reported YES/NO outcomes, per-tier page counts, and which page limits were reached. **Observed results are not settlement-oracle-verified labels.**
-* \`pagination_exhausted=true\` means the API returned an empty cursor for each tier in this scan. It **does not** prove a transactionally consistent historical snapshot. \`complete_for_request_window=false\`, \`ready_for_training=false\`, and \`ready_for_live_trading=false\` intentionally remain false.
+* `pagination_exhausted=true` means the API returned an empty cursor for each tier in this scan. It **does not** prove a transactionally consistent historical snapshot. `complete_for_request_window=false`, `ready_for_training=false`, and `ready_for_live_trading=false` intentionally remain false.
 * A repeating cursor, missing markets array, unexpected ticker, invalid source identity, or missing market cutoff raises an error without writing an inventory artifact. No credentials are used and no POST requests are made.
-* Leave any local \`.venv-timesfm3/\`, \`tools/\`, backups or modified \`egg-info\` files alone.
+* Leave any local `.venv-timesfm3/`, `tools/`, backups or modified `egg-info` files alone.
 
 **Source:** Kalshi official [Historical Data](https://docs.kalshi.com/getting_started/historical_data), [Get Markets](https://docs.kalshi.com/api-reference/market/get-markets) and [Get Historical Markets](https://docs.kalshi.com/api-reference/historical/get-historical-markets).
 
