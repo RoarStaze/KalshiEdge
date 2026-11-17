@@ -51,7 +51,7 @@ def test_live_api_provides_fresh_risk_without_changing_final_forecast(tmp_path):
 
 class Vault:
     def exists(self):
-        return False
+        return True
 
 
 def test_trade_card_displays_flip_alert_below_reversal_risk_and_uses_live_probability(tmp_path):
