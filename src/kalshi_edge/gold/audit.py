@@ -194,6 +194,24 @@ def main(argv: list[str] | None = None) -> int:
         "--audit-dataset", type=Path, default=None,
         help="fail-closed source-provenance audit from a SHA-256-named gold inventory",
     )
+    modes.add_argument(
+        "--import-pyth-history", type=Path, default=None,
+        help="offline import of one-minute Pyth-format OHLC JSON; origin not authenticated",
+    )
+    modes.add_argument(
+        "--verify-settlement-evidence", type=Path, default=None,
+        help="fail-closed audit of gold inventory vs an unattested Pyth history import",
+    )
+    parser.add_argument("--pyth-from-ts", type=int, default=None,
+                        help="Unix start second of downloaded OHLC request (required for import)")
+    parser.add_argument("--pyth-to-ts", type=int, default=None,
+                        help="Unix end second of downloaded OHLC request (required for import)")
+    parser.add_argument("--pyth-channel", choices=("real_time", "fixed_rate@200ms"),
+                        default="real_time")
+    parser.add_argument("--inventory-artifact", type=Path, default=None,
+                        help="hashed gold inventory to use with settlement evidence audit")
+    parser.add_argument("--oracle-history-artifact", type=Path, default=None,
+                        help="optional unattested Pyth history import for dataset audit")
     parser.add_argument("--quote-artifact", type=Path, action="append", default=[],
                         help="hashed prospective gold quote snapshot for dataset audit (repeatable)")
     parser.add_argument("--candle-artifact", type=Path, default=None,
@@ -227,6 +245,24 @@ def main(argv: list[str] | None = None) -> int:
         report = audit_gold_dataset(
             args.audit_dataset, args.output_root,
             quote_paths=args.quote_artifact, candle_probe_path=args.candle_artifact,
+            oracle_history_path=args.oracle_history_artifact,
+        )
+    elif args.import_pyth_history is not None:
+        if args.pyth_from_ts is None or args.pyth_to_ts is None:
+            parser.error("--import-pyth-history requires --pyth-from-ts and --pyth-to-ts")
+        from .oracle_history import import_pyth_history
+        report = import_pyth_history(
+            args.import_pyth_history, args.output_root,
+            start_ts=args.pyth_from_ts, end_ts=args.pyth_to_ts,
+            channel=args.pyth_channel,
+        )
+    elif args.verify_settlement_evidence is not None:
+        if args.inventory_artifact is None:
+            parser.error("--verify-settlement-evidence requires --inventory-artifact")
+        from .settlement_evidence import audit_settlement_evidence
+        report = audit_settlement_evidence(
+            args.inventory_artifact, args.verify_settlement_evidence,
+            args.output_root,
         )
     else:
         report = collect_contract_audit(args.output_root, sample_markets=args.sample_markets)
