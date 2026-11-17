@@ -186,6 +186,18 @@ def main(argv: list[str] | None = None) -> int:
         "--candle-probe", type=Path, default=None,
         help="collect a bounded read-only Kalshi YES-price candle sample from an inventory",
     )
+    modes.add_argument(
+        "--capture-quotes", action="store_true",
+        help="capture a bounded prospective KXGOLD15M live GET quote snapshot, no orders",
+    )
+    modes.add_argument(
+        "--audit-dataset", type=Path, default=None,
+        help="fail-closed source-provenance audit from a SHA-256-named gold inventory",
+    )
+    parser.add_argument("--quote-artifact", type=Path, action="append", default=[],
+                        help="hashed prospective gold quote snapshot for dataset audit (repeatable)")
+    parser.add_argument("--candle-artifact", type=Path, default=None,
+                        help="optional hashed historical candle probe; never as-of verified")
     parser.add_argument("--page-size", type=int, default=1000)
     parser.add_argument("--max-pages-per-tier", type=int, default=5)
     parser.add_argument("--sample-per-tier", type=int, default=5)
@@ -207,6 +219,15 @@ def main(argv: list[str] | None = None) -> int:
         from .inventory import collect_gold_inventory
         report = collect_gold_inventory(
             args.output_root, page_size=args.page_size, max_pages_per_tier=args.max_pages_per_tier)
+    elif args.capture_quotes:
+        from .prospective import capture_gold_quotes
+        report = capture_gold_quotes(args.output_root)
+    elif args.audit_dataset is not None:
+        from .dataset_readiness import audit_gold_dataset
+        report = audit_gold_dataset(
+            args.audit_dataset, args.output_root,
+            quote_paths=args.quote_artifact, candle_probe_path=args.candle_artifact,
+        )
     else:
         report = collect_contract_audit(args.output_root, sample_markets=args.sample_markets)
     print(json.dumps(report, indent=2, sort_keys=True))
