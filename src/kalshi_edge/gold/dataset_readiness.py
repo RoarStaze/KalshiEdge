@@ -18,6 +18,7 @@ from typing import Any, Sequence
 
 from .audit import SERIES_TICKER, EXPECTED_PYTH_SYMBOL, FINAL_CHECKPOINT_SECONDS
 from .candle_probe import _load_inventory, GoldCandleProbeError
+from .oracle_history import GoldOracleEvidenceError, inspect_pyth_history_evidence
 from .prospective import (
     GoldCaptureError, _checked_gold_root, _read_hash_snapshot,
     _write_immutable, inspect_gold_quote_snapshot,
@@ -126,6 +127,7 @@ def audit_gold_dataset(
     output_root: Path,
     *, quote_paths: Sequence[Path] = (),
     candle_probe_path: Path | None = None,
+    oracle_history_path: Path | None = None,
 ) -> dict[str, Any]:
     """Audit real source files; never turn backfilled quotes into training rows."""
     root = _checked_gold_root(output_root)
@@ -186,11 +188,25 @@ def audit_gold_dataset(
         if not probe_tickers.issubset(set(records)):
             raise GoldDatasetError("candle probe ticker is not in its source inventory")
 
+    # Even structurally valid Pyth OHLC is not an authenticated settlement
+    # source and does not certify the candle boundary or Kalshi's rules.
+    oracle_hash: str | None = None
+    oracle_bars = 0
+    if oracle_history_path is not None:
+        try:
+            oracle = inspect_pyth_history_evidence(Path(oracle_history_path))
+            oracle_hash = sha256(Path(oracle_history_path).read_bytes()).hexdigest()
+            oracle_bars = len(oracle["raw_pyth_response"]["t"])
+        except (GoldOracleEvidenceError, OSError) as exc:
+            raise GoldDatasetError(f"unattested Pyth history SHA-256 or readiness invalid: {exc}") from exc
+
     blockers = [
         "oracle_settlement_not_reconstructed",
         "contract_checkpoint_semantics_unverified",
         "no_verified_point_in_time_training_labels",
     ]
+    if oracle_history_path is not None:
+        blockers.append("pyth_history_import_unattested")
     if not quote_paths:
         blockers.append("no_prospective_quote_receipts")
     if candle_probe_path is not None:
@@ -211,6 +227,7 @@ def audit_gold_dataset(
         "prospective_quote_tickers": len(quote_market_tickers),
         "pre_candidate_checkpoint_receipts_not_publication_verified": candidate_pre_checkpoint_receipts,
         "historical_market_candle_count_not_as_of_verified": probe_candles,
+        "pyth_history_bars_unattested": oracle_bars,
         "checkpoint_seconds_hypothetical": FINAL_CHECKPOINT_SECONDS,
         "blockers": blockers,
         "inventory_sha256": inv_hash,
@@ -220,6 +237,7 @@ def audit_gold_dataset(
         "inventory": inv_hash,
         "candle_probe": probe_hash,
         "prospective_quotes": quote_hashes,
+        "pyth_history": oracle_hash,
     }
     doc = {
         "schema_version": 1, "artifact_kind": "gold_dataset_readiness_audit",
@@ -228,6 +246,7 @@ def audit_gold_dataset(
             "inventory_path": str(inventory_path),
             "candle_probe_path": str(candle_probe_path) if candle_probe_path else None,
             "quote_paths": [str(p) for p in quote_paths],
+            "pyth_history_path": str(oracle_history_path) if oracle_history_path else None,
         },
         "source_hashes": source_hashes,
         "candidate_market_tickers": sorted(set(records) | quote_market_tickers | probe_tickers),
