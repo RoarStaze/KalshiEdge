@@ -16,6 +16,7 @@ from typing import Any
 
 from .final_forecast import FINAL_CHECKPOINT_SECONDS, MINIMUM_FINAL_CONFIDENCE, FinalForecastRecord
 from .live import LivePredictionRecord
+from .reversal_monitor import assess_reversal_risk
 
 LOG = logging.getLogger(__name__)
 NS = 1_000_000_000
@@ -77,6 +78,48 @@ def _current_final(root: Path, ticker: str, close_ts_ns: int) -> FinalForecastRe
         return None
 
 
+
+def _recent_monitor_records(root: Path, *, now_ns: int) -> list[dict[str, Any]]:
+    """Recent causal prediction snapshots only; bounded tail reads, no history scans.
+
+    Never join different tickers or extrapolate a 480-second locked record.
+    Full validation occurs before the monitor; malformed lines are ignored.
+    """
+    recent: list[dict[str, Any]] = []
+    utc_now = datetime.fromtimestamp(now_ns / NS, timezone.utc)
+    for delta in range(2):
+        day = (utc_now - timedelta(days=delta)).date().isoformat()
+        path = root / "predictions" / day / "predictions.jsonl"
+        if not path.is_file():
+            continue
+        try:
+            with path.open("rb") as stream:
+                stream.seek(0, 2)
+                end = stream.tell()
+                stream.seek(max(0, end - TAIL_BYTES))
+                chunk = stream.read()
+            if end > TAIL_BYTES:
+                chunk = chunk.partition(b"\\n")[2]
+            for line in reversed(chunk.splitlines()):
+                try:
+                    record = LivePredictionRecord.model_validate_json(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                age = now_ns - record.prediction_ts_ns
+                if age > 45 * NS:
+                    break
+                if 0 <= age <= 45 * NS:
+                    recent.append(record.model_dump(mode="json"))
+                if len(recent) >= 64:
+                    break
+        except OSError as exc:
+            LOG.warning("Unable to inspect recent prediction tail %s: %s", path, exc)
+        if len(recent) >= 64:
+            break
+    recent.reverse()
+    return recent
+
+
 def read_live_dashboard(root: Path, *, now_ns: int | None = None) -> dict[str, Any]:
     """Return only recent observed live data and a verified matching final record."""
 
@@ -91,6 +134,7 @@ def read_live_dashboard(root: Path, *, now_ns: int | None = None) -> dict[str, A
         "strike": None,
         "latest_prediction": None,
         "final_forecast": None,
+        "reversal_risk": assess_reversal_risk([], now_ns=now_ns, market_ticker=""),
         "minimum_confidence": MINIMUM_FINAL_CONFIDENCE,
     }
     prediction = _latest_prediction(root.resolve(), now_ns=now_ns)
@@ -124,6 +168,10 @@ def read_live_dashboard(root: Path, *, now_ns: int | None = None) -> dict[str, A
             "strike": prediction.strike,
             "latest_prediction": prediction.model_dump(mode="json"),
             "final_forecast": None if final is None else final.model_dump(mode="json"),
+            "reversal_risk": assess_reversal_risk(
+                _recent_monitor_records(root.resolve(), now_ns=now_ns),
+                now_ns=now_ns, market_ticker=prediction.market_ticker,
+            ),
         }
     )
     return result

@@ -15,7 +15,9 @@ def test_trade_hero_labels_directional_probability_without_accuracy_claim() -> N
 
 
 def test_trade_hero_uses_locked_or_live_directional_probability_not_strength() -> None:
-    assert "const sideProbability=locked?f.directional_probability:" in PAGE
+    assert 'const sideProbability=p?.status==="OK"?(p.predicted_side==="ABOVE"?p.p_yes:p.predicted_side==="BELOW"?p.p_no:null):null;' in PAGE
+    assert 'text("detail-probability",pct(locked?f.directional_probability:sideProbability));' in PAGE
+    assert 'const side=p?.status==="OK"?p.predicted_side:null;' in PAGE
     assert 'text("confidence",Number.isFinite(sideProbability)?Math.round(sideProbability*100)+"%":"—");' in PAGE
     assert 'Math.max(0,sideProbability*100)' in PAGE
     assert 'text("detail-strength",pct(strength));' in PAGE

@@ -506,7 +506,7 @@ def render_site_page(page: str, section: str) -> str:
                 'setInterval(refreshLive,750);setInterval(refreshHistory,5000);'
                 'setInterval(refreshTraining,5000);setInterval(clock,250);')
     new_poll = ('const sitePage=document.body.dataset.page;\n'
-                ' if(sitePage==="trade"){refreshLive();setInterval(refreshLive,1000);setInterval(clock,250);}\n'
+                ' if(sitePage==="trade"){refreshLive();setInterval(refreshLive,500);setInterval(clock,250);}\n'
                 ' if(sitePage==="train"){refreshLive();restoreTrainingSnapshot();refreshTraining();setInterval(refreshLive,5000);setInterval(refreshTraining,5000);setInterval(refreshTrainingProgress,250);}\n'
                 ' if(sitePage==="history"){refreshLive();refreshHistory();setInterval(refreshLive,5000);setInterval(refreshHistory,5000);}')
     if page.count(old_poll) != 1:
