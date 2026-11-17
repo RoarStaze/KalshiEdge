@@ -146,3 +146,18 @@ def test_rejects_unbounded_or_empty_inventory_parameters(tmp_path: Path) -> None
                    {"max_pages_per_tier": 501}):
         with pytest.raises(ValueError):
             collect_gold_inventory(tmp_path, **limits)
+
+
+def test_inventory_cli_dispatches_and_rejects_inspection_mode(tmp_path: Path, monkeypatch, capsys) -> None:
+    from kalshi_edge.gold.audit import main
+    seen = {}
+    def fake_inventory(root, *, page_size, max_pages_per_tier):
+        seen.update(root=root, page_size=page_size, max_pages_per_tier=max_pages_per_tier)
+        return {"ready_for_training": False, "unique_markets": 3}
+    monkeypatch.setattr("kalshi_edge.gold.inventory.collect_gold_inventory", fake_inventory)
+    assert main(["--inventory", "--output-root", str(tmp_path),
+                 "--page-size", "100", "--max-pages-per-tier", "7"]) == 0
+    assert seen == {"root": tmp_path, "page_size": 100, "max_pages_per_tier": 7}
+    assert json.loads(capsys.readouterr().out)["ready_for_training"] is False
+    with pytest.raises(SystemExit):
+        main(["--inventory", "--inspect-artifact", "some-snapshot.json"])
