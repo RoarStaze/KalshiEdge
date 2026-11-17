@@ -341,7 +341,7 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_trader=None, auto_trader=None) -> type[BaseHTTPRequestHandler]:
+def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_trader=None, auto_trader=None, paper_scalper=None) -> type[BaseHTTPRequestHandler]:
     from .training_cycle import TrainingController, CycleError
     from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
@@ -367,8 +367,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
 
     # Build the three local routes once. Do not inject AutoTrader UI;
     # legacy signed API routes remain available to authorized localhost tools.
-    site_template = integrate_api_credentials(
-        integrate_manual_trade(integrate_round_price_hero(_PAGE)))
+    from .scalp_paper_ui import integrate_paper_scalp
+    site_template = integrate_paper_scalp(integrate_api_credentials(
+        integrate_manual_trade(integrate_round_price_hero(_PAGE))))
     routed_pages = {name: render_site_page(site_template, name).encode("utf-8")
                     for name in ("trade", "train", "history", "api")}
 
@@ -383,6 +384,52 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        def _paper_scalp_get(self) -> None:
+            if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+                self._json(403, {"error": "Paper service is localhost-only"})
+                return
+            if paper_scalper is None:
+                self._json(503, {"error": "Paper scalp simulator unavailable"})
+                return
+            self._json(200, paper_scalper.status())
+
+        def _paper_scalp_post(self) -> None:
+            origin = f"http://127.0.0.1:{self.server.server_port}"
+            if (self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+                    or self.headers.get("Origin") != origin
+                    or self.headers.get("Content-Type") != "application/json"
+                    or self.headers.get("X-KalshiEdge-Action") != "paper-scalp"
+                    or self.headers.get("Sec-Fetch-Site", "same-origin")
+                    not in ("same-origin", "none")):
+                self._json(403, {"error": "Same-origin paper action required"})
+                return
+            if paper_scalper is None:
+                self._json(503, {"error": "Paper scalp simulator unavailable"})
+                return
+            try:
+                size = int(self.headers.get("Content-Length") or "-1")
+                if not 0 <= size <= 128:
+                    raise ValueError("Invalid paper control length")
+                payload = json.loads(self.rfile.read(size))
+                if self.path == "/api/paper-scalp/arm":
+                    if (not isinstance(payload, dict) or set(payload) != {"amount"}
+                            or not isinstance(payload["amount"], str)):
+                        raise ValueError("Paper arm accepts only a budget amount")
+                    result = paper_scalper.arm(payload["amount"])
+                elif self.path == "/api/paper-scalp/pause":
+                    if payload != {}:
+                        raise ValueError("Paper pause accepts no options")
+                    result = paper_scalper.pause()
+                else:
+                    self._json(404, {"error": "Unknown paper scalp action"})
+                    return
+                self._json(200, result)
+            except (ValueError, TypeError, KeyError) as exc:
+                self._json(409, {"error": str(exc)[:160]})
+            except Exception:
+                LOG.exception("Paper scalp control action failed")
+                self._json(503, {"error": "Paper scalp control failed; inspect logs"})
 
         def _auto_get(self) -> None:
             if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
@@ -564,6 +611,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self._json(404, {"error": "unknown AutoTrader action"})
 
         def do_POST(self) -> None:
+            if self.path.startswith("/api/paper-scalp/"):
+                self._paper_scalp_post()
+                return
             if self.path.startswith("/api/armed-trade/"):
                 self._auto_post()
                 return
@@ -636,6 +686,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return False
 
         def do_GET(self) -> None:
+            if self.path == "/api/paper-scalp/status":
+                self._paper_scalp_get()
+                return
             if self.path in ("/api/armed-trade/status", "/api/armed-trade/history"):
                 self._auto_get()
                 return
@@ -756,6 +809,32 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         manual_trader = ManualTrader(root, vault=credential_vault) if credential_vault is not None else None
     except VaultError:
         manual_trader = None
+    from kalshi_edge.trading.paper_scalper import PaperScalpTrader
+
+    def verified_paper_settlement(ticker: str) -> str | None:
+        # Only the application's existing verified official settlement files
+        # authorize resolution of an unsold simulated paper inventory.
+        try:
+            forecast = next(
+                (f for f in _forecasts(root) if f.market_ticker == ticker), None,
+            )
+            if forecast is None:
+                return None
+            outcome = _load_saved_settlement(root, forecast)
+            if outcome is None:
+                return None
+            if outcome.actual_side == "ABOVE":
+                return "yes"
+            if outcome.actual_side == "BELOW":
+                return "no"
+        except (SettlementIntegrityError, OSError, ValueError, KeyError):
+            LOG.warning("Verified paper settlement unavailable for %s", ticker)
+        return None
+
+    paper_scalper = PaperScalpTrader(
+        root, lambda: read_live_dashboard(root),
+        settlement_reader=verified_paper_settlement,
+    )
     from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
     auto_trader = ArmedAutoTrader(
         manual_trader, lambda: read_live_dashboard(root),
@@ -765,10 +844,15 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         target=paper_trader.run_forever, args=(stop,),
         name="kalshi-paper-autotrader", daemon=True,
     )
+    scalp_worker = threading.Thread(
+        target=paper_scalper.run_forever, args=(stop,),
+        name="kalshiedge-paper-scalp-monitor", daemon=True,
+    )
     server = ThreadingHTTPServer(
         ("127.0.0.1", port),
         _make_handler(root, controller=controller, paper_trader=paper_trader,
-                      credential_vault=credential_vault, manual_trader=manual_trader, auto_trader=auto_trader),
+                      credential_vault=credential_vault, manual_trader=manual_trader, auto_trader=auto_trader,
+                      paper_scalper=paper_scalper),
     )
     server.daemon_threads = True
     # Resume the same verified training run after application shutdown.
@@ -780,6 +864,7 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         LOG.exception("Automatic training recovery blocked; inspect saved run state")
     worker.start()
     paper_worker.start()
+    scalp_worker.start()
     print(f"KalshiEdge final history: http://127.0.0.1:{port}/", flush=True)
     print("Read-only local webpage; Ctrl+C to stop.", flush=True)
     try:
@@ -789,10 +874,13 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     finally:
         stop.set()
         paper_trader.enable(False)
+        paper_scalper.pause()
         controller.stop()
         server.server_close()
         worker.join(timeout=2)
         paper_worker.join(timeout=3)
+        scalp_worker.join(timeout=3)
+        paper_scalper.close()
         paper_trader.market_client.close()
         if auto_trader is not None:
             auto_trader.close()
