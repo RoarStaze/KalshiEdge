@@ -119,6 +119,8 @@ def test_launcher_reuses_existing_unified_history_server(tmp_path, monkeypatch):
         lambda root: SimpleNamespace(model_version="bootstrap-hybrid-v5", bundle_sha256="a" * 64),
     )
     monkeypatch.setattr(launcher, "_dashboard_healthy", lambda port: True)
+    monkeypatch.setattr(launcher, "_dashboard_running_build",
+                        lambda port: launcher.dashboard_build_id())
     monkeypatch.setattr(launcher, "_tcp_busy", Mock(side_effect=AssertionError("should reuse healthy server")))
     spawned = []
     fake_predictor = FakeProcess(101)
@@ -235,3 +237,67 @@ def test_test_command_runs_only_preview_without_production_services(tmp_path, mo
     }]
     assert launcher.main(["test","--no-browser","--port","8901"])==0
     assert called[-1]["port"]==8901
+
+
+def test_dashboard_running_build_detects_old_health_without_version(monkeypatch):
+    """A prior dashboard can pass identity checks yet serve stale Python modules."""
+    class OldResponse:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def read(self, *_):
+            return b'{"app":"kalshiedge","service":"unified-dashboard","ready":true}'
+    monkeypatch.setattr(launcher.urllib.request, "urlopen",
+                        lambda req, timeout: OldResponse())
+    assert launcher._dashboard_healthy(8899)
+    assert launcher._dashboard_running_build(8899) is None
+
+
+def test_dashboard_running_build_reads_current_build_marker(monkeypatch):
+    expected = "1234567890abcdef"
+    class NewResponse:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def read(self, *_):
+            return json.dumps({"app":"kalshiedge","service":"unified-dashboard",
+                               "ready":True,"dashboard_build_id":expected}).encode()
+    monkeypatch.setattr(launcher.urllib.request, "urlopen",
+                        lambda req, timeout: NewResponse())
+    assert launcher._dashboard_running_build(8899) == expected
+
+
+def test_launcher_refuses_stale_unified_dashboard_without_starting_predictor(
+        tmp_path, monkeypatch, capsys):
+    """Never silently reuse a healthy but outdated server after git pull."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(launcher,"BootstrapSettings",
+                        lambda: SimpleNamespace(bootstrap_dir=tmp_path / "bootstrap"))
+    monkeypatch.setattr(launcher,"load_default_bundle",
+                        lambda root: SimpleNamespace(model_version="v5",bundle_sha256="a"*64))
+    monkeypatch.setattr(launcher,"_dashboard_healthy",lambda port:True)
+    monkeypatch.setattr(launcher,"_dashboard_running_build",lambda port:None)
+    monkeypatch.setattr(launcher,"_spawn_service",
+                        Mock(side_effect=AssertionError("must not spawn on stale server")))
+    assert launcher.start(open_browser=False) == 2
+    out=capsys.readouterr()
+    assert "outdated" in out.err.lower() or "stale" in out.err.lower()
+    assert "Ctrl+C" in out.err
+
+
+def test_launcher_version_changes_when_paper_source_changes_without_git_commit(tmp_path):
+    """Build signature must use source bytes, not a potentially stale git HEAD."""
+    from kalshi_edge.bootstrap.runtime_identity import source_build_id
+    x=tmp_path/"scalp_paper_ui.py"
+    y=tmp_path/"paper_scalper.py"
+    x.write_bytes(b"OLD_HEAD")
+    y.write_bytes(b"WAITING_FOR_VERIFIED_69_PERCENT_FINAL")
+    first=source_build_id([x,y])
+    y.write_bytes(b"INTRAROUND_UP_DOWN_BOOK_MOMENTUM")
+    second=source_build_id([x,y])
+    assert len(first) == len(second) == 16
+    assert first != second

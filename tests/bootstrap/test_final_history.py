@@ -272,3 +272,26 @@ def test_history_preserves_active_coinflip_veto_for_future_accuracy_audits(tmp_p
     assert row["coin_flip_assessment"] == "HIGH"
     assert row["coin_flip_risk_z"] == pytest.approx(0.12)
     assert row["coin_flip_policy"] == "brti-near-strike-z0.20-v1"
+
+
+def test_dashboard_health_reports_frozen_loaded_source_build(tmp_path, monkeypatch):
+    """The running process advertises the build it loaded, not newer disk code."""
+    from kalshi_edge.bootstrap import final_history
+    monkeypatch.setattr(final_history, "dashboard_build_id", lambda: "old-loaded-code")
+    handler = final_history._make_handler(tmp_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setattr(final_history, "dashboard_build_id", lambda: "new-disk-code")
+        with httpx.Client(timeout=5, trust_env=False) as client:
+            response=client.get(f"http://127.0.0.1:{server.server_port}/api/health")
+        assert response.status_code == 200
+        health = response.json()
+        assert health["app"] == "kalshiedge"
+        assert health["service"] == "unified-dashboard"
+        assert health["dashboard_build_id"] == "old-loaded-code"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
