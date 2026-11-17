@@ -110,3 +110,12 @@ def test_restart_safe_readiness_does_not_enable_live_scalping():
     assert report["status"]=="RESEARCH_ONLY"
     assert report["assumes_fills"] is False
     assert report["requires_exchange_fill_backtest"] is True
+
+
+def test_existing_autotrade_exposes_research_gate_without_live_execution():
+    from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
+    engine=ArmedAutoTrader(None, lambda: {})
+    status=engine.status()
+    assert status["state"]=="IDLE"
+    assert status["scalp_research"]["status"]=="RESEARCH_ONLY"
+    assert status["scalp_research"]["live_orders_enabled"] is False
