@@ -109,3 +109,12 @@ def test_expiration_before_close_is_an_anomaly(tmp_path: Path) -> None:
         "expiration_time": "2026-11-05T08:30:00Z",
     }]))
     assert "EXPIRATION_BEFORE_TRADING_CLOSE" in report["markets"][0]["flags"]
+
+
+def test_cli_inspects_existing_snapshot_without_network(tmp_path: Path, capsys) -> None:
+    from kalshi_edge.gold.audit import main
+    path = _snapshot(tmp_path)
+    assert main(["--inspect-artifact", str(path)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["snapshot_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert report["training_ready"] is False
