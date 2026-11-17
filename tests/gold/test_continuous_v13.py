@@ -177,6 +177,20 @@ def test_collector_status_rejects_tampered_even_if_filename_unchanged(tmp_path):
         inspect_gold_collector_status(tmp_path)
 
 
+def test_collector_detects_removed_cycle_in_digest_chain(tmp_path):
+    adapter, _ = transport()
+    with httpx.Client(transport=adapter) as client:
+        run_continuous_gold_collection(
+            tmp_path, client=client, interval_seconds=10, max_cycles=2,
+            sleep=lambda _: None,
+        )
+    files = sorted((tmp_path / "collector_events").glob("*.json"))
+    assert len(files) == 2
+    files[0].unlink()
+    with pytest.raises(GoldContinuousError, match="chain"):
+        inspect_gold_collector_status(tmp_path)
+
+
 def test_collector_rejects_unbounded_or_overaggressive_configuration(tmp_path):
     with pytest.raises(ValueError):
         run_continuous_gold_collection(tmp_path, interval_seconds=1, max_cycles=1)
