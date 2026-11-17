@@ -57,6 +57,10 @@ async function fetch(url,opts){
     })};
   }
   if(url.endsWith("/arm")){
+    if(mode==="rejectpost"){
+      return {ok:false,status:403,
+        json:async()=>({error:"Same-origin paper action required"})};
+    }
     return {ok:true,status:200,json:async()=>({
       mode:"PAPER_SCALP_SIMULATED",enabled:true,live_order_submission:false,
       virtual_cash_dollars:"100.00",simulated_net_pnl_dollars:"0",
@@ -112,3 +116,10 @@ def test_start_with_working_backend_arms_paper_only_without_real_trade_route():
                for r in result["requests"]), result
     assert all("/api/paper-scalp/" in r["url"] for r in result["requests"])
     assert "PAPER ARMED" in result["status"]
+
+
+def test_rejected_arm_request_stays_visible_instead_of_ending_as_paper_paused():
+    result = interact("rejectpost")
+    assert "Paper action refused" in result["status"], result
+    assert "Same-origin paper action required" in result["status"]
+    assert result["label"] == "Start Paper Scalper"
