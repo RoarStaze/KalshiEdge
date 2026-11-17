@@ -196,9 +196,64 @@ def entry_signal(
     return _research_stop("RESEARCH_BUY_SIGNAL", "CAUSAL_BOOK_CANDIDATE_ONLY")
 
 
+def intraround_entry_signal(
+    history: Sequence[ScalpQuote],
+    contracts: str | float | Decimal,
+    seconds_remaining: int,
+) -> ScalpDecision:
+    """Paper-only bid/ask momentum candidate, independent of final forecasts.
+
+    Both UP and DOWN are evaluated separately using one public book.
+    No signal promises continuation or overrides the real AutoTrade gate.
+    """
+    try:
+        qty = _d(contracts)
+    except ValueError:
+        return _research_stop("SKIP", "INVALID_CONTRACT_COUNT")
+    if (qty <= 0 or type(seconds_remaining) is not int
+            or not MIN_SECONDS_TO_CLOSE_FOR_ENTRY < seconds_remaining <= 900):
+        return _research_stop("SKIP", "NO_INTRAROUND_ENTRY_RUNWAY")
+    if not isinstance(history, (list, tuple)) or len(history) < 3:
+        return _research_stop("SKIP", "INSUFFICIENT_BOOK_HISTORY")
+    first, middle, last = history[-3:]
+    if not all(isinstance(q, ScalpQuote) for q in (first, middle, last)):
+        return _research_stop("SKIP", "INVALID_BOOK_HISTORY")
+    if not (first.side == middle.side == last.side
+            and first.timestamp_ns < middle.timestamp_ns < last.timestamp_ns
+            and MIN_OBSERVATION_WINDOW_NS
+            <= last.timestamp_ns - first.timestamp_ns
+            <= MAX_OBSERVATION_WINDOW_NS):
+        return _research_stop("SKIP", "STALE_OR_MIXED_BOOK_HISTORY")
+    if (last.spread > MAX_RESEARCH_SPREAD
+            or last.ask_available < qty or last.bid_available < qty):
+        return _research_stop("SKIP", "SPREAD_OR_DEPTH")
+    # Rising bids alone may reflect a narrowing spread. Require bids AND
+    # asks to rise on the same side over three causally ordered observations.
+    if not (first.bid < middle.bid < last.bid
+            and first.ask < middle.ask < last.ask
+            and last.bid - first.bid >= MIN_RESEARCH_BID_MOMENTUM):
+        return _research_stop("SKIP", "NO_STABLE_BOOK_MOMENTUM")
+    slip = D("0.01")  # pessimistic paper simulation per contract, both legs
+    entry = last.ask + slip
+    exit_bid = last.bid - slip
+    if not (D("0") < exit_bid < entry < ONE):
+        return _research_stop("SKIP", "NO_SIMULATED_EXECUTABLE_ROUNDTRIP")
+    entry_fee = taker_fee_reserve(entry, qty)
+    exit_fee = taker_fee_reserve(exit_bid, qty)
+    debit = entry * qty + entry_fee
+    immediate_drag = (entry - exit_bid) * qty + entry_fee + exit_fee
+    stop_budget = max(D("0.02"), debit * D("0.08"))
+    if immediate_drag >= stop_budget:
+        return _research_stop("SKIP", "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS")
+    if immediate_drag > MAX_RESEARCH_ROUNDTRIP_FRICTION_FRACTION * debit:
+        return _research_stop("SKIP", "ROUNDTRIP_COST_TOO_HIGH")
+    return _research_stop("RESEARCH_BUY_SIGNAL", "UP_DOWN_BOOK_MOMENTUM_CANDIDATE")
+
+
 def exit_signal(
     position: ScalpPosition, quote: ScalpQuote, *,
     now_ns: int, seconds_remaining: int,
+    paper_minimum_net_profit: Decimal | None = None,
 ) -> ScalpDecision:
     """Mark *potential* early exit at actual best bid minus fee reserve.
 
@@ -221,7 +276,15 @@ def exit_signal(
     # These are hypotheses in dollars relative to ACTUAL all-in paid.
     # They are not a guaranteed stop-loss and are not optimized parameters.
     stop_budget = max(D("0.02"), position.total_paid * D("0.08"))
-    target = max(D("0.02"), position.total_paid * D("0.05"))
+    if paper_minimum_net_profit is not None and (
+            not isinstance(paper_minimum_net_profit, Decimal)
+            or not paper_minimum_net_profit.is_finite()
+            or paper_minimum_net_profit <= 0):
+        return _research_stop("SKIP", "INVALID_PAPER_PROFIT_TARGET")
+    # Preserve the original research exit defaults. Only independent paper
+    # scalping opts in to a positive-dollar net target after full exit fees.
+    target = (paper_minimum_net_profit if paper_minimum_net_profit is not None
+              else max(D("0.02"), position.total_paid * D("0.05")))
     trail = max(D("0.02"), position.total_paid * D("0.025"))
     if net <= -stop_budget:
         return _research_stop("STOP_LOSS_SIGNAL", "NET_BID_STOP", net)
