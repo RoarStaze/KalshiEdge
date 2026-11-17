@@ -30,6 +30,7 @@ from .api_credentials_ui import integrate_api_credentials
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
 from .live_dashboard import read_live_dashboard
+from .runtime_identity import dashboard_build_id
 
 LOG = logging.getLogger(__name__)
 NS = 1_000_000_000
@@ -368,6 +369,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
     # Build the three local routes once. Do not inject AutoTrader UI;
     # legacy signed API routes remain available to authorized localhost tools.
     from .scalp_paper_ui import integrate_paper_scalp
+    # Freeze the identity when this HTTP handler is constructed; do not
+    # re-read source files after a later pull into the running directory.
+    serving_build_id = dashboard_build_id()
     site_template = integrate_paper_scalp(integrate_api_credentials(
         integrate_manual_trade(integrate_round_price_hero(_PAGE))))
     routed_pages = {name: render_site_page(site_template, name).encode("utf-8")
@@ -753,7 +757,12 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 content = json.dumps(data, separators=(",", ":"), allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
             elif self.path == "/api/health":
-                content = b'{"app":"kalshiedge","service":"unified-dashboard","ready":true}'
+                content = json.dumps({
+                    "app": "kalshiedge",
+                    "service": "unified-dashboard",
+                    "ready": True,
+                    "dashboard_build_id": serving_build_id,
+                }, separators=(",", ":")).encode("utf-8")
                 kind = "application/json; charset=utf-8"
             else:
                 self.send_error(404)
