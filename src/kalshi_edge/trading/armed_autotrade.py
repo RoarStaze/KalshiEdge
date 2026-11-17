@@ -66,8 +66,11 @@ class ArmedAutoTrader:
         self._history_cache = None
 
     def status(self) -> dict:
+        # The scoped scalp decision kernel is intentionally read-only and
+        # cannot be mistaken for authorization to submit live orders.
+        from .scalp_policy import readiness as scalp_readiness
         with self._lock:
-            return dict(self._state)
+            return {**self._state, "scalp_research": scalp_readiness()}
 
     def _profit_report(self, entries: list[dict]) -> dict:
         # Read-only official settlement evidence; never used to authorize a BUY.
