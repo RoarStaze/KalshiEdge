@@ -13,7 +13,7 @@ from collections import deque
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 from pathlib import Path
 import logging
 import sqlite3
@@ -32,6 +32,8 @@ D = Decimal
 NS = 1_000_000_000
 STEP = D("0.01")
 SIMULATED_SLIPPAGE_PER_CONTRACT = D("0.01")
+PAPER_MIN_REWARD_STOP_RATIO = D("1.25")
+PAPER_MIN_ABSOLUTE_NET_PROFIT = D("0.01")
 MAX_CONTRACTS = D("1000")
 MAX_PAPER_BUDGET_FRACTION = D("0.05")
 DAILY_PAPER_LOSS_LIMIT = D("2")
@@ -58,6 +60,24 @@ def _number(value) -> D:
 
 def _money(amount: D) -> str:
     return format(amount.quantize(D("0.000001")), ".6f")
+
+
+def paper_stop_budget(debit: D) -> D:
+    """Match the paper exit's nominal mark-to-liquidate stop threshold."""
+    paid = _number(debit)
+    if paid <= 0:
+        raise ValueError("Invalid paper stop basis")
+    return max(D("0.02"), paid * D("0.08"))
+
+
+def paper_profit_target(debit: D) -> D:
+    """Conservative, unoptimized positive paper reward/risk hypothesis."""
+    return max(
+        PAPER_MIN_ABSOLUTE_NET_PROFIT,
+        (paper_stop_budget(debit) * PAPER_MIN_REWARD_STOP_RATIO).quantize(
+            D("0.01"), rounding=ROUND_CEILING,
+        ),
+    )
 
 
 def _utc_day(ns: int):
@@ -93,6 +113,13 @@ class PaperScalpLedger:
                 exit_reason TEXT,
                 paper_net_pnl TEXT
             )""")
+            # Safe idempotent migration: old paper cycles keep NULL targets,
+            # so an update never increases an existing OPEN position's goal.
+            columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(cycles)")
+            }
+            if "profit_target" not in columns:
+                db.execute("ALTER TABLE cycles ADD COLUMN profit_target TEXT")
             # Prevent two simultaneous hypothetical inventories even if a
             # second process accidentally shares the same SQLite file.
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_open_paper_scalp "
@@ -136,15 +163,19 @@ class PaperScalpLedger:
             ).fetchone()[0])
 
     def insert(self, *, ticker: str, side: str, quantity: D,
-               price: D, fee: D, paid: D, now_ns: int, close_ns: int) -> None:
+               price: D, fee: D, paid: D, now_ns: int, close_ns: int,
+               profit_target: D | None = None) -> None:
+        # A NULL target marks an existing, pre-upgrade paper position. Its
+        # historical one-cent exit remains unchanged through restarts.
         with self.db() as db:
             db.execute(
                 """INSERT INTO cycles (
                     ticker,side,status,quantity,entry_price,entry_fee,total_paid,
-                    entered_at_ns,close_ns,peak_net)
-                    VALUES (?,?,'OPEN',?,?,?,?,?,?,'0')""",
+                    entered_at_ns,close_ns,peak_net,profit_target)
+                    VALUES (?,?,'OPEN',?,?,?,?,?,?,'0',?)""",
                 (ticker, side, _money(quantity), _money(price), _money(fee),
-                 _money(paid), now_ns, close_ns),
+                 _money(paid), now_ns, close_ns,
+                 _money(profit_target) if profit_target is not None else None),
             )
 
     def set_peak(self, position_id: int, peak: D) -> None:
@@ -242,10 +273,15 @@ class PaperScalpTrader:
             if opened is not None:
                 # An open position has no realized P/L.
                 opened["paper_net_pnl"] = None
+                opened["paper_profit_target_dollars"] = (
+                    opened.get("profit_target") or "0.010000"
+                )
             return {
                 "mode": "PAPER_SCALP_SIMULATED",
                 "entry_policy": "INTRAROUND_UP_DOWN_BOOK_MOMENTUM",
                 "paper_minimum_net_profit_dollars": "0.01",
+                "paper_minimum_reward_to_stop_ratio": "1.25",
+                "paper_profit_target_rule": "MAX_1_CENT_OR_1_25X_NOMINAL_STOP",
                 "scan_interval_seconds": 3,
                 "max_cycles_per_market": MAX_PAPER_CYCLES_PER_TICKER,
                 "enabled": self._enabled,
@@ -375,7 +411,12 @@ class PaperScalpTrader:
         decision = exit_signal(
             position, adjusted, now_ns=now,
             seconds_remaining=max(0, int((row["close_ns"]-now) / NS)),
-            paper_minimum_net_profit=D("0.01"),
+            # New entries store a reward target; old OPEN entries retain the
+            # previous one-cent exit target until naturally closed.
+            paper_minimum_net_profit=(
+                _number(row["profit_target"])
+                if row.get("profit_target") is not None else D("0.01")
+            ),
         )
         if decision.mark_net_dollars is not None:
             peak = max(position.peak_net_dollars, decision.mark_net_dollars)
@@ -514,10 +555,24 @@ class PaperScalpTrader:
             if immediate_loss >= stop:
                 reasons.append("STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS")
                 continue
+            reward_target = paper_profit_target(paid)
+            # A binary contract cannot be sold for more than $1. Even at
+            # that impossible ideal limit, after simulated slippage and fees,
+            # many high-priced entries cannot possibly repay their stop risk.
+            theoretical_exit_bid = D("1") - SIMULATED_SLIPPAGE_PER_CONTRACT
+            theoretical_best_net = (
+                qty * theoretical_exit_bid
+                - taker_fee_reserve(theoretical_exit_bid, qty) - paid
+            )
+            if theoretical_best_net < reward_target:
+                reasons.append("PAPER_MAX_REWARD_BELOW_REQUIRED_TARGET")
+                continue
             move = self._history[side][-1].bid - self._history[side][0].bid
             candidates.append((move, side, qty, entry_price, fee, paid))
         if not candidates:
-            if "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS" in reasons:
+            if "PAPER_MAX_REWARD_BELOW_REQUIRED_TARGET" in reasons:
+                self._last_signal = "PAPER_MAX_REWARD_BELOW_REQUIRED_TARGET"
+            elif "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS" in reasons:
                 self._last_signal = "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS"
             elif "SPREAD_OR_DEPTH" in reasons:
                 self._last_signal = "SPREAD_OR_DEPTH"
@@ -531,6 +586,7 @@ class PaperScalpTrader:
         self.ledger.insert(
             ticker=ticker, side=side, quantity=qty, price=entry_price,
             fee=fee, paid=paid, now_ns=now, close_ns=close,
+            profit_target=paper_profit_target(paid),
         )
         self._clear_history()
         self._last_signal = "PAPER_BUY_SIMULATED_" + side

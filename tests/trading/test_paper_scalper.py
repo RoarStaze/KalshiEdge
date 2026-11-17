@@ -316,23 +316,29 @@ def test_both_sides_scanned_with_one_public_book_request_per_tick(tmp_path):
     assert engine.status()["live_order_submission"] is False
 
 
-def test_paper_exit_at_first_cent_net_above_actual_costs(tmp_path):
+def test_paper_small_gain_does_not_exit_far_below_loss_budget(tmp_path):
     engine,live,client=make(tmp_path)
     engine.arm("50")
     enter(engine,live,client)
     position=engine.status()["open_position"]
     entry_paid=Decimal(position["total_paid"])
-    qty=Decimal(position["quantity"])
-    # A relatively small favorable move yields positive net after reserved fees,
-    # yet less than the old 5% all-in target. It should close immediately.
+    # A small net gain must no longer immediately close a position exposed
+    # to an 8%-of-debit stop. An asymmetric 1-cent profit / 8-cent stop
+    # requires over 88% successful exits before overshoot and settlement.
     client.next_book=book(".87",".11")
+    engine.tick()
+    mid=engine.status()
+    assert mid["open_position"] is not None
+    assert mid["last_signal"]=="HOLD"
+    # A large enough *executable* favorable move may satisfy the higher,
+    # fee-adjusted reward target; never claim a guaranteed profit.
+    client.next_book=book(".95",".03")
     engine.tick()
     after=engine.status()
     assert after["open_position"] is None
     row=after["recent_cycles"][0]
     assert row["exit_reason"]=="TAKE_PROFIT_SIGNAL"
-    assert Decimal(row["paper_net_pnl"])>=Decimal(".01")
-    assert Decimal(row["paper_net_pnl"])<entry_paid*Decimal(".05")
+    assert Decimal(row["paper_net_pnl"])>=max(Decimal(".01"),entry_paid*Decimal(".08"))
 
 
 def test_missing_model_probability_and_no_final_record_still_allow_paper_momentum(tmp_path):
@@ -342,3 +348,117 @@ def test_missing_model_probability_and_no_final_record_still_allow_paper_momentu
     enter(engine,live,client)
     assert engine.status()["open_position"]["side"]=="UP"
     assert client.private_orders==0
+
+
+def test_paper_dynamic_reward_target_is_not_tiny_relative_to_stop_budget():
+    from kalshi_edge.trading.paper_scalper import (
+        paper_profit_target, paper_stop_budget,
+    )
+    for debit in (Decimal(".70"),Decimal("1"),Decimal("5"),Decimal("50")):
+        stop=paper_stop_budget(debit)
+        target=paper_profit_target(debit)
+        assert target >= stop
+        assert target > Decimal(".01")
+        assert target >= stop*Decimal("1.25")
+
+
+def test_paper_skips_high_price_momentum_when_reward_ceiling_is_insufficient(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    # This high-price UP breakout still meets the three-tick momentum
+    # criterion, but there is insufficient room below the $1 binary ceiling
+    # to compensate for the modeled stop budget.
+    for yes,no in ((".88",".10"),(".90",".08"),(".92",".06")):
+        client.next_book=book(yes,no)
+        engine.tick()
+        live.advance(3)
+    state=engine.status()
+    assert state["open_position"] is None
+    assert state["last_signal"]=="PAPER_MAX_REWARD_BELOW_REQUIRED_TARGET"
+    assert client.private_orders==0
+
+
+def test_paper_status_discloses_the_reward_to_risk_rule(tmp_path):
+    engine,_,client=make(tmp_path)
+    status=engine.status()
+    assert status["live_order_submission"] is False
+    assert status["paper_minimum_reward_to_stop_ratio"]=="1.25"
+    assert status["paper_profit_target_rule"]=="MAX_1_CENT_OR_1_25X_NOMINAL_STOP"
+    assert client.private_orders==0
+
+
+def test_new_paper_entry_persists_reward_target_for_restart(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    enter(engine,live,client)
+    old=engine.status()["open_position"]
+    assert old is not None
+    assert Decimal(old["profit_target"]) >= Decimal(old["total_paid"]) * Decimal(".08") * Decimal("1.25")
+    restarted,_,_=make(tmp_path,live=live,client=client)
+    new=restarted.status()["open_position"]
+    assert new["id"]==old["id"]
+    assert new["profit_target"]==old["profit_target"]
+    assert not restarted.status()["enabled"]
+
+
+def test_legacy_open_paper_entry_keeps_original_one_cent_target(tmp_path):
+    # Existing saved paper inventories must not acquire a larger new exit
+    # target mid-trade during a code update.
+    engine,live,client=make(tmp_path)
+    engine.ledger.insert(
+        ticker=TICKER,side="UP",quantity=Decimal("1"),
+        price=Decimal(".80"),fee=Decimal(".02"),paid=Decimal(".82"),
+        now_ns=live.t-10*NS,close_ns=live.close,
+    )
+    row=engine.status()["open_position"]
+    assert row is not None and row["profit_target"] is None
+    client.next_book=book(".87",".11")
+    engine.tick()
+    result=engine.status()
+    assert result["open_position"] is None
+    assert result["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
+    assert Decimal(result["recent_cycles"][0]["paper_net_pnl"])>=Decimal(".01")
+
+
+def test_legacy_sqlite_paper_database_migrates_without_erasing_open_inventory(tmp_path):
+    import sqlite3
+    database=tmp_path/"trading"/"paper_scalp.sqlite3"
+    database.parent.mkdir(parents=True,exist_ok=True)
+    with sqlite3.connect(database) as db:
+        db.execute("""CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+        db.execute("INSERT INTO settings(key,value) VALUES('initial_bankroll','1000')")
+        db.execute("""CREATE TABLE cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            side TEXT NOT NULL,
+            status TEXT NOT NULL,
+            quantity TEXT NOT NULL,
+            entry_price TEXT NOT NULL,
+            entry_fee TEXT NOT NULL,
+            total_paid TEXT NOT NULL,
+            entered_at_ns INTEGER NOT NULL,
+            close_ns INTEGER NOT NULL,
+            peak_net TEXT NOT NULL DEFAULT '0',
+            exit_price TEXT,
+            exit_fee TEXT,
+            exit_ns INTEGER,
+            exit_reason TEXT,
+            paper_net_pnl TEXT
+        )""")
+        db.execute("""INSERT INTO cycles(
+            ticker,side,status,quantity,entry_price,entry_fee,total_paid,
+            entered_at_ns,close_ns,peak_net) VALUES(
+            ?,?,'OPEN',?,?,?,?,?,?,'0')""",(
+            TICKER,"UP","1",".8",".02",".82",
+            1_900_000_000*NS-10*NS,1_900_000_720*NS,
+        ))
+    engine,live,client=make(tmp_path)
+    opened=engine.status()["open_position"]
+    assert opened["status"]=="OPEN"
+    assert opened["profit_target"] is None
+    assert opened["side"]=="UP"
+    assert not engine.status()["enabled"]
+    client.next_book=book(".87",".11")
+    engine.tick()
+    assert engine.status()["open_position"] is None
+    assert engine.status()["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
