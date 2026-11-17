@@ -385,3 +385,36 @@ def test_paper_status_discloses_the_reward_to_risk_rule(tmp_path):
     assert status["paper_minimum_reward_to_stop_ratio"]=="1.25"
     assert status["paper_profit_target_rule"]=="MAX_1_CENT_OR_1_25X_NOMINAL_STOP"
     assert client.private_orders==0
+
+
+def test_new_paper_entry_persists_reward_target_for_restart(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    enter(engine,live,client)
+    old=engine.status()["open_position"]
+    assert old is not None
+    assert Decimal(old["profit_target"]) >= Decimal(old["total_paid"]) * Decimal(".08") * Decimal("1.25")
+    restarted,_,_=make(tmp_path,live=live,client=client)
+    new=restarted.status()["open_position"]
+    assert new["id"]==old["id"]
+    assert new["profit_target"]==old["profit_target"]
+    assert not restarted.status()["enabled"]
+
+
+def test_legacy_open_paper_entry_keeps_original_one_cent_target(tmp_path):
+    # Existing saved paper inventories must not acquire a larger new exit
+    # target mid-trade during a code update.
+    engine,live,client=make(tmp_path)
+    engine.ledger.insert(
+        ticker=TICKER,side="UP",quantity=Decimal("1"),
+        price=Decimal(".80"),fee=Decimal(".02"),paid=Decimal(".82"),
+        now_ns=live.t-10*NS,close_ns=live.close,
+    )
+    row=engine.status()["open_position"]
+    assert row is not None and row["profit_target"] is None
+    client.next_book=book(".87",".11")
+    engine.tick()
+    result=engine.status()
+    assert result["open_position"] is None
+    assert result["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
+    assert Decimal(result["recent_cycles"][0]["paper_net_pnl"])>=Decimal(".01")
