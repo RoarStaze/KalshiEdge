@@ -144,3 +144,21 @@ def test_conflicting_market_results_are_excluded(tmp_path: Path):
         report = probe_checkpoint_candles(p2, tmp_path, client=client)
     assert report["market_count"] == 2
     assert report["conflicted_market_tickers_excluded"] == 1
+
+
+def test_cli_routes_candle_probe_without_changing_other_modes(tmp_path: Path, monkeypatch, capsys):
+    from kalshi_edge.gold.audit import main
+    called = {}
+    def fake_probe(source, output, *, sample_per_tier, lookback_minutes):
+        called.update(source=source, output=output,
+                      sample_per_tier=sample_per_tier, lookback_minutes=lookback_minutes)
+        return {"ready_for_training": False, "market_count": 1}
+    monkeypatch.setattr("kalshi_edge.gold.candle_probe.probe_checkpoint_candles", fake_probe)
+    source = tmp_path / "inventory.json"
+    assert main(["--candle-probe", str(source), "--output-root", str(tmp_path),
+                 "--sample-per-tier", "3", "--lookback-minutes", "6"]) == 0
+    assert called == {"source": source, "output": tmp_path,
+                      "sample_per_tier": 3, "lookback_minutes": 6}
+    assert json.loads(capsys.readouterr().out)["ready_for_training"] is False
+    with pytest.raises(SystemExit):
+        main(["--candle-probe", str(source), "--inventory"])
