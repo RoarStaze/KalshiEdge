@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from kalshi_edge.trading.scalp_policy import (
-    ScalpPosition, entry_signal, exit_signal, quote_from_kalshi, readiness,
+    ScalpPosition, entry_signal, intraround_entry_signal, exit_signal, quote_from_kalshi, readiness,
 )
 
 
@@ -155,3 +155,69 @@ def test_trailing_and_time_exits_are_liquidation_signals_not_orders():
                        seconds_remaining=30)
     assert clock.action=="TIME_EXIT_SIGNAL"
     assert not trailing.live_eligible and not clock.live_eligible
+
+
+def test_independent_intraround_signal_up_before_final_without_model_probability():
+    # 12m left, no final-forecast input exists; the paper strategy reacts to
+    # sustained executable bid and ask momentum only.
+    ticks=[q("UP",".74",".24",1_000_000_000,yes_qty="50",no_qty="50"),
+           q("UP",".77",".21",4_000_000_000,yes_qty="50",no_qty="50"),
+           q("UP",".80",".18",7_000_000_000,yes_qty="50",no_qty="50")]
+    s=intraround_entry_signal(ticks, "30", 720)
+    assert s.action=="RESEARCH_BUY_SIGNAL"
+    assert not s.live_eligible
+    assert "MOMENTUM" in s.reason
+
+
+def test_independent_intraround_signal_down_from_opposite_price_movement():
+    ticks=[q("DOWN",".24",".74",1_000_000_000,yes_qty="50",no_qty="50"),
+           q("DOWN",".21",".77",4_000_000_000,yes_qty="50",no_qty="50"),
+           q("DOWN",".18",".80",7_000_000_000,yes_qty="50",no_qty="50")]
+    s=intraround_entry_signal(ticks, "30", 720)
+    assert s.action=="RESEARCH_BUY_SIGNAL"
+    assert not s.live_eligible
+
+
+def test_intraround_signal_rejects_spread_narrowing_without_true_direction():
+    # Bid rising while the ask falls is a tightening spread, not a signed
+    # direction move. Both YES and NO must fail.
+    for side in ("UP","DOWN"):
+        ticks=[q(side,".45",".45",1_000_000_000),
+               q(side,".46",".46",4_000_000_000),
+               q(side,".47",".47",7_000_000_000)]
+        assert intraround_entry_signal(ticks, "2", 720).action=="SKIP"
+
+
+def test_intraround_signal_blocks_subsecond_or_stale_history_and_close_runway():
+    ticks=[q("UP",".74",".24",1_000_000_000),
+           q("UP",".77",".21",1_500_000_000),
+           q("UP",".80",".18",1_900_000_000)]
+    assert intraround_entry_signal(ticks, "2", 720).action=="SKIP"
+    assert intraround_entry_signal(ticks, "2", 40).action=="SKIP"
+    assert intraround_entry_signal(ticks, "2", 1100).action=="SKIP"
+
+
+def test_intraround_fees_and_slippage_must_fit_stop_budget():
+    ticks=[q("UP",".74",".24",1_000_000_000,yes_qty="50",no_qty="50"),
+           q("UP",".77",".21",4_000_000_000,yes_qty="50",no_qty="50"),
+           q("UP",".80",".18",7_000_000_000,yes_qty="50",no_qty="50")]
+    one=intraround_entry_signal(ticks, "1", 720)
+    assert one.action=="SKIP"
+    assert one.reason=="STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS"
+    depth=[ticks[0],ticks[1],q("UP",".80",".18",7_000_000_000,
+                              yes_qty="0.01",no_qty="50")]
+    assert intraround_entry_signal(depth, "30", 720).action=="SKIP"
+
+
+def test_paper_one_cent_net_profit_exits_even_if_legacy_five_percent_not_hit():
+    pos=ScalpPosition(side="UP",quantity=Decimal("1"),
+                      total_paid=Decimal(".82"),entered_at_ns=1_000_000_000)
+    quote=q("UP",".84",".14",10_000_000_000)
+    old=exit_signal(pos,quote,now_ns=10_000_000_000,seconds_remaining=300)
+    paper=exit_signal(pos,quote,now_ns=10_000_000_000,
+                      seconds_remaining=300,
+                      paper_minimum_net_profit=Decimal(".01"))
+    assert old.action=="HOLD"
+    assert paper.mark_net_dollars >= Decimal(".01")
+    assert paper.action=="TAKE_PROFIT_SIGNAL"
+    assert not paper.live_eligible
