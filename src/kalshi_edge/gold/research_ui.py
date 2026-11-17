@@ -105,6 +105,7 @@ def _readiness_rows() -> str:
         ("Exact contract and timezone interpretation", "UNVERIFIED"),
         ("Official eight-minute checkpoint timing", "UNVERIFIED"),
         ("Pyth settlement-oracle observations", "UNVERIFIED"),
+        ("Pyth OHLC history origin and candle alignment", "UNVERIFIED"),
         ("Point-in-time feature availability", "UNVERIFIED"),
         ("Chronological independent lockbox", "NOT READY"),
         ("Out-of-sample probability calibration", "NOT READY"),
@@ -197,8 +198,10 @@ def _data() -> str:
   <div class="gp-info-row"><span>Target index</span><strong>Metal.Index.1OZGOLD/USD</strong></div>
   <div class="gp-info-row"><span>Proposed checkpoint baseline</span><strong>480 seconds</strong></div>
  </div>
+ <p>V1.2 settlement verification remains BLOCKED. Pyth's one-minute OHLC history requires authenticated access; any offline imported file is marked UNATTESTED and cannot create verified Kalshi labels. Conflicting EST/EDT contract text and candle-label alignment must be independently resolved.</p>
  <p>Original inspections remain available in the gold audit documentation. Neither public market candles nor an API result alone establish oracle-verified, point-in-time ground truth.</p>
  <p><a href="https://github.com/RoarStaze/KalshiEdge/blob/main/docs/GOLD_CANDLE_CHECKPOINT_PROBE_2026-11-17.md">Review gold candle diagnostic</a></p>
+ <p><a href="https://github.com/RoarStaze/KalshiEdge/blob/main/docs/GOLD_SETTLEMENT_ORACLE_V12_2026-11-17.md">Review V1.2 oracle verification protocol</a></p>
 </article></div>"""
 
 
