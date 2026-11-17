@@ -21,9 +21,9 @@ def record(ticker: str, *, result: str = "", status: str = "initialized") -> dic
 
 
 def transport_responses(*, different_results: bool = False):
-    archive1 = record("A", result="yes", status="settled")
-    archive2 = record("B", result="no", status="settled")
-    live2 = record("B", result="yes" if different_results else "no", status="settled")
+    archive1 = record("A", result="yes", status="finalized")
+    archive2 = record("B", result="no", status="finalized")
+    live2 = record("B", result="yes" if different_results else "no", status="finalized")
     live3 = record("C")
     seen = []
     def handle(request: httpx.Request) -> httpx.Response:
@@ -62,6 +62,9 @@ def test_collects_both_partitions_and_preserves_immutable_raw_pages(tmp_path: Pa
     assert report["checkpoint_seconds"] == 480
     assert report["observed_official_yes_results_unverified_against_pyth"] == 1
     assert report["observed_official_no_results_unverified_against_pyth"] == 1
+    assert report["finalized_yes_results_unverified_against_pyth"] == 1
+    assert report["finalized_no_results_unverified_against_pyth"] == 1
+    assert report["status_counts_by_record"]["finalized"] == 3
     assert all(req.method == "GET" for req in seen)
     assert all(req.url.params.get("series_ticker") == "KXGOLD15M" for req in seen
                if req.url.path.endswith("/markets"))

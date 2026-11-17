@@ -5,7 +5,7 @@ Pyth-settlement label or a point-in-time forecasting feature.
 """
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -21,6 +21,7 @@ from .audit import (
     REST_BASE, SERIES_TICKER, EXPECTED_PYTH_SYMBOL, FINAL_CHECKPOINT_SECONDS,
     QUALIFICATION_GATE, validate_gold_series,
 )
+from .outcome_audit import summarize_market_outcomes
 
 _TICKER = re.compile(r"^KXGOLD15M-[A-Za-z0-9-]+$")
 
@@ -120,16 +121,7 @@ def collect_gold_inventory(
                 tier_tickers[tier].add(market["ticker"])
                 total_records += 1
 
-    contradictions = []
-    result_counts: Counter[str] = Counter()
-    for ticker, versions in sorted(observed.items()):
-        # Only treat results as *unverified observations*, never as final labels.
-        results = {str(item.get("result", "")).lower() for item in versions
-                   if item.get("status") == "settled" and item.get("result") in ("yes", "no")}
-        if len(results) > 1:
-            contradictions.append(ticker)
-        elif len(results) == 1:
-            result_counts[next(iter(results))] += 1
+    outcome_report = summarize_market_outcomes(observed)
 
     capped = [name for name, limit_hit in (("historical", historical_capped), ("live", live_capped))
               if limit_hit]
@@ -145,9 +137,7 @@ def collect_gold_inventory(
         "unique_markets": len(observed),
         "duplicate_record_count": total_records - len(observed),
         "source_overlap_count": len(tier_tickers["historical"] & tier_tickers["live"]),
-        "contradictory_official_result_tickers": contradictions,
-        "observed_official_yes_results_unverified_against_pyth": result_counts["yes"],
-        "observed_official_no_results_unverified_against_pyth": result_counts["no"],
+        **outcome_report,
         "page_caps_reached": capped,
         "pagination_exhausted": not bool(capped),
         "complete_for_request_window": False,
