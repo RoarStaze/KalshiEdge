@@ -7,7 +7,7 @@ action uses the separate localhost paper-only endpoints.
 PANEL = r"""
    <section id="paper-scalp-panel" class="mt-paper-scalp" aria-label="Paper-only intramarket scalper">
     <div class="mt-paper-head"><strong>PAPER SCALPER</strong><span>PAPER ONLY · SIMULATED</span></div>
-    <p class="mt-paper-warning">Virtual trades only. No real orders, no guaranteed fills or stops. Hypothetical fees and 1¢ slippage per share on each side.</p>
+    <p class="mt-paper-warning">Virtual trades only. Scans UP/DOWN order-book momentum without the 8-minute final. Sells only on simulated executable bids; no guaranteed fills or stops. Hypothetical fees and 1¢ slippage per share on each side.</p>
     <div class="mt-paper-controls">
      <label for="paper-scalp-amount">Paper budget per entry ($)</label>
      <input id="paper-scalp-amount" type="number" min="0.10" max="5" step="0.01" value="1.00" inputmode="decimal">
