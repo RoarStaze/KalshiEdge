@@ -473,6 +473,7 @@ async function refreshLive(){
    el("connection-dot").classList.remove("on");
    text("connection-label","Dashboard disconnected");
    text("feed-status","DASHBOARD ERROR");
+   renderScalpMonitor({status:"DEGRADED",reversal_risk:{level:"UNAVAILABLE"}});
    console.warn(err);
  }finally{
    liveRefreshPending=false;
