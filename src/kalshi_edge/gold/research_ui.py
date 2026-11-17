@@ -213,11 +213,14 @@ def render_gold_page(section: str) -> str:
     # background without importing any of its JavaScript or trading controls.
     base_css = PAGE.split("<style>", 1)[1].split("</style>", 1)[0]
     css = "\n".join((base_css, STYLE, MOTION_STYLE, MARKET_SELECTOR_STYLE, GOLD_STYLE))
-    links = "".join(
-        f'<a class="site-nav-link{" is-active" if key == section else ""}" href="{path}"'
-        f'{" aria-current=\"page\"" if key == section else ""}>{label}</a>'
-        for key, label, path in GOLD_NAV
-    )
+    link_parts = []
+    for key, label, path in GOLD_NAV:
+        active_class = " is-active" if key == section else ""
+        current = ' aria-current="page"' if key == section else ""
+        link_parts.append(
+            f'<a class="site-nav-link{active_class}" href="{path}"{current}>{label}</a>'
+        )
+    links = "".join(link_parts)
     title, description = GOLD_SECTIONS[section]
     selector = render_market_selector("gold")
     content = GOLD_CONTENT[section]()
