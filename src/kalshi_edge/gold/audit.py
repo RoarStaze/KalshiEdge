@@ -191,6 +191,14 @@ def main(argv: list[str] | None = None) -> int:
         help="capture a bounded prospective KXGOLD15M live GET quote snapshot, no orders",
     )
     modes.add_argument(
+        "--collect-continuously", action="store_true",
+        help="read-only KXGOLD15M recurring quote/orderbook/trade capture; Ctrl+C stops",
+    )
+    modes.add_argument(
+        "--collector-status", action="store_true",
+        help="verify immutable local gold collector cycle records offline",
+    )
+    modes.add_argument(
         "--audit-dataset", type=Path, default=None,
         help="fail-closed source-provenance audit from a SHA-256-named gold inventory",
     )
@@ -202,6 +210,12 @@ def main(argv: list[str] | None = None) -> int:
         "--verify-settlement-evidence", type=Path, default=None,
         help="fail-closed audit of gold inventory vs an unattested Pyth history import",
     )
+    parser.add_argument("--interval-seconds", type=int, default=30,
+                        help="continuous gold collector polling interval, 10..3600 seconds")
+    parser.add_argument("--max-cycles", type=int, default=None,
+                        help="optional bounded number of collection cycles")
+    parser.add_argument("--max-markets", type=int, default=2,
+                        help="max active gold markets to sample orderbooks/trades, 1..8")
     parser.add_argument("--pyth-from-ts", type=int, default=None,
                         help="Unix start second of downloaded OHLC request (required for import)")
     parser.add_argument("--pyth-to-ts", type=int, default=None,
@@ -240,6 +254,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.capture_quotes:
         from .prospective import capture_gold_quotes
         report = capture_gold_quotes(args.output_root)
+    elif args.collect_continuously:
+        from .continuous import run_continuous_gold_collection
+        report = run_continuous_gold_collection(
+            args.output_root, interval_seconds=args.interval_seconds,
+            max_cycles=args.max_cycles, max_markets=args.max_markets,
+            on_event=lambda event: print(json.dumps(event, sort_keys=True), flush=True),
+        )
+    elif args.collector_status:
+        from .continuous import inspect_gold_collector_status
+        report = inspect_gold_collector_status(args.output_root)
     elif args.audit_dataset is not None:
         from .dataset_readiness import audit_gold_dataset
         report = audit_gold_dataset(
