@@ -196,9 +196,62 @@ def entry_signal(
     return _research_stop("RESEARCH_BUY_SIGNAL", "CAUSAL_BOOK_CANDIDATE_ONLY")
 
 
+
+def paper_momentum_entry_signal(
+    history: Sequence[ScalpQuote],
+    contracts: str | float | Decimal,
+    seconds_remaining: int,
+) -> ScalpDecision:
+    """Paper-only, bidirectional quote-momentum candidate independent of finals.
+
+    Uses three chronological same-side public book observations, not a model
+    probability, BTC microstructure estimate, or proof of future profits.
+    Entry/exit costs include the paper simulator's 1-cent slip on each side.
+    """
+    try:
+        qty = _d(contracts)
+    except ValueError:
+        return _research_stop("SKIP", "INVALID_INPUT")
+    if (qty <= 0 or type(seconds_remaining) is not int
+            or not MIN_SECONDS_TO_CLOSE_FOR_ENTRY < seconds_remaining <= 900):
+        return _research_stop("SKIP", "NO_SAFE_SCALP_RUNWAY")
+    if not isinstance(history, (list, tuple)) or len(history) < 3:
+        return _research_stop("SKIP", "INSUFFICIENT_BOOK_HISTORY")
+    first, middle, last = history[-3:]
+    if not all(isinstance(q, ScalpQuote) for q in (first, middle, last)):
+        return _research_stop("SKIP", "INVALID_BOOK_HISTORY")
+    if (not (first.side == middle.side == last.side)
+            or not (first.timestamp_ns < middle.timestamp_ns < last.timestamp_ns)
+            or not MIN_OBSERVATION_WINDOW_NS
+            <= last.timestamp_ns - first.timestamp_ns
+            <= MAX_OBSERVATION_WINDOW_NS):
+        return _research_stop("SKIP", "STALE_OR_MIXED_BOOK_HISTORY")
+    if (last.spread > MAX_RESEARCH_SPREAD
+            or last.ask_available < qty or last.bid_available < qty):
+        return _research_stop("SKIP", "SPREAD_OR_DEPTH")
+    if not (first.bid < middle.bid <= last.bid
+            and first.ask < middle.ask <= last.ask
+            and last.bid - first.bid >= MIN_RESEARCH_BID_MOMENTUM):
+        return _research_stop("SKIP", "NO_STABLE_BOOK_MOMENTUM")
+    # The paper engine books 1-cent pessimistic slip on entry and on exit.
+    entry_price = last.ask + D("0.01")
+    exit_bid = last.bid - D("0.01")
+    if entry_price >= ONE or exit_bid <= 0:
+        return _research_stop("SKIP", "NO_EXECUTABLE_SIMULATED_EXIT")
+    paid = qty * entry_price + taker_fee_reserve(entry_price, qty)
+    liquidation = qty * exit_bid - taker_fee_reserve(exit_bid, qty)
+    immediate_drag = paid - liquidation
+    if immediate_drag >= max(D("0.02"), paid * D("0.08")):
+        return _research_stop("SKIP", "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS")
+    if immediate_drag > MAX_RESEARCH_ROUNDTRIP_FRICTION_FRACTION * paid:
+        return _research_stop("SKIP", "ROUNDTRIP_COST_TOO_HIGH")
+    return _research_stop("RESEARCH_BUY_SIGNAL", "PAPER_BOOK_MOMENTUM_CANDIDATE")
+
+
 def exit_signal(
     position: ScalpPosition, quote: ScalpQuote, *,
     now_ns: int, seconds_remaining: int,
+    take_first_net_profit: bool = False,
 ) -> ScalpDecision:
     """Mark *potential* early exit at actual best bid minus fee reserve.
 
@@ -225,7 +278,7 @@ def exit_signal(
     trail = max(D("0.02"), position.total_paid * D("0.025"))
     if net <= -stop_budget:
         return _research_stop("STOP_LOSS_SIGNAL", "NET_BID_STOP", net)
-    if net >= target:
+    if net >= target or (take_first_net_profit and net > 0):
         return _research_stop("TAKE_PROFIT_SIGNAL", "NET_BID_PROFIT", net)
     if (position.peak_net_dollars >= target
             and position.peak_net_dollars - net >= trail):
