@@ -34,8 +34,6 @@ HERO_STYLE = r"""
 .forecast .hero-clock-number{color:#ff923f;font-size:clamp(26px,7.8cqw,67px);line-height:1.08;font-weight:850;letter-spacing:.1px;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .forecast .hero-clock-right{border-left:1px solid #614c43;padding-left:10px;min-width:0}
 .forecast .hero-lock-time{color:#f5f4f2;font-size:clamp(13px,3.65cqw,34px);font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.4px;margin-top:7px}
-.forecast .record-note{border:1px solid #345167;border-left:3px solid #7da1bd;border-radius:8px;background:#112334;padding:13px 14px;margin-top:18px}
-.forecast .record-title{font-size:12px}
 @container (min-width:700px){
  .forecast .hero-price-grid{padding:30px 35px 23px}
  .forecast .hero-price-half+.hero-price-half{padding-left:35px;margin-left:30px}

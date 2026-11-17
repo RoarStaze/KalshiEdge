@@ -219,5 +219,5 @@ def test_ui_marks_unverified_exchange_rejection_never_as_skipped_or_no_trade():
     assert "Current live gate: >69%" in page
     assert "at or below 69% are skipped" in page
     assert "at or below 63% are skipped" not in page
-    assert "requires above 69% directional probability at lock." in page
+    assert "A final forecast requires more than 69% predicted-direction probability at the eight-minute checkpoint" in page
     assert "at >69% predicted-direction probability on later markets" in page

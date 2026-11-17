@@ -59,9 +59,6 @@ h1{font-size:clamp(29px,4vw,42px);font-weight:700;letter-spacing:-1.6px;margin:8
 .time-label{font-size:11px;color:var(--muted);margin-bottom:7px}
 .time-value{font-size:19px;font-variant-numeric:tabular-nums;letter-spacing:.25px}
 .right{text-align:right}
-.record-note{border-left:1px solid #48687b;padding-left:13px;margin-top:25px}
-.record-title{font-size:12px;color:#c8dbe6}
-.record-details{font-size:11px;line-height:1.7;color:var(--muted);margin-top:9px}
 details{margin-top:15px;font-size:11px;color:var(--muted)}
 summary{cursor:pointer;user-select:none}
 .detail-grid{display:grid;grid-template-columns:1fr auto;column-gap:9px;row-gap:8px;padding-top:14px;word-break:break-word}
@@ -221,9 +218,6 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
   <div class="two-times">
    <div><div class="time-label">Round closes in</div><div class="time-value" id="round-countdown">—</div></div>
    <div class="right"><div class="time-label" id="lock-time-label">Forecast locks at</div><div class="time-value" id="lock-time">—</div></div>
-  </div>
-  <div class="record-note"><div class="record-title" id="record-title">Waiting to save the forecast</div>
-   <div class="record-details" id="record-description">At the eight-minute checkpoint, low confidence, unhealthy inputs, or high near-strike coin-flip risk result in SKIP.</div>
   </div>
   <details id="record-details"><summary>Forecast record details</summary><div class="detail-grid">
    <span>Model</span><strong id="detail-model">—</strong>
@@ -424,8 +418,6 @@ function renderLive(data){
  el("confidence-fill").style.width=Number.isFinite(sideProbability)?Math.min(100,Math.max(0,sideProbability*100))+"%":"0%";
  text("confidence-sub",p?.status==="OK"?(p?.fusion_hash?"Fitted multi-signal · live":"Live model · updates until close"):"Awaiting healthy live inputs");
  text("confidence-note","Live probability describes settlement direction, not historical accuracy or short-horizon scalp returns. The separate 8-minute record is immutable for history.");
- text("record-title",locked?"8-minute historical forecast saved":"Waiting to archive 8-minute record");
- text("record-description",locked?"The 8-minute record is fixed for official settlement scoring. The live forecast and reversal monitor continue to update until market close.":"An immutable 480-second checkpoint record will be saved for historical evaluation; the archived final requires above 69% directional probability at lock. Live monitoring continues through the full round.");
  text("detail-model",f?.model_version||p?.model_version);
  text("detail-probability",pct(locked?f.directional_probability:sideProbability));
  text("detail-method",f?.fusion_hash||p?.fusion_hash?"Fitted multi-signal at 480s":"Base model (no fitted fusion)");
