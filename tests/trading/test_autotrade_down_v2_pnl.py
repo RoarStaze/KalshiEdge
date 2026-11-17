@@ -155,3 +155,27 @@ def test_execution_quality_conflicting_legacy_and_new_identity_still_unavailable
         v2_fill(side="yes",action="buy")
     ],TICKER)
     assert report["status"]=="UNAVAILABLE"
+
+
+@pytest.mark.parametrize("legacy_alias", [
+    {"side": "no"},
+    {"action": "buy"},
+    {"side": "yes"},
+    {"action": "sell"},
+])
+def test_verified_down_v2_fill_remains_reconcilable_with_one_deprecated_alias(legacy_alias):
+    """V2 is sufficient: a single deprecated field cannot establish direction."""
+    row=enrich_history(history(), Client([v2_fill(**legacy_alias)],"no"))[0]
+    assert row["pnl_status"]=="SETTLED"
+    assert row["pnl_reason"]=="VERIFIED"
+    assert row["realized_pnl_dollars"]=="0.02"
+
+
+@pytest.mark.parametrize("legacy_alias", [
+    {"side": "invalid"},
+    {"action": "invalid"},
+])
+def test_verified_down_v2_fill_rejects_invalid_deprecated_alias_value(legacy_alias):
+    row=enrich_history(history(), Client([v2_fill(**legacy_alias)],"no"))[0]
+    assert row["pnl_status"]=="UNAVAILABLE"
+    assert row["realized_pnl_dollars"] is None
