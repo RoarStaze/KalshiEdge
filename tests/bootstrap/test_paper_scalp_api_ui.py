@@ -91,9 +91,9 @@ def test_paper_controls_render_as_separately_labeled_auto_panel():
     assert 'id="paper-scalp-amount"' in page
     assert 'id="paper-scalp-results"' in page
     assert "PAPER ONLY" in page
-    assert "/api/paper-scalp/status" in page
-    assert "/api/paper-scalp/arm" in page
-    assert "/api/paper-scalp/pause" in page
+    assert '"/api/paper-scalp/"+path' in page
+    assert 'request("status")' in page
+    assert 'request(armed?"pause":"arm"' in page
     assert '"X-KalshiEdge-Action":"paper-scalp"' in page
     assert 'id="manual-auto-arm"' in page # real AUTO preserved
     assert "simulated" in page.lower()
