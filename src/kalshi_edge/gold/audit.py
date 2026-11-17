@@ -169,8 +169,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only KXGOLD15M contract audit; NEVER trades or trains")
     parser.add_argument("--output-root", type=Path, default=Path("data/gold"))
     parser.add_argument("--sample-markets", type=int, default=5)
+    parser.add_argument(
+        "--inspect-artifact", type=Path, default=None,
+        help="inspect an existing hashed KXGOLD15M snapshot offline, without any API requests",
+    )
     args = parser.parse_args(argv)
-    report = collect_contract_audit(args.output_root, sample_markets=args.sample_markets)
+    if args.inspect_artifact is not None:
+        from .rule_inspection import inspect_contract_snapshot
+        report = inspect_contract_snapshot(args.inspect_artifact)
+    else:
+        report = collect_contract_audit(args.output_root, sample_markets=args.sample_markets)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
