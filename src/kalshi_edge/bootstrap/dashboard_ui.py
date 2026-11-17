@@ -182,6 +182,23 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 @media(max-width:800px){.training-layout{grid-template-columns:1fr}.training-action{border-left:0;border-top:1px solid var(--line);padding:20px 0 0}}
 @media(max-width:960px){.layout{grid-template-columns:1fr}.context{display:grid;grid-template-columns:1.5fr 1fr}.forecast{min-height:0}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.shell{padding:0 14px 40px}header{padding:15px 0}.tag{font-size:8px}.header-right{font-size:10px}.section-intro{margin:22px 0 16px}.forecast{padding:20px}.context{display:flex}.context-header,.health{padding:20px}.market-data{gap:9px}.datum{padding:14px}.datum-number{font-size:19px}.history-header{margin-top:28px}.kpi{padding:14px}.kpi-num{font-size:27px}th,td{padding:11px}}
+
+/* Continuous intramarket monitor, placed INSIDE the existing forecast card. */
+.forecast .scalp-monitor{margin-top:15px;padding-top:14px;border-top:1px solid #34524d}
+.forecast .scalp-monitor-title{font-size:10px;font-weight:850;letter-spacing:1.5px;color:#a6c7c1}
+.forecast .scalp-monitor-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.forecast .scalp-risk-value{font-size:12px;font-weight:900;letter-spacing:.8px;padding:6px 12px;border-radius:8px;border:1px solid #44545b;color:#b5c2c9;background:#17232a}
+.forecast .scalp-risk-value.low{color:#58f1b4;border-color:#2c846a;background:#12372f}
+.forecast .scalp-risk-value.medium{color:#ffd277;border-color:#9c7939;background:#393023}
+.forecast .scalp-risk-value.high{color:#ff7f8b;border-color:#b8515f;background:#3d232c}
+.forecast .scalp-monitor-note{font-size:10px;line-height:1.4;color:#a2b6b7;margin:7px 0 10px}
+.forecast .scalp-flip-row{border:1px solid #39534f;border-radius:9px;background:rgba(15,34,34,.86);padding:9px 12px}
+.forecast .scalp-flip-status{font-size:12px;font-weight:850;color:#a6c6bc;letter-spacing:.2px}
+.forecast .scalp-flip-status.active{color:#ffd276}
+.forecast .scalp-flip-status.down{color:#ff8196}
+.forecast .scalp-flip-status.up{color:#55ecb4}
+.forecast .scalp-monitor-disclaimer{font-size:9px;color:#849c9f;line-height:1.4;margin-top:9px}
+
 </style>
 </head>
 <body>
@@ -219,6 +236,22 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
    <span>Coin-flip risk</span><strong id="detail-coinflip-risk">—</strong>
    <span>Distance from strike</span><strong id="detail-coinflip-z">—</strong>
   </div></details>
+
+  <section class="scalp-monitor" aria-label="Continuous intramarket reversal monitor">
+   <div class="scalp-monitor-row">
+    <span class="scalp-monitor-title">REVERSAL RISK</span>
+    <span class="scalp-risk-value" id="scalp-reversal-risk">UNAVAILABLE</span>
+   </div>
+   <div class="scalp-monitor-note" id="scalp-reversal-detail">Analyzing live model and Kalshi market quotes…</div>
+   <div class="scalp-flip-row">
+    <div class="scalp-monitor-row">
+     <span class="scalp-monitor-title">FLIP ALERTS</span>
+     <span class="scalp-flip-status" id="scalp-flip-alert" role="status" aria-live="polite">Awaiting live evidence</span>
+    </div>
+    <div class="scalp-monitor-note" id="scalp-flip-detail" style="margin-bottom:0">Potential shifts only; no automatic trade execution.</div>
+   </div>
+   <div class="scalp-monitor-disclaimer">Heuristic signal-instability alerts, not calibrated reversal odds or a profitable scalp guarantee.</div>
+  </section>
  </article>
  <div class="context">
   <article class="card context-header">
@@ -325,7 +358,34 @@ const pill=s=>{const span=document.createElement("span");span.className="pill "+
 let live=null,history=null;
 function countdown(ms){if(!Number.isFinite(ms))return "—";let sec=Math.max(0,Math.floor((ms-Date.now())/1000));return String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")}
 function clock(){if(!live||!live.market_close_ts_ns)return;text("round-countdown",countdown(live.market_close_ts_ns/1e6))}
+function renderScalpMonitor(data){
+ const risk=data.reversal_risk||{},level=["LOW","MEDIUM","HIGH"].includes(risk.level)&&data.status==="LIVE"
+   ?risk.level:"UNAVAILABLE";
+ const badge=el("scalp-reversal-risk");
+ badge.className="scalp-risk-value "+(level==="UNAVAILABLE"?"":level.toLowerCase());
+ badge.textContent=level;
+ const good=level!=="UNAVAILABLE"&&Number.isFinite(risk.observed_ts_ns)&&Number.isFinite(data.server_time_ns);
+ const age=good?Math.max(0,Math.round((data.server_time_ns-risk.observed_ts_ns)/1e9)):null;
+ text("scalp-reversal-detail",good
+    ?"Live 1s model + Kalshi YES quote · "+risk.observation_count+" samples · "+age+"s old"
+    :"Insufficient, unhealthy or stale live market data; not safe to classify.");
+ const alert=good?risk.flip_alert:null;
+ const flip=el("scalp-flip-alert");
+ if(alert&&["UP_TO_DOWN","DOWN_TO_UP"].includes(alert.direction)&&Number.isFinite(alert.age_seconds)&&alert.age_seconds<=20){
+   const isDown=alert.direction==="UP_TO_DOWN";
+   flip.className="scalp-flip-status active "+(isDown?"down":"up");
+   flip.textContent=(isDown?"UP → DOWN":"DOWN → UP")+" · POTENTIAL";
+   text("scalp-flip-detail","Model direction switched with Kalshi quote confirmation · detected "+alert.age_seconds+"s ago.");
+ }else{
+   flip.className="scalp-flip-status";
+   flip.textContent=good?"NO RECENT FLIP":"UNAVAILABLE";
+   text("scalp-flip-detail",good
+     ?"Watching for a sustained direction change with quote confirmation."
+     :"Flip alerts paused until fresh data is restored.");
+ }
+}
 function renderLive(data){
+ renderScalpMonitor(data);
  live=data;const p=data.latest_prediction,f=data.final_forecast;
  const current=!!data.market_ticker,locked=!!f,healthy=data.status==="LIVE";
  el("connection-dot").classList.toggle("on",healthy);
@@ -349,25 +409,25 @@ function renderLive(data){
  clock();
  const banner=el("lock-banner");
  banner.className="lock-banner "+(locked?"locked":current&&data.checkpoint_ts_ns/1e6<=Date.now()?"pending":"");
- if(locked){text("lock-heading","▣  LOCKED · FINAL FORECAST");text("lock-description","This forecast is saved and will not change.");
+ if(locked){text("lock-heading","▣  8-MIN RECORD SAVED · LIVE MONITOR ON");text("lock-description","The 8-minute historical record is frozen; live probability and scalp diagnostics continue until market close.");
  }else if(current&&data.checkpoint_ts_ns/1e6>Date.now()){
-   text("lock-heading","♧  UNLOCKED · LIVE PREVIEW");text("lock-description","This call can change until it locks at "+local(data.checkpoint_ts_ns/1e6)+".");
- }else if(current){text("lock-heading","◌  AWAITING FINAL RECORD");text("lock-description","The checkpoint has passed. Only a saved final record counts.");
+   text("lock-heading","♧  LIVE THROUGH MARKET CLOSE");text("lock-description","The live estimate keeps updating; an immutable 8-minute record is archived at "+local(data.checkpoint_ts_ns/1e6)+".");
+ }else if(current){text("lock-heading","◌  8-MIN RECORD PENDING · LIVE MONITOR ON");text("lock-description","Live probability can still change. The historical checkpoint record has not been verified.");
  }else{text("lock-heading","◌  WAITING FOR MARKET");text("lock-description","Awaiting current Kalshi BTC market discovery and fresh predictions.")}
- const side=locked?f.forecast:p?.status==="OK"?p.predicted_side:null;
+ const side=p?.status==="OK"?p.predicted_side:null;
  const display=side==="ABOVE"?"UP":side==="BELOW"?"DOWN":side==="SKIP"?"SKIP":current?"WAITING":"WAITING";
  const direction=el("direction");direction.className="direction "+(display==="UP"?"up":display==="DOWN"?"down":display==="SKIP"?"skip":"waiting");direction.textContent=display;
- text("direction-caption",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Near-strike coin-flip risk vetoed the final forecast. AutoTrade will not buy this round.":locked?"Recorded before the outcome. This forecast stays fixed.":p?.status==="OK"?"Live preview · requires above 69% directional probability at lock.":current?"Current forecast unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
+ text("direction-caption",p?.status==="OK"?"Live settlement-direction estimate · updates through market close, not a scalp-return forecast.":current?"Live signal unavailable: "+(p?.reason||"waiting for healthy feeds"):"No currently readable market and prediction.");
  const strength=locked?f.confidence:p?.confidence;
- const sideProbability=locked?f.directional_probability:p?.status==="OK"?(p.predicted_side==="ABOVE"?p.p_yes:p.predicted_side==="BELOW"?p.p_no:null):null;
+ const sideProbability=p?.status==="OK"?(p.predicted_side==="ABOVE"?p.p_yes:p.predicted_side==="BELOW"?p.p_no:null):null;
  text("confidence",Number.isFinite(sideProbability)?Math.round(sideProbability*100)+"%":"—");
  el("confidence-fill").style.width=Number.isFinite(sideProbability)?Math.min(100,Math.max(0,sideProbability*100))+"%":"0%";
- text("confidence-sub",locked?(f?.fusion_hash?"Fitted multi-signal · locked":"Base model · locked"):(p?.fusion_hash?"Fitted multi-signal · live":"Live model estimate · can change"));
- text("confidence-note",locked&&f.reason==="COIN_FLIP_RISK_HIGH"?"Saved model probability "+pct(sideProbability)+", but high near-strike flip risk vetoed the call. The veto is not a calibrated probability.":locked?"Saved "+display+" call has predicted-side forecast probability "+pct(sideProbability)+". A SKIP is not a successful directional forecast.":"Probability of the predicted direction, not historical accuracy. Final lock requires more than 69% predicted-direction probability, plus the near-strike flip-risk check.");
- text("record-title",locked?"Forecast saved":"Waiting to save the forecast");
- text("record-description",locked?"The final decision is immutable. Official settlement verification will score ABOVE or BELOW; SKIP is excluded from accuracy.":"The model locks once at the scheduled 480-second checkpoint. Low-confidence, late, or unhealthy inputs produce SKIP.");
+ text("confidence-sub",p?.status==="OK"?(p?.fusion_hash?"Fitted multi-signal · live":"Live model · updates until close"):"Awaiting healthy live inputs");
+ text("confidence-note","Live probability describes settlement direction, not historical accuracy or short-horizon scalp returns. The separate 8-minute record is immutable for history.");
+ text("record-title",locked?"8-minute historical forecast saved":"Waiting to archive 8-minute record");
+ text("record-description",locked?"The 8-minute record is fixed for official settlement scoring. The live forecast and reversal monitor continue to update until market close.":"An immutable 480-second checkpoint record will be saved for historical evaluation; live monitoring continues through the full round.");
  text("detail-model",f?.model_version||p?.model_version);
- text("detail-probability",pct(sideProbability));
+ text("detail-probability",pct(locked?f.directional_probability:sideProbability));
  text("detail-method",f?.fusion_hash||p?.fusion_hash?"Fitted multi-signal at 480s":"Base model (no fitted fusion)");
  text("detail-strength",pct(strength));
  text("detail-hash",f?.model_hash||p?.model_hash||"—");
