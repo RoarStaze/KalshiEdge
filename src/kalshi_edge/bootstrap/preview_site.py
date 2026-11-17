@@ -20,6 +20,8 @@ from .manual_trade_ui import integrate_manual_trade
 from .round_price_ui import integrate_round_price_hero
 from .api_credentials_ui import integrate_api_credentials
 from .site_pages import render_site_page
+from kalshi_edge.gold.research_ui import render_gold_page
+from kalshi_edge.gold.experiment import gold_experiment_status
 
 PREVIEW_PORT = 8900
 _RESERVED_PORTS = frozenset((8898, 8899))
@@ -76,6 +78,21 @@ def _pages() -> dict[str, bytes]:
         page = page.replace("</head>", _PREVIEW_STYLE + "\n</head>", 1)
         page = page.replace("</body>", _PREVIEW_SCRIPT + "\n</body>", 1)
         result[name] = page.encode("utf-8")
+    for section in ("trade", "train", "history", "data"):
+        page = render_gold_page(section)
+        tag = '<body data-page="gold" data-market="gold">'
+        if page.count(tag) != 1:
+            raise ValueError("Unexpected GoldPredict preview layout")
+        page = page.replace(
+            tag,
+            '<body data-page="gold" data-market="gold" data-preview="true">'
+            '<div class="preview-ribbon" role="status">'
+            'TEST PREVIEW · gold research only · no training or trading'
+            '</div>',
+            1,
+        )
+        page = page.replace("</head>", _PREVIEW_STYLE + "\n</head>", 1)
+        result["gold/" + section] = page.encode("utf-8")
     return result
 
 
@@ -208,6 +225,10 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
             if path in ("/trade", "/train", "/history", "/api"):
                 self._reply(200, pages[path[1:]], "text/html; charset=utf-8")
                 return
+            if path in ("/gold", "/gold/train", "/gold/history", "/gold/data"):
+                section = "trade" if path == "/gold" else path.split("/")[-1]
+                self._reply(200, pages["gold/" + section], "text/html; charset=utf-8")
+                return
             if path == _ASSET_ROUTE:
                 if background is None:
                     self._json(404, {"error": "Preview background image unavailable"})
@@ -224,6 +245,9 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
                 return
             if path == "/api/health":
                 self._json(200, {"app": "kalshiedge", "service": "synthetic-preview", "preview": True})
+                return
+            if path == "/api/gold/status":
+                self._json(200, gold_experiment_status())
                 return
             if path in ("/api/training", "/api/training/progress"):
                 data = _training()
