@@ -212,7 +212,7 @@ def test_intraround_fees_and_slippage_must_fit_stop_budget():
 def test_paper_one_cent_net_profit_exits_even_if_legacy_five_percent_not_hit():
     pos=ScalpPosition(side="UP",quantity=Decimal("1"),
                       total_paid=Decimal(".82"),entered_at_ns=1_000_000_000)
-    quote=q("UP",".84",".14",10_000_000_000)
+    quote=q("UP",".85",".14",10_000_000_000)
     old=exit_signal(pos,quote,now_ns=10_000_000_000,seconds_remaining=300)
     paper=exit_signal(pos,quote,now_ns=10_000_000_000,
                       seconds_remaining=300,
