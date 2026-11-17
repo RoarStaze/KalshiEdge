@@ -169,14 +169,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only KXGOLD15M contract audit; NEVER trades or trains")
     parser.add_argument("--output-root", type=Path, default=Path("data/gold"))
     parser.add_argument("--sample-markets", type=int, default=5)
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--inspect-artifact", type=Path, default=None,
         help="inspect an existing hashed KXGOLD15M snapshot offline, without any API requests",
     )
+    modes.add_argument(
+        "--inventory", action="store_true",
+        help="collect read-only KXGOLD15M market listings from live and historical public APIs",
+    )
+    parser.add_argument("--page-size", type=int, default=1000)
+    parser.add_argument("--max-pages-per-tier", type=int, default=5)
     args = parser.parse_args(argv)
     if args.inspect_artifact is not None:
         from .rule_inspection import inspect_contract_snapshot
         report = inspect_contract_snapshot(args.inspect_artifact)
+    elif args.inventory:
+        from .inventory import collect_gold_inventory
+        report = collect_gold_inventory(
+            args.output_root, page_size=args.page_size, max_pages_per_tier=args.max_pages_per_tier)
     else:
         report = collect_contract_audit(args.output_root, sample_markets=args.sample_markets)
     print(json.dumps(report, indent=2, sort_keys=True))
