@@ -1,6 +1,6 @@
 """Independent paper-only BTC 15-minute intramarket scalper.
 
-Reads only public order books and a saved local final forecast. Simulated
+Reads only public order books and a fresh active-market identifier. The independent paper entry scanner never waits for a final forecast. Simulated
 fills require visible top-level depth and are marked with pessimistic
 per-contract slippage and fee reserves. No signed API client, keys, POSTs,
 actual fills or real-money position bookkeeping exist in this module.
@@ -24,7 +24,7 @@ from typing import Callable
 from .paper import PublicMarketClient
 from .risk import taker_fee_reserve
 from .scalp_policy import (
-    ScalpPosition, ScalpQuote, entry_signal, exit_signal, quote_from_kalshi,
+    ScalpPosition, ScalpQuote, intraround_entry_signal, exit_signal, quote_from_kalshi,
 )
 
 LOG = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ SIMULATED_SLIPPAGE_PER_CONTRACT = D("0.01")
 MAX_CONTRACTS = D("1000")
 MAX_PAPER_BUDGET_FRACTION = D("0.05")
 DAILY_PAPER_LOSS_LIMIT = D("2")
-MAX_PAPER_CYCLES_PER_TICKER = 3
+MAX_PAPER_CYCLES_PER_TICKER = 12
 REENTRY_COOLDOWN_NS = 10 * NS
 VALID_TICKER_PREFIX = "KXBTC15M-"
 SIMULATION_ACTIONS = frozenset({
@@ -198,7 +198,9 @@ class PaperScalpTrader:
             "RECOVERED_OPEN_PAPER_POSITION" if self.ledger.open_position()
             else "IDLE"
         )
-        self._history: deque[ScalpQuote] = deque(maxlen=3)
+        self._history: dict[str, deque[ScalpQuote]] = {
+            "UP": deque(maxlen=3), "DOWN": deque(maxlen=3),
+        }
         self._history_ticker: str | None = None
 
     def _risk(self, now_ns: int):
@@ -242,6 +244,10 @@ class PaperScalpTrader:
                 opened["paper_net_pnl"] = None
             return {
                 "mode": "PAPER_SCALP_SIMULATED",
+                "entry_policy": "INTRAROUND_UP_DOWN_BOOK_MOMENTUM",
+                "paper_minimum_net_profit_dollars": "0.01",
+                "scan_interval_seconds": 3,
+                "max_cycles_per_market": MAX_PAPER_CYCLES_PER_TICKER,
                 "enabled": self._enabled,
                 "live_order_submission": False,
                 "requires_rearm_after_restart": True,
@@ -277,7 +283,7 @@ class PaperScalpTrader:
                 raise ValueError("Paper budget exceeds 5% virtual cash or $50 maximum")
             self._amount = value
             self._enabled = True
-            self._last_signal = "WAITING_FOR_FEE_ADJUSTED_ENTRY"
+            self._last_signal = "SCANNING_UP_DOWN_ORDERBOOK_MOMENTUM"
             return self.status()
 
     def pause(self) -> dict:
@@ -302,6 +308,20 @@ class PaperScalpTrader:
             raise ValueError("Public market not active or identity mismatch")
         return quote_from_kalshi(book, side, timestamp_ns=now)
 
+    def _quotes(self, ticker: str, now: int) -> dict[str, ScalpQuote]:
+        """One market/book fetch evaluates both UP and DOWN executable sides."""
+        market, book = self.client.quote(ticker)
+        if not self._is_market_open(market, ticker):
+            raise ValueError("Public market not active or identity mismatch")
+        return {
+            side: quote_from_kalshi(book, side, timestamp_ns=now)
+            for side in ("UP", "DOWN")
+        }
+
+    def _clear_history(self) -> None:
+        for side in ("UP", "DOWN"):
+            self._history[side].clear()
+
     @staticmethod
     def _position(row: dict) -> ScalpPosition:
         return ScalpPosition(
@@ -320,7 +340,7 @@ class PaperScalpTrader:
                           now_ns=now, reason="OFFICIAL_SETTLEMENT", pnl=pnl,
                           settled=True)
         self._last_signal = "SIMULATED_OFFICIAL_SETTLEMENT"
-        self._history.clear()
+        self._clear_history()
 
     def _tick_open(self, row: dict, now: int, settlement) -> None:
         ticker = row["ticker"]
@@ -355,6 +375,7 @@ class PaperScalpTrader:
         decision = exit_signal(
             position, adjusted, now_ns=now,
             seconds_remaining=max(0, int((row["close_ns"]-now) / NS)),
+            paper_minimum_net_profit=D("0.01"),
         )
         if decision.mark_net_dollars is not None:
             peak = max(position.peak_net_dollars, decision.mark_net_dollars)
@@ -373,10 +394,11 @@ class PaperScalpTrader:
             row["id"], price=executable, fee=fee, now_ns=now,
             reason=decision.action, pnl=pnl,
         )
-        self._history.clear()
+        self._clear_history()
         self._last_signal = "PAPER_" + decision.action
 
-    def _live_entry_side(self, now: int):
+    def _current_market(self, now: int) -> tuple[str, int] | None:
+        """Fresh market identity only; no model confidence or final timing gate."""
         try:
             live = self.read_live()
         except Exception:
@@ -385,27 +407,20 @@ class PaperScalpTrader:
             return None
         ticker = live.get("market_ticker")
         close = live.get("market_close_ts_ns")
-        checkpoint = live.get("checkpoint_ts_ns")
-        final = live.get("final_forecast")
+        prediction = live.get("latest_prediction")
         if (not isinstance(ticker, str)
                 or not ticker.startswith(VALID_TICKER_PREFIX)
                 or not ticker.replace("-", "").isalnum()
-                or type(close) is not int or type(checkpoint) is not int
-                or close - checkpoint != 480 * NS
-                or not checkpoint <= now < close
-                or not isinstance(final, dict)
-                or final.get("market_ticker") != ticker
-                or final.get("scheduled_ts_ns") != checkpoint
-                or final.get("forecast") not in ("ABOVE", "BELOW")):
+                or type(close) is not int
+                or not 90 * NS < close - now <= 900 * NS
+                or not isinstance(prediction, dict)
+                or prediction.get("market_ticker") != ticker
+                or prediction.get("status") != "OK"):
             return None
-        try:
-            probability = _number(final.get("directional_probability"))
-        except ValueError:
+        observed = prediction.get("prediction_ts_ns")
+        if type(observed) is not int or not 0 <= now - observed <= 8 * NS:
             return None
-        if not D("0.69") < probability <= 1:
-            return None
-        side = "UP" if final["forecast"] == "ABOVE" else "DOWN"
-        return ticker, side, close, probability
+        return ticker, close
 
     @staticmethod
     def _size(budget: D, quote: ScalpQuote) -> tuple[D, D, D, D] | None:
@@ -443,12 +458,12 @@ class PaperScalpTrader:
         if risk["loss_streak"] >= 3:
             self._last_signal = "THREE_SIMULATED_LOSSES"
             return
-        info = self._live_entry_side(now)
+        info = self._current_market(now)
         if info is None:
-            self._history.clear()
-            self._last_signal = "WAITING_FOR_VERIFIED_69_PERCENT_FINAL"
+            self._clear_history()
+            self._last_signal = "WAITING_FOR_FRESH_LIVE_MARKET"
             return
-        ticker, side, close, probability = info
+        ticker, close = info
         if self.ledger.ticker_count(ticker) >= MAX_PAPER_CYCLES_PER_TICKER:
             self._last_signal = "MARKET_CYCLE_LIMIT"
             return
@@ -457,50 +472,68 @@ class PaperScalpTrader:
             if now - previous[0]["exit_ns"] < REENTRY_COOLDOWN_NS:
                 self._last_signal = "REENTRY_COOLDOWN"
                 return
-        if self._history_ticker != ticker or (
-                self._history and self._history[-1].side != side):
-            self._history.clear()
+        if self._history_ticker != ticker:
+            self._clear_history()
             self._history_ticker = ticker
         try:
-            quote = self._quote(ticker, side, now)
+            quotes = self._quotes(ticker, now)
         except Exception:
-            self._history.clear()
+            self._clear_history()
             self._last_signal = "NO_VALID_PUBLIC_SCALP_BOOK"
             return
-        if self._history and quote.timestamp_ns <= self._history[-1].timestamp_ns:
+        if any(self._history[side] and
+               quotes[side].timestamp_ns <= self._history[side][-1].timestamp_ns
+               for side in ("UP", "DOWN")):
             self._last_signal = "NONMONOTONIC_BOOK_OBSERVATION"
             return
-        self._history.append(quote)
+        for side in ("UP", "DOWN"):
+            self._history[side].append(quotes[side])
         budget = min(self._amount, risk["cash"] * MAX_PAPER_BUDGET_FRACTION)
-        sized = self._size(budget, quote)
-        if sized is None:
-            self._last_signal = "NO_FEE_INCLUSIVE_PAPER_SIZE"
+        candidates = []
+        reasons = []
+        for side in ("UP", "DOWN"):
+            quote = quotes[side]
+            sized = self._size(budget, quote)
+            if sized is None:
+                reasons.append("NO_FEE_INCLUSIVE_PAPER_SIZE")
+                continue
+            qty, entry_price, fee, paid = sized
+            signal = intraround_entry_signal(
+                tuple(self._history[side]), qty, int((close - now) / NS),
+            )
+            if signal.action != "RESEARCH_BUY_SIGNAL":
+                reasons.append(signal.reason)
+                continue
+            exit_bid = quote.bid - SIMULATED_SLIPPAGE_PER_CONTRACT
+            if exit_bid <= 0:
+                reasons.append("NO_EXECUTABLE_SIMULATED_EXIT")
+                continue
+            exit_fee = taker_fee_reserve(exit_bid, qty)
+            immediate_loss = paid - (qty * exit_bid - exit_fee)
+            stop = max(D("0.02"), paid * D("0.08"))
+            if immediate_loss >= stop:
+                reasons.append("STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS")
+                continue
+            move = self._history[side][-1].bid - self._history[side][0].bid
+            candidates.append((move, side, qty, entry_price, fee, paid))
+        if not candidates:
+            if "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS" in reasons:
+                self._last_signal = "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS"
+            elif "SPREAD_OR_DEPTH" in reasons:
+                self._last_signal = "SPREAD_OR_DEPTH"
+            else:
+                self._last_signal = "SCANNING_UP_DOWN_ORDERBOOK_MOMENTUM"
             return
-        qty, entry_price, fee, paid = sized
-        decision = entry_signal(
-            tuple(self._history), probability, qty,
-            int((close - now) / NS),
-        )
-        self._last_signal = decision.reason
-        if decision.action != "RESEARCH_BUY_SIGNAL":
+        if len(candidates) != 1:
+            self._last_signal = "AMBIGUOUS_TWO_SIDED_MOMENTUM"
             return
-        exit_bid = quote.bid - SIMULATED_SLIPPAGE_PER_CONTRACT
-        if exit_bid <= 0:
-            self._last_signal = "NO_EXECUTABLE_SIMULATED_EXIT"
-            return
-        exit_fee = taker_fee_reserve(exit_bid, qty)
-        immediate_loss = paid - (qty * exit_bid - exit_fee)
-        stop = max(D("0.02"), paid * D("0.08"))
-        if immediate_loss >= stop:
-            self._last_signal = "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS"
-            return
-        # Unique index and single serialized tick prevent double inventory.
+        _, side, qty, entry_price, fee, paid = candidates[0]
         self.ledger.insert(
             ticker=ticker, side=side, quantity=qty, price=entry_price,
             fee=fee, paid=paid, now_ns=now, close_ns=close,
         )
-        self._history.clear()
-        self._last_signal = "PAPER_BUY_SIMULATED"
+        self._clear_history()
+        self._last_signal = "PAPER_BUY_SIMULATED_" + side
 
     def tick(self, now_ns: int | None = None, *, settlement=None) -> dict:
         """One bounded, serial, public-data-only paper observation."""
