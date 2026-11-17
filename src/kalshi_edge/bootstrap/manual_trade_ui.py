@@ -338,6 +338,35 @@ SCRIPT = r"""
    default:return String(status||"UNKNOWN").replaceAll("_"," ");
   }
  }
+ // Read only preclassified, safe accounting reasons from KalshiEdge.
+ // Never render raw exchange errors, order IDs, account identifiers or
+ // arbitrary returned text in the history card.
+ function autoPnlUnavailableReason(code){
+  const labels={
+   EXCHANGE_EVIDENCE_UNAVAILABLE:"exchange evidence unavailable",
+   EXCHANGE_NOT_QUERIED:"exchange not queried",
+   SETTLEMENT_NOT_IN_LIVE_API:"settlement not available in live history",
+   SETTLEMENT_NOT_FINAL:"settlement not final",
+   SETTLEMENT_POSITION_MISMATCH:"settlement position mismatch",
+   SETTLEMENT_POSITION_FIELDS_MISSING:"settlement quantities missing",
+   FILL_DIRECTION_CONFLICT:"fill direction mismatch",
+   FILL_IDENTITY_INVALID:"fill identity invalid",
+   FILL_IDENTITY_MISSING:"fill direction evidence missing",
+   FILL_MARKET_MISMATCH:"fill market mismatch",
+   FILL_PRICE_INCONSISTENT:"fill prices disagree",
+   FILL_PRICE_INVALID:"fill price missing or invalid",
+   FILL_QUANTITY_UNRECONCILED:"fill quantity mismatch",
+   FILL_QUANTITY_INVALID:"fill quantity invalid",
+   FILL_FEE_INVALID:"fill fee missing or invalid",
+   FILL_ID_DUPLICATE:"duplicate fill ID",
+   OTHER_ACCOUNT_FILL_IN_MARKET:"other trades in this market",
+   JOURNAL_STAGE_INCOMPLETE_OR_INVALID:"local order evidence incomplete",
+   EXCHANGE_FILL_INVALID:"exchange fill invalid",
+   ORDER_OUTCOME_UNKNOWN:"order outcome unverified"
+  };
+  return Object.prototype.hasOwnProperty.call(labels,code)
+   ?"P/L unavailable · "+labels[code]:"P/L unavailable · verify Kalshi";
+ }
  async function refreshAutoHistory(force=false){
   if(!autoSelected||action!=="BUY")return;
   if(!force&&Date.now()-lastHistoryFetch<8000)return;
@@ -439,7 +468,7 @@ SCRIPT = r"""
        entry.status==="NO_FILL"?"No shares filled":
        entry.status==="NOT_SUBMITTED"&&postReject?"Order outcome unverified · check Kalshi":
        entry.status==="NOT_SUBMITTED"?"Pre-submit check prevented order":
-       "P/L unavailable · verify Kalshi";
+       autoPnlUnavailableReason(entry.pnl_reason);
     }
     finance.append(pnl);item.appendChild(finance);
     if(Array.isArray(entry.stages)&&entry.stages.length){
