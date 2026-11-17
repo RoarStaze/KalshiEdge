@@ -230,3 +230,25 @@ def test_paper_only_status_and_fail_closed_on_malformed_public_data(tmp_path):
     engine.tick()
     assert engine.status()["open_position"] is None
     assert client.private_orders == 0
+
+
+def test_three_loss_circuit_breaker_resets_on_new_utc_day(tmp_path):
+    engine, live, _ = make(tmp_path)
+    yesterday = live.t - 86_400 * NS
+    for i in range(3):
+        when = yesterday + i * 10 * NS
+        engine.ledger.insert(
+            ticker=f"KXBTC15M-LOSS{i}", side="UP",
+            quantity=Decimal("1"), price=Decimal(".50"),
+            fee=Decimal(".01"), paid=Decimal(".51"),
+            now_ns=when, close_ns=when + 600 * NS,
+        )
+        row = engine.ledger.open_position()
+        engine.ledger.close(
+            row["id"], price=Decimal(".10"), fee=Decimal(".01"),
+            now_ns=when + NS, reason="STOP_LOSS_SIGNAL",
+            pnl=Decimal("-.42"),
+        )
+    risk = engine._risk(live.t)
+    assert risk["daily_losses"] == Decimal("0")
+    assert risk["loss_streak"] == 0
