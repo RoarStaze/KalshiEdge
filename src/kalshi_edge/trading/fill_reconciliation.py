@@ -80,9 +80,21 @@ def validated_fill_unit_price(
     scheme_v2=_scheme_exposure(
         fill.get("outcome_side"),fill.get("book_side"),flavor="v2",
     )
-    scheme_legacy=_scheme_exposure(
-        fill.get("side"),fill.get("action"),flavor="legacy",
-    )
+    legacy_side, legacy_action = fill.get("side"), fill.get("action")
+    if scheme_v2 is not None and (legacy_side is None) != (legacy_action is None):
+        # The canonical V2 pair already establishes direction. A single
+        # deprecated action/side alias cannot identify net exposure by itself:
+        # e.g. both BUY NO and SELL YES are DOWN. Still refuse malformed
+        # aliases; a complete legacy pair must independently agree with V2.
+        if (legacy_side is not None and legacy_side not in ("yes", "no")
+                or legacy_action is not None
+                and legacy_action not in ("buy", "sell")):
+            raise ValueError("Incomplete or invalid legacy fill identity")
+        scheme_legacy = None
+    else:
+        scheme_legacy = _scheme_exposure(
+            legacy_side, legacy_action, flavor="legacy",
+        )
     if scheme_v2 is None and scheme_legacy is None:
         raise ValueError("No verifiable exchange fill action/side")
     if any(x is not None and x!=expected for x in (scheme_v2,scheme_legacy)):
