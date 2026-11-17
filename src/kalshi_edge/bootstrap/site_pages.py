@@ -323,6 +323,70 @@ body[data-page="api"] .section-intro{display:none!important}
 
 # Decorative-only motion. The background image remains an optional local asset.
 # No JavaScript timers, remote assets or trading/data paths are involved.
+# Shared native dropdown: one navigation surface, no JS state or browser storage.
+MARKET_SELECTOR_STYLE = r"""
+.market-picker{position:relative;z-index:60;width:max-content;max-width:100%;min-width:178px}
+.market-picker summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:12px;
+ padding:9px 13px;border:1px solid rgba(51,212,166,.42);border-radius:13px;
+ background:linear-gradient(145deg,rgba(5,33,35,.95),rgba(4,20,29,.95));
+ color:#ecfff8;box-shadow:0 9px 25px #0005,0 0 17px #15dba214}
+.market-picker summary::-webkit-details-marker{display:none}
+.market-picker summary::marker{content:""}
+.market-picker summary:hover,.market-picker[open] summary{border-color:#42e6b6;box-shadow:0 0 20px #20e5b52a}
+.market-picker summary:focus-visible,.market-picker-menu a:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+.market-picker-symbol{display:grid;place-items:center;width:35px;height:35px;flex:none;
+ border-radius:10px;background:linear-gradient(145deg,#26d6a7,#79d9c9);
+ color:#06342a;font-size:17px;font-weight:900}
+.market-picker-copy{display:grid;gap:2px;min-width:70px}
+.market-picker-label{font-size:9px;letter-spacing:1.7px;font-weight:800;color:#8eb2ae}
+.market-picker-current{font-size:14px;letter-spacing:.2px;font-weight:800}
+.market-picker-chevron{font-size:12px;color:#7be7c8;margin-left:auto}
+.market-picker[open] .market-picker-chevron{transform:rotate(180deg)}
+.market-picker-menu{position:absolute;left:0;top:calc(100% + 8px);width:100%;min-width:192px;
+ display:grid;gap:4px;padding:7px;border:1px solid rgba(50,215,167,.47);border-radius:13px;
+ background:#07191e;box-shadow:0 18px 45px #000c,0 0 20px #13d9a21c}
+.market-picker-menu a{display:flex;align-items:center;gap:9px;padding:11px 12px;border-radius:9px;
+ color:#cce5df;text-decoration:none;font-size:13px;font-weight:750}
+.market-picker-menu a:hover,.market-picker-menu a[aria-current="true"]{
+ background:rgba(26,105,82,.43);color:#85f1cf}
+.market-picker-menu a[aria-current="true"]::after{content:"✓";margin-left:auto}
+body[data-market="gold"] .market-picker-symbol{background:linear-gradient(135deg,#f9d380,#bd8d43);
+ color:#30200b}
+body[data-market="gold"] .market-picker summary{border-color:rgba(238,189,102,.51)}
+body[data-market="gold"] .market-picker-menu a:hover,
+body[data-market="gold"] .market-picker-menu a[aria-current="true"]{
+ background:rgba(150,111,50,.29);color:#ffdb95}
+@media(max-width:700px){
+ .market-picker{min-width:0}.market-picker summary{padding:7px 9px;gap:7px}
+ .market-picker-symbol{width:31px;height:31px;font-size:15px}
+ .market-picker-current{font-size:12px}.market-picker-label{font-size:8px}
+ .market-picker-menu{min-width:170px}
+}
+"""
+
+
+def render_market_selector(market: str) -> str:
+    """Native keyboard-accessible switcher; routes, never mutates trading state."""
+    if market not in ("bitcoin", "gold"):
+        raise ValueError("Unrecognized KalshiEdge market")
+    title = "Bitcoin" if market == "bitcoin" else "Gold"
+    mark = "₿" if market == "bitcoin" else "Au"
+    bitcoin_active = ' aria-current="true"' if market == "bitcoin" else ""
+    gold_active = ' aria-current="true"' if market == "gold" else ""
+    return (
+        f'<details class="market-picker" data-market-selected="{market}">'
+        f'<summary aria-label="Market selector, currently {title}">'
+        f'<span class="market-picker-symbol" aria-hidden="true">{mark}</span>'
+        '<span class="market-picker-copy"><span class="market-picker-label">MARKET</span>'
+        f'<span class="market-picker-current">{title}</span></span>'
+        '<span class="market-picker-chevron" aria-hidden="true">⌄</span></summary>'
+        '<div class="market-picker-menu" role="group" aria-label="Available markets">'
+        f'<a href="/trade"{bitcoin_active}>Bitcoin</a>'
+        f'<a href="/gold"{gold_active}>Gold</a>'
+        '</div></details>'
+    )
+
+
 NAV = """<nav class="site-nav" aria-label="Primary navigation">
  <a class="site-nav-link" href="/trade">Trade</a>
  <a class="site-nav-link" href="/train">Train</a>
@@ -363,9 +427,13 @@ def render_site_page(page: str, section: str) -> str:
         if page.count(base_helpers) != 1:
             raise ValueError("Train cache hook missing from dashboard")
         page = page.replace(base_helpers, TRAIN_STATUS_SESSION_HELPERS, 1)
-    page = page.replace('</style>', STYLE + MOTION_STYLE + '\n</style>', 1)
+    page = page.replace('</style>', STYLE + MOTION_STYLE + MARKET_SELECTOR_STYLE + '\n</style>', 1)
     page = page.replace('<body>', f'<body data-page="{section}">\n' + MOTION_MARKUP, 1)
     page = page.replace('<header>', '<header class="site-header">', 1)
+    old_brand = "<div class=\"identity\"><div class=\"mark\" aria-hidden=\"true\">K</div><div><div class=\"name\">KALSHIEDGE</div><div class=\"tag\">BTC · 15-MINUTE RESEARCH</div></div></div>"
+    if page.count(old_brand) != 1:
+        raise ValueError("Dashboard brand changed: cannot safely insert market selector")
+    page = page.replace(old_brand, render_market_selector("bitcoin"), 1)
     # The AutoTrader UI is intentionally not installed on this page. Remove the
     # old launcher too, while preserving the signed order and train endpoints.
     old_link = '<a href="http://127.0.0.1:8898/" title="Open local paper-only AutoTrader (start it separately)">AutoTrader (paper)</a>'
