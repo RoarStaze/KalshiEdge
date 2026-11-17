@@ -357,6 +357,7 @@ def run_continuous_gold_collection(
     session = uuid4().hex
     previous = None
     cycles = successes = failures = 0
+    consecutive_failures = 0
     stopped = "BOUNDED_COMPLETE"
     try:
         with _collector_lock(root):
@@ -367,6 +368,7 @@ def run_continuous_gold_collection(
                     micro_path = None
                     status = "CAPTURED"
                     code = None
+                    retry_after_seconds = 0
                     started = time.time_ns()
                     try:
                         quote = capture_gold_quotes(root, client=client)
@@ -376,11 +378,16 @@ def run_continuous_gold_collection(
                         )
                         micro_path = micro["artifact_path"]
                         successes += 1
+                        consecutive_failures = 0
                     except (httpx.HTTPError, ValueError, OSError) as exc:
                         status = "FAILED"
                         failures += 1
+                        consecutive_failures = min(consecutive_failures + 1, 4)
                         if isinstance(exc, httpx.HTTPStatusError):
                             code = f"HTTP_{exc.response.status_code}"
+                            header = exc.response.headers.get("Retry-After", "")
+                            if header.isdecimal():
+                                retry_after_seconds = min(300, int(header))
                         elif isinstance(exc, httpx.TimeoutException):
                             code = "HTTP_TIMEOUT"
                         elif isinstance(exc, httpx.RequestError):
@@ -408,8 +415,10 @@ def run_continuous_gold_collection(
                     if max_cycles is not None and cycles >= max_cycles:
                         break
                     # All rate errors and other retrieval failures back off rather than spin.
-                    consecutive = 0 if status == "CAPTURED" else min(failures, 4)
-                    delay = min(300, interval_seconds * (2 ** consecutive))
+                    delay = max(
+                        min(300, interval_seconds * (2 ** consecutive_failures)),
+                        retry_after_seconds,
+                    )
                     pause(delay)
             except KeyboardInterrupt:
                 stopped = "INTERRUPTED"
