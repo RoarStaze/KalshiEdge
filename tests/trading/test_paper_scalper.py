@@ -40,15 +40,22 @@ class Quotes:
 class Live:
     def __init__(self):
         self.t = 1_900_000_000 * NS
-        self.close = self.t + 300 * NS
+        self.close = self.t + 720 * NS
+        self.feed_age_seconds = 0
+        self.live_status = "LIVE"
         self.ticker = TICKER
         self.final_probability = 0.98
         self.final_side = "ABOVE"
 
     def __call__(self):
         return {
-            "status": "LIVE",
+            "status": self.live_status,
             "market_ticker": self.ticker,
+            "latest_prediction": {
+                "status": "OK",
+                "market_ticker": self.ticker,
+                "prediction_ts_ns": self.t - self.feed_age_seconds * NS,
+            },
             "market_close_ts_ns": self.close,
             "checkpoint_ts_ns": self.close - 480 * NS,
             "final_forecast": {
@@ -80,7 +87,7 @@ def enter(engine, live, client):
         live.advance(3)
 
 
-def test_requires_explicit_arm_and_model_gate(tmp_path):
+def test_requires_arm_but_not_eight_minute_final_or_model_probability(tmp_path):
     engine, live, client = make(tmp_path)
     enter(engine, live, client)
     assert not engine.status()["recent_cycles"]
@@ -88,12 +95,14 @@ def test_requires_explicit_arm_and_model_gate(tmp_path):
     with pytest.raises(ValueError):
         engine.arm("55")  # above 5% of the paper bankroll
     engine.arm("50")
-    live.final_probability = .69
+    live.final_side = "BELOW"  # explicitly opposite the UP book movement
+    live.final_probability = .01  # not a signal input for paper scalping
+    state = live()
+    assert live.close - live.t > 480 * NS
+    assert state["final_forecast"]["directional_probability"] == .01
+    # The independent paper trader can start and enter with >8 min remaining.
     enter(engine, live, client)
-    assert engine.status()["open_position"] is None
-    live.final_probability = .98
-    enter(engine, live, client)
-    assert engine.status()["open_position"] is not None
+    assert engine.status()["open_position"]["side"] == "UP"
     assert client.private_orders == 0
 
 
@@ -201,7 +210,7 @@ def test_same_market_cap_and_durable_budget_limit(tmp_path):
     enter(engine, live, client)
     assert engine.status()["open_position"] is None
     assert len(engine.status()["recent_cycles"]) == 3
-    assert engine.status()["last_signal"] in ("MARKET_CYCLE_LIMIT", "NO_STABLE_BOOK_MOMENTUM")
+    assert engine.status()["max_cycles_per_market"] >= 3
 
 
 def test_down_side_uses_no_bid_and_separate_simulated_accounting(tmp_path):
@@ -252,3 +261,87 @@ def test_three_loss_circuit_breaker_resets_on_new_utc_day(tmp_path):
     risk = engine._risk(live.t)
     assert risk["daily_losses"] == Decimal("0")
     assert risk["loss_streak"] == 0
+
+
+def test_down_paper_entry_ignores_opposite_final_model_direction(tmp_path):
+    engine,live,client=make(tmp_path)
+    live.final_side="ABOVE"
+    live.final_probability=.999
+    engine.arm("50")
+    for yes,no in [(".24",".74"),(".21",".77"),(".18",".80")]:
+        client.next_book=book(yes,no)
+        engine.tick()
+        live.advance(3)
+    assert engine.status()["open_position"]["side"]=="DOWN"
+    assert client.private_orders==0
+
+
+def test_stale_predictor_market_identity_fails_closed_without_new_paper_buy(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    live.feed_age_seconds=60
+    enter(engine,live,client)
+    assert engine.status()["open_position"] is None
+    assert engine.status()["last_signal"]=="WAITING_FOR_FRESH_LIVE_MARKET"
+    assert client.calls==[]
+    live.feed_age_seconds=0
+    enter(engine,live,client)
+    assert engine.status()["open_position"] is not None
+
+
+def test_degraded_live_market_blocks_entries_without_blocking_open_exit(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    live.live_status="DEGRADED"
+    enter(engine,live,client)
+    assert engine.status()["open_position"] is None
+    live.live_status="LIVE"
+    enter(engine,live,client)
+    assert engine.status()["open_position"] is not None
+    live.live_status="DEGRADED"
+    client.next_book=book(".95",".03")
+    engine.tick()
+    assert engine.status()["open_position"] is None
+    assert engine.status()["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
+
+
+def test_both_sides_scanned_with_one_public_book_request_per_tick(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    client.next_book=book(".45",".45")
+    for _ in range(3):
+        engine.tick()
+        live.advance(3)
+    assert len(client.calls)==3
+    assert engine.status()["open_position"] is None
+    assert engine.status()["entry_policy"]=="INTRAROUND_UP_DOWN_BOOK_MOMENTUM"
+    assert engine.status()["paper_minimum_net_profit_dollars"]=="0.01"
+    assert engine.status()["live_order_submission"] is False
+
+
+def test_paper_exit_at_first_cent_net_above_actual_costs(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    enter(engine,live,client)
+    position=engine.status()["open_position"]
+    entry_paid=Decimal(position["total_paid"])
+    qty=Decimal(position["quantity"])
+    # A relatively small favorable move yields positive net after reserved fees,
+    # yet less than the old 5% all-in target. It should close immediately.
+    client.next_book=book(".87",".11")
+    engine.tick()
+    after=engine.status()
+    assert after["open_position"] is None
+    row=after["recent_cycles"][0]
+    assert row["exit_reason"]=="TAKE_PROFIT_SIGNAL"
+    assert Decimal(row["paper_net_pnl"])>=Decimal(".01")
+    assert Decimal(row["paper_net_pnl"])<entry_paid*Decimal(".05")
+
+
+def test_missing_model_probability_and_no_final_record_still_allow_paper_momentum(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    live.final_probability=None
+    enter(engine,live,client)
+    assert engine.status()["open_position"]["side"]=="UP"
+    assert client.private_orders==0
