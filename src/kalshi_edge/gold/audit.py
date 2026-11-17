@@ -178,12 +178,19 @@ def main(argv: list[str] | None = None) -> int:
         "--inventory", action="store_true",
         help="collect read-only KXGOLD15M market listings from live and historical public APIs",
     )
+    modes.add_argument(
+        "--inspect-inventory", type=Path, default=None,
+        help="inspect a SHA-256-named gold market inventory offline, without API calls",
+    )
     parser.add_argument("--page-size", type=int, default=1000)
     parser.add_argument("--max-pages-per-tier", type=int, default=5)
     args = parser.parse_args(argv)
     if args.inspect_artifact is not None:
         from .rule_inspection import inspect_contract_snapshot
         report = inspect_contract_snapshot(args.inspect_artifact)
+    elif args.inspect_inventory is not None:
+        from .outcome_audit import inspect_inventory_snapshot
+        report = inspect_inventory_snapshot(args.inspect_inventory)
     elif args.inventory:
         from .inventory import collect_gold_inventory
         report = collect_gold_inventory(
