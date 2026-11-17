@@ -163,7 +163,7 @@ def assess_reversal_risk(
     near_neutral = abs(p - .5)
 
     alert = _recent_flip(contiguous, now_ns)
-    if alert or adverse_p >= .07 or adverse_book >= .05 or near_neutral < .06:
+    if alert or adverse_p >= .05 or adverse_book >= .04 or near_neutral < .06:
         level = "HIGH"
     elif adverse_p >= .025 or adverse_book >= .02 or near_neutral < .15:
         level = "MEDIUM"
