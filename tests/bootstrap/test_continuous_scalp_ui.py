@@ -41,7 +41,7 @@ def test_live_api_provides_fresh_risk_without_changing_final_forecast(tmp_path):
         path = tmp_path / "predictions" / day / "predictions.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
-            file.write(record.model_dump_json() + "\\n")
+            file.write(record.model_dump_json() + "\n")
     response = read_live_dashboard(tmp_path, now_ns=now_ns)
     assert response["status"] == "LIVE"
     assert response["final_forecast"] is None
@@ -74,11 +74,10 @@ def test_trade_card_displays_flip_alert_below_reversal_risk_and_uses_live_probab
             assert 'text("detail-probability",pct(locked?f.directional_probability:sideProbability));' in html
             assert 'renderScalpMonitor(data);' in html
             assert "8-MIN RECORD SAVED" in html
-            assert "live_orders_enabled" not in html or 'live_orders_enabled' in html
             api = client.get(base + "/api/live")
             assert api.json()["reversal_risk"]["level"] == "UNAVAILABLE"
             if shutil.which("node"):
-                for script in re.findall(r"<script(?:\\s[^>]*)?>([\\s\\S]*?)</script>", html, re.I):
+                for script in re.findall(r"<script(?:\s[^>]*)?>([\s\S]*?)</script>", html, re.I):
                     checked = subprocess.run(["node", "--check"], input=script, text=True, capture_output=True, timeout=10)
                     assert checked.returncode == 0, checked.stderr
     finally:
