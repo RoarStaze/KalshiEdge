@@ -159,3 +159,10 @@ def test_paper_panel_explains_scanning_up_and_down_without_final_checkpoint():
     assert "every 3 seconds" in page or "every ~3s" in page
     assert "net" in page.lower()
     assert "guaranteed" in page.lower()
+
+
+def test_paper_panel_explains_dynamic_reward_stop_risk_not_tiny_fixed_target():
+    page=integrate_paper_scalp(integrate_manual_trade(PAGE))
+    assert "1.25×" in page
+    assert "after modeled fees" in page
+    assert "Exits target at least $0.01 net" not in page
