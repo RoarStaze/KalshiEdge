@@ -228,3 +228,19 @@ def test_baseline_evaluation_on_synthetic_rows_is_research_only():
     assert 0 <= result["brier"] <= 1
     assert result["test_count"] >= 5
     assert result["train_count"] >= 10
+
+def test_gold_cli_adds_explicit_capture_and_dataset_audit_modes(tmp_path, monkeypatch, capsys):
+    from kalshi_edge.gold.audit import main
+    events = []
+    monkeypatch.setattr("kalshi_edge.gold.prospective.capture_gold_quotes",
+                        lambda root, **kw: events.append(("capture", root)) or {"ready_for_training": False})
+    monkeypatch.setattr("kalshi_edge.gold.dataset_readiness.audit_gold_dataset",
+                        lambda source, output, **kw: events.append(("audit", source, output, kw)) or {"dataset_ready": False})
+    assert main(["--capture-quotes", "--output-root", str(tmp_path)]) == 0
+    assert main(["--audit-dataset", "inventory.json", "--output-root", str(tmp_path),
+                 "--quote-artifact", "q.json"]) == 0
+    assert events[0] == ("capture", tmp_path)
+    assert events[1][0:3] == ("audit", Path("inventory.json"), tmp_path)
+    assert events[1][3]["quote_paths"] == [Path("q.json")]
+    with pytest.raises(SystemExit):
+        main(["--capture-quotes", "--inventory"])
