@@ -108,3 +108,45 @@ def test_paper_controls_javascript_syntax_is_valid():
             result=subprocess.run(["node","--check"],input=script,text=True,
                 capture_output=True,timeout=10,check=False)
             assert result.returncode==0,result.stderr
+
+
+def test_real_paper_scalper_can_arm_via_browser_api_without_kalshi_credentials(tmp_path):
+    """Avoid testing solely fake handler objects for the actual Start workflow."""
+    from kalshi_edge.trading.paper_scalper import PaperScalpTrader
+
+    class PublicOnly:
+        def quote(self, ticker):
+            raise AssertionError("Arm is not allowed to request live order execution")
+        def close(self):
+            pass
+
+    scalper=PaperScalpTrader(
+        tmp_path, lambda: {"status": "WAITING"}, client=PublicOnly(),
+        now_ns=lambda: 1_800_000_000_000_000_000,
+    )
+    server,thread=http_server(tmp_path,scalper)
+    try:
+        base=f"http://127.0.0.1:{server.server_port}"
+        headers={
+            "Origin":base, "X-KalshiEdge-Action":"paper-scalp",
+            "Sec-Fetch-Site":"same-origin",
+        }
+        with httpx.Client(timeout=5,trust_env=False) as client:
+            status=client.get(base+"/api/paper-scalp/status")
+            assert status.status_code==200
+            assert status.json()["mode"]=="PAPER_SCALP_SIMULATED"
+            assert not status.json()["enabled"]
+            armed=client.post(base+"/api/paper-scalp/arm",
+                              json={"amount":"1.00"},headers=headers)
+            assert armed.status_code==200,armed.text
+            assert armed.json()["enabled"] is True
+            assert armed.json()["live_order_submission"] is False
+            paused=client.post(base+"/api/paper-scalp/pause",
+                               json={},headers=headers)
+            assert paused.status_code==200
+            assert paused.json()["enabled"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+        scalper.close()

@@ -54,7 +54,8 @@ SCRIPT = r"""
  }
  function render(){
   const state=current;
-  btn.disabled=busy||!state;
+  // Keep Start available for an explicit retry if the status GET failed.
+  btn.disabled=busy;
   btn.textContent=state&&state.enabled?"Pause Paper Entries":"Start Paper Scalper";
   amount.disabled=busy||!!(state&&state.enabled);
   if(!state)return;
@@ -96,18 +97,40 @@ SCRIPT = r"""
   catch(e){status.textContent="Paper-only status unavailable: "+e.message}
  }
  btn.addEventListener("click",async()=>{
-  if(busy||!current)return;
-  const armed=current.enabled;
-  const raw=amount.value.trim();
-  if(!armed&&(!/^\d+(\.\d{1,2})?$/.test(raw)||Number(raw)<.10)){
-   status.textContent="Enter a valid paper budget of at least $0.10";return
-  }
+  if(busy)return;
   busy=true;render();
+  let errorMessage=null;
   try{
+   // A failed initial GET must not make Start a silent no-op. Attempt one
+   // fresh status GET in direct response to the user click.
+   if(!current){
+    status.textContent="Connecting to paper-only simulator…";
+    try{current=await request("status")}
+    catch(e){
+     throw Error("Cannot start paper scalper: "+e.message+
+      ". Restart the live KalshiEdge dashboard and reload /trade (not test preview).")
+    }
+   }
+   if(current.mode!=="PAPER_SCALP_SIMULATED"||current.live_order_submission!==false){
+    throw Error("Cannot start paper scalper: incompatible paper-only server response")
+   }
+   const armed=current.enabled;
+   const raw=amount.value.trim();
+   if(!armed&&(!/^\d+(\.\d{1,2})?$/.test(raw)||Number(raw)<.10)){
+    errorMessage="Enter a valid paper budget of at least $0.10";
+    return;
+   }
    current=await request(armed?"pause":"arm",armed?{}:{amount:raw});
+  }catch(e){
+   errorMessage=e.message.startsWith("Cannot start paper scalper:")?
+    e.message:"Paper action refused: "+e.message;
+  }finally{
+   busy=false;
    render();
-  }catch(e){status.textContent="Paper action refused: "+e.message}
-  finally{busy=false;render()}
+   // Rendering status from the last confirmed state must not erase the
+   // error explaining why an attempted Start/Pause did not take effect.
+   if(errorMessage)status.textContent=errorMessage;
+  }
  });
  refresh();
  setInterval(refresh,5000);
