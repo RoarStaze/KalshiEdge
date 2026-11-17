@@ -111,7 +111,7 @@ def test_paper_buy_profit_exit_and_repeat_in_same_market(tmp_path):
     assert state["open_position"] is None
     assert state["recent_cycles"][0]["exit_reason"] == "TAKE_PROFIT_SIGNAL"
     assert Decimal(state["recent_cycles"][0]["paper_net_pnl"]) > 0
-    assert state["recent_cycles"][0]["exit_price"] == "0.94"
+    assert Decimal(state["recent_cycles"][0]["exit_price"]) == Decimal("0.94")
     assert client.private_orders == 0
     # Cooldown followed by a *fresh* independent 3-quote signal permits reentry.
     live.advance(12)
@@ -214,7 +214,7 @@ def test_down_side_uses_no_bid_and_separate_simulated_accounting(tmp_path):
         live.advance(3)
     opened=engine.status()["open_position"]
     assert opened and opened["side"]=="DOWN"
-    assert opened["entry_price"]=="0.83"
+    assert Decimal(opened["entry_price"]) == Decimal("0.83")
     client.next_book=book(".03", ".95")
     engine.tick()
     assert engine.status()["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
