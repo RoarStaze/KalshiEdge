@@ -80,7 +80,7 @@ def enter(engine, live, client):
         live.advance(3)
 
 
-def test_requires_explicit_arm_and_model_gate(tmp_path):
+def test_requires_explicit_arm_but_not_final_gate(tmp_path):
     engine, live, client = make(tmp_path)
     enter(engine, live, client)
     assert not engine.status()["recent_cycles"]
@@ -90,12 +90,57 @@ def test_requires_explicit_arm_and_model_gate(tmp_path):
     engine.arm("50")
     live.final_probability = .69
     enter(engine, live, client)
-    assert engine.status()["open_position"] is None
-    live.final_probability = .98
-    enter(engine, live, client)
     assert engine.status()["open_position"] is not None
     assert client.private_orders == 0
 
+
+def test_precheckpoint_paper_up_entry_without_a_final(tmp_path):
+    class NoFinal(Live):
+        def __call__(self):
+            state = super().__call__()
+            state["final_forecast"] = None
+            return state
+
+    live = NoFinal()
+    live.close = live.t + 600 * NS  # Before the eight-minute checkpoint
+    engine, _, client = make(tmp_path, live=live)
+    engine.arm("50")
+    enter(engine, live, client)
+    opened = engine.status()["open_position"]
+    assert opened is not None
+    assert opened["side"] == "UP"
+    assert client.private_orders == 0
+
+
+def test_precheckpoint_down_side_ignores_conflicting_final(tmp_path):
+    live = Live()
+    live.close = live.t + 600 * NS
+    live.final_side = "ABOVE"
+    engine, _, client = make(tmp_path, live=live)
+    engine.arm("50")
+    for yes, no in [(".24", ".74"), (".21", ".77"), (".18", ".80")]:
+        client.next_book = book(yes, no)
+        engine.tick()
+        live.advance(3)
+    opened = engine.status()["open_position"]
+    assert opened is not None
+    assert opened["side"] == "DOWN"
+    assert client.private_orders == 0
+
+
+def test_paper_scalper_exits_at_first_fee_adjusted_positive_mark(tmp_path):
+    engine, live, client = make(tmp_path)
+    engine.arm("50")
+    enter(engine, live, client)
+    opened = engine.status()["open_position"]
+    assert opened is not None
+    client.next_book = book(".87", ".11")
+    engine.tick()
+    recent = engine.status()["recent_cycles"][0]
+    assert recent["status"] == "CLOSED"
+    assert recent["exit_reason"] == "TAKE_PROFIT_SIGNAL"
+    assert Decimal(recent["paper_net_pnl"]) > 0
+    assert client.private_orders == 0
 
 def test_paper_buy_profit_exit_and_repeat_in_same_market(tmp_path):
     engine, live, client = make(tmp_path)
