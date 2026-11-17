@@ -150,3 +150,12 @@ def test_real_paper_scalper_can_arm_via_browser_api_without_kalshi_credentials(t
         server.server_close()
         thread.join(timeout=3)
         scalper.close()
+
+
+def test_paper_panel_explains_scanning_up_and_down_without_final_checkpoint():
+    page=integrate_paper_scalp(integrate_manual_trade(PAGE))
+    assert "UP/DOWN" in page or "UP + DOWN" in page
+    assert "No final forecast needed" in page
+    assert "every 3 seconds" in page or "every ~3s" in page
+    assert "net" in page.lower()
+    assert "guaranteed" in page.lower()
