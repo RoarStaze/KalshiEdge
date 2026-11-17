@@ -239,7 +239,7 @@ def render_gold_page(section: str) -> str:
 <main class="gp-shell" data-gold-section="{section}">
 <section class="gp-heading" aria-label="GoldPredict AI research">
 <div><div class="gp-kicker">KALSHIEDGE / GOLD · EXPERIMENTAL V1</div>
-<h1>{title}</h1><p>{description}</p></div>
+<h1>{title}</h1><p>{description}</p><p class="gp-kicker">SOURCE · KXGOLD15M · Metal.Index.1OZGOLD/USD</p></div>
 <span class="gp-badge">GOLDPREDICT AI · EXPERIMENTAL V1</span>
 </section>
 {content}
