@@ -154,3 +154,16 @@ def test_audit_reasons_have_same_number_of_markets_as_journal(tmp_path):
     assert sum(report["evidence_reason_counts"].values()) == report["journal_market_count"]
     assert report["market_details"][0]["pnl_reason"] == "VERIFIED"
     assert report["market_details"][0]["realized_pnl_dollars"] == "0.0390"
+
+
+def test_autotrade_ui_surfaces_allowlisted_down_pnl_failure_reason_not_generic():
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+    from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
+    page=integrate_manual_trade(PAGE)
+    assert "function autoPnlUnavailableReason(" in page
+    assert 'FILL_DIRECTION_CONFLICT:"fill direction mismatch"' in page
+    assert 'SETTLEMENT_POSITION_MISMATCH:"settlement position mismatch"' in page
+    assert 'EXCHANGE_EVIDENCE_UNAVAILABLE:"exchange evidence unavailable"' in page
+    assert "autoPnlUnavailableReason(entry.pnl_reason)" in page
+    # Never echo arbitrary API/reconciliation text or credentials to the UI.
+    assert "String(entry.pnl_reason).replace" not in page
