@@ -64,10 +64,10 @@ def test_entry_requires_realistic_roundtrip_cost_and_bid_depth():
 
 
 def test_candidate_entry_is_only_a_research_signal_never_order_authorization():
-    ticks=[q("UP","0.40","0.58",1_000_000_000),
-           q("UP","0.42","0.56",3_000_000_000),
-           q("UP","0.44","0.54",6_000_000_000)]
-    e=entry_signal(ticks, "0.93", "1.00", 300)
+    ticks=[q("UP","0.74","0.24",1_000_000_000,yes_qty="50",no_qty="50"),
+           q("UP","0.77","0.21",3_000_000_000,yes_qty="50",no_qty="50"),
+           q("UP","0.80","0.18",6_000_000_000,yes_qty="50",no_qty="50")]
+    e=entry_signal(ticks, "0.98", "30.00", 300)
     assert e.action=="RESEARCH_BUY_SIGNAL"
     assert not e.live_eligible
 
@@ -119,3 +119,39 @@ def test_existing_autotrade_exposes_research_gate_without_live_execution():
     assert status["state"]=="IDLE"
     assert status["scalp_research"]["status"]=="RESEARCH_ONLY"
     assert status["scalp_research"]["live_orders_enabled"] is False
+
+
+def test_entry_costs_must_not_trigger_its_own_stop_loss():
+    # A one-share round trip near 50c has an immediate fee+spread drag
+    # larger than the proposed loss budget. No research BUY can be emitted.
+    ticks=[q("UP","0.40","0.58",1_000_000_000),
+           q("UP","0.42","0.56",3_000_000_000),
+           q("UP","0.44","0.54",6_000_000_000)]
+    d=entry_signal(ticks, "0.93", "1.00", 300)
+    assert d.action=="SKIP"
+    assert d.reason=="STOP_ALREADY_BREACHED_BY_COSTS"
+
+
+def test_stale_liquidation_quote_cannot_trigger_executable_stop():
+    position=ScalpPosition(side="UP",quantity=Decimal("2"),
+        total_paid=Decimal("1.10"),entered_at_ns=1_000_000_000)
+    old=q("UP","0.45","0.53",10_000_000_000)
+    d=exit_signal(position,old,now_ns=20_000_000_000,
+                  seconds_remaining=120)
+    assert d.action=="EXIT_BLOCKED_STALE_QUOTE"
+
+
+def test_trailing_and_time_exits_are_liquidation_signals_not_orders():
+    mark=q("UP","0.50","0.48",160_000_000_000)
+    pos=ScalpPosition(side="UP",quantity=Decimal("2"),
+        total_paid=Decimal("0.95"),entered_at_ns=1_000_000_000,
+        peak_net_dollars=Decimal("0.10"))
+    trailing=exit_signal(pos,mark,now_ns=160_000_000_000,
+                         seconds_remaining=180)
+    assert trailing.action=="TRAILING_STOP_SIGNAL"
+    pos2=ScalpPosition(side="UP",quantity=Decimal("2"),
+        total_paid=Decimal("0.95"),entered_at_ns=150_000_000_000)
+    clock=exit_signal(pos2,mark,now_ns=160_000_000_000,
+                       seconds_remaining=30)
+    assert clock.action=="TIME_EXIT_SIGNAL"
+    assert not trailing.live_eligible and not clock.live_eligible
