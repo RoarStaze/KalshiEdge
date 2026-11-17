@@ -179,6 +179,12 @@ def entry_signal(
     exit_fee = taker_fee_reserve(last.bid, qty)
     debit = last.ask * qty + entry_fee
     immediate_roundtrip_drag = last.spread * qty + entry_fee + exit_fee
+    # Refuse a proposed position that would instantly breach its own
+    # mark-to-liquidate stop solely from spread and reserved round-trip fees.
+    # This avoids a mechanically triggered stop even without a price move.
+    stop_budget = max(D("0.02"), debit * D("0.08"))
+    if immediate_roundtrip_drag >= stop_budget:
+        return _research_stop("SKIP", "STOP_ALREADY_BREACHED_BY_COSTS")
     if (immediate_roundtrip_drag
             > MAX_RESEARCH_ROUNDTRIP_FRICTION_FRACTION * debit):
         return _research_stop("SKIP", "ROUNDTRIP_COST_TOO_HIGH")
