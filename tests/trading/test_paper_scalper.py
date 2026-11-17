@@ -316,23 +316,29 @@ def test_both_sides_scanned_with_one_public_book_request_per_tick(tmp_path):
     assert engine.status()["live_order_submission"] is False
 
 
-def test_paper_exit_at_first_cent_net_above_actual_costs(tmp_path):
+def test_paper_small_gain_does_not_exit_far_below_loss_budget(tmp_path):
     engine,live,client=make(tmp_path)
     engine.arm("50")
     enter(engine,live,client)
     position=engine.status()["open_position"]
     entry_paid=Decimal(position["total_paid"])
-    qty=Decimal(position["quantity"])
-    # A relatively small favorable move yields positive net after reserved fees,
-    # yet less than the old 5% all-in target. It should close immediately.
+    # A small net gain must no longer immediately close a position exposed
+    # to an 8%-of-debit stop. An asymmetric 1-cent profit / 8-cent stop
+    # requires over 88% successful exits before overshoot and settlement.
     client.next_book=book(".87",".11")
+    engine.tick()
+    mid=engine.status()
+    assert mid["open_position"] is not None
+    assert mid["last_signal"]=="HOLD"
+    # A large enough *executable* favorable move may satisfy the higher,
+    # fee-adjusted reward target; never claim a guaranteed profit.
+    client.next_book=book(".95",".03")
     engine.tick()
     after=engine.status()
     assert after["open_position"] is None
     row=after["recent_cycles"][0]
     assert row["exit_reason"]=="TAKE_PROFIT_SIGNAL"
-    assert Decimal(row["paper_net_pnl"])>=Decimal(".01")
-    assert Decimal(row["paper_net_pnl"])<entry_paid*Decimal(".05")
+    assert Decimal(row["paper_net_pnl"])>=max(Decimal(".01"),entry_paid*Decimal(".08"))
 
 
 def test_missing_model_probability_and_no_final_record_still_allow_paper_momentum(tmp_path):
@@ -341,4 +347,41 @@ def test_missing_model_probability_and_no_final_record_still_allow_paper_momentu
     live.final_probability=None
     enter(engine,live,client)
     assert engine.status()["open_position"]["side"]=="UP"
+    assert client.private_orders==0
+
+
+def test_paper_dynamic_reward_target_is_not_tiny_relative_to_stop_budget():
+    from kalshi_edge.trading.paper_scalper import (
+        paper_profit_target, paper_stop_budget,
+    )
+    for debit in (Decimal(".70"),Decimal("1"),Decimal("5"),Decimal("50")):
+        stop=paper_stop_budget(debit)
+        target=paper_profit_target(debit)
+        assert target >= stop
+        assert target > Decimal(".01")
+        assert target >= stop*Decimal("1.25")
+
+
+def test_paper_skips_high_price_momentum_when_reward_ceiling_is_insufficient(tmp_path):
+    engine,live,client=make(tmp_path)
+    engine.arm("50")
+    # This high-price UP breakout still meets the three-tick momentum
+    # criterion, but there is insufficient room below the $1 binary ceiling
+    # to compensate for the modeled stop budget.
+    for yes,no in ((".88",".10"),(".90",".08"),(".92",".06")):
+        client.next_book=book(yes,no)
+        engine.tick()
+        live.advance(3)
+    state=engine.status()
+    assert state["open_position"] is None
+    assert state["last_signal"]=="PAPER_MAX_REWARD_BELOW_REQUIRED_TARGET"
+    assert client.private_orders==0
+
+
+def test_paper_status_discloses_the_reward_to_risk_rule(tmp_path):
+    engine,_,client=make(tmp_path)
+    status=engine.status()
+    assert status["live_order_submission"] is False
+    assert status["paper_minimum_reward_to_stop_ratio"]=="1.25"
+    assert status["paper_profit_target_rule"]=="MAX_1_CENT_OR_1_25X_NOMINAL_STOP"
     assert client.private_orders==0
