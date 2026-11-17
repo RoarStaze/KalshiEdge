@@ -19,6 +19,7 @@ from typing import IO
 
 from .bootstrap.config import BootstrapSettings
 from .bootstrap.live import load_default_bundle
+from .bootstrap.runtime_identity import dashboard_build_id
 
 LOG = logging.getLogger(__name__)
 DASHBOARD_PORT = 8899
@@ -37,6 +38,23 @@ def _dashboard_healthy(port: int) -> bool:
         return data.get("app") == "kalshiedge" and data.get("service") == "unified-dashboard"
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, TypeError):
         return False
+
+
+def _dashboard_running_build(port: int) -> str | None:
+    """Read the build frozen in the *running* server, not its updated files."""
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{port}{HEALTH_ENDPOINT}")
+        with urllib.request.urlopen(request, timeout=0.5) as response:
+            if response.status != 200:
+                return None
+            data = json.load(response)
+        if (data.get("app") != "kalshiedge"
+                or data.get("service") != "unified-dashboard"):
+            return None
+        build = data.get("dashboard_build_id")
+        return build if isinstance(build, str) and build else None
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, TypeError):
+        return None
 
 
 def _tcp_busy(port: int) -> bool:
@@ -209,6 +227,38 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
     print("Read-only: no automatic order placement.", flush=True)
 
     existing_dashboard = _dashboard_healthy(port)
+    if existing_dashboard:
+        # A git pull changes on-disk Python/HTML, but does not reload a
+        # previously started dashboard's imported modules and cached pages.
+        # Refuse to silently serve the obsolete paper 480s-final gate.
+        try:
+            expected_build = dashboard_build_id()
+        except OSError as exc:
+            print(f"Could not verify local dashboard sources: {exc}", file=sys.stderr)
+            return 2
+        running_build = _dashboard_running_build(port)
+        if running_build != expected_build:
+            print(
+                f"Outdated KalshiEdge dashboard is still running on port {port}.",
+                file=sys.stderr,
+            )
+            print(
+                f"Running dashboard build: {running_build or 'unknown/old'}; "
+                f"updated local build: {expected_build}.",
+                file=sys.stderr,
+            )
+            print(
+                "Refusing to reuse outdated Python modules. Return to the "
+                "terminal that started the old dashboard and press Ctrl+C "
+                "to stop it safely. If training is active, allow it to "
+                "checkpoint before restarting. Do not kill unrelated Python "
+                "processes.",
+                file=sys.stderr,
+            )
+            print(
+                "Then run: python -m kalshi_edge.cli start", file=sys.stderr,
+            )
+            return 2
     if not existing_dashboard and _tcp_busy(port):
         print(f"Port {port} is occupied by a different service. Stop it or select --port.", file=sys.stderr)
         return 2
