@@ -182,8 +182,14 @@ def main(argv: list[str] | None = None) -> int:
         "--inspect-inventory", type=Path, default=None,
         help="inspect a SHA-256-named gold market inventory offline, without API calls",
     )
+    modes.add_argument(
+        "--candle-probe", type=Path, default=None,
+        help="collect a bounded read-only Kalshi YES-price candle sample from an inventory",
+    )
     parser.add_argument("--page-size", type=int, default=1000)
     parser.add_argument("--max-pages-per-tier", type=int, default=5)
+    parser.add_argument("--sample-per-tier", type=int, default=5)
+    parser.add_argument("--lookback-minutes", type=int, default=7)
     args = parser.parse_args(argv)
     if args.inspect_artifact is not None:
         from .rule_inspection import inspect_contract_snapshot
@@ -191,6 +197,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.inspect_inventory is not None:
         from .outcome_audit import inspect_inventory_snapshot
         report = inspect_inventory_snapshot(args.inspect_inventory)
+    elif args.candle_probe is not None:
+        from .candle_probe import probe_checkpoint_candles
+        report = probe_checkpoint_candles(
+            args.candle_probe, args.output_root,
+            sample_per_tier=args.sample_per_tier, lookback_minutes=args.lookback_minutes,
+        )
     elif args.inventory:
         from .inventory import collect_gold_inventory
         report = collect_gold_inventory(
