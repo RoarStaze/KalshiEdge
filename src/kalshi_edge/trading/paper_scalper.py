@@ -1,6 +1,6 @@
 """Independent paper-only BTC 15-minute intramarket scalper.
 
-Reads only public order books and a saved local final forecast. Simulated
+Reads only public order books and the current market identity. Simulated
 fills require visible top-level depth and are marked with pessimistic
 per-contract slippage and fee reserves. No signed API client, keys, POSTs,
 actual fills or real-money position bookkeeping exist in this module.
@@ -24,7 +24,7 @@ from typing import Callable
 from .paper import PublicMarketClient
 from .risk import taker_fee_reserve
 from .scalp_policy import (
-    ScalpPosition, ScalpQuote, entry_signal, exit_signal, quote_from_kalshi,
+    ScalpPosition, ScalpQuote, paper_momentum_entry_signal, exit_signal, quote_from_kalshi,
 )
 
 LOG = logging.getLogger(__name__)
@@ -198,8 +198,14 @@ class PaperScalpTrader:
             "RECOVERED_OPEN_PAPER_POSITION" if self.ledger.open_position()
             else "IDLE"
         )
-        self._history: deque[ScalpQuote] = deque(maxlen=3)
+        self._history: dict[str, deque[ScalpQuote]] = {
+            "UP": deque(maxlen=3), "DOWN": deque(maxlen=3),
+        }
         self._history_ticker: str | None = None
+
+    def _reset_history(self) -> None:
+        for history in self._history.values():
+            history.clear()
 
     def _risk(self, now_ns: int):
         rows = self.ledger.recent(100000)
@@ -242,6 +248,7 @@ class PaperScalpTrader:
                 opened["paper_net_pnl"] = None
             return {
                 "mode": "PAPER_SCALP_SIMULATED",
+                "entry_policy": "INTRAROUND_BIDIRECTIONAL_BOOK_MOMENTUM",
                 "enabled": self._enabled,
                 "live_order_submission": False,
                 "requires_rearm_after_restart": True,
@@ -320,7 +327,7 @@ class PaperScalpTrader:
                           now_ns=now, reason="OFFICIAL_SETTLEMENT", pnl=pnl,
                           settled=True)
         self._last_signal = "SIMULATED_OFFICIAL_SETTLEMENT"
-        self._history.clear()
+        self._reset_history()
 
     def _tick_open(self, row: dict, now: int, settlement) -> None:
         ticker = row["ticker"]
@@ -355,6 +362,7 @@ class PaperScalpTrader:
         decision = exit_signal(
             position, adjusted, now_ns=now,
             seconds_remaining=max(0, int((row["close_ns"]-now) / NS)),
+            take_first_net_profit=True,
         )
         if decision.mark_net_dollars is not None:
             peak = max(position.peak_net_dollars, decision.mark_net_dollars)
@@ -373,10 +381,11 @@ class PaperScalpTrader:
             row["id"], price=executable, fee=fee, now_ns=now,
             reason=decision.action, pnl=pnl,
         )
-        self._history.clear()
+        self._reset_history()
         self._last_signal = "PAPER_" + decision.action
 
-    def _live_entry_side(self, now: int):
+    def _current_market_info(self, now: int):
+        """Use live market identity and close time; NO final forecast required."""
         try:
             live = self.read_live()
         except Exception:
@@ -385,27 +394,13 @@ class PaperScalpTrader:
             return None
         ticker = live.get("market_ticker")
         close = live.get("market_close_ts_ns")
-        checkpoint = live.get("checkpoint_ts_ns")
-        final = live.get("final_forecast")
         if (not isinstance(ticker, str)
                 or not ticker.startswith(VALID_TICKER_PREFIX)
                 or not ticker.replace("-", "").isalnum()
-                or type(close) is not int or type(checkpoint) is not int
-                or close - checkpoint != 480 * NS
-                or not checkpoint <= now < close
-                or not isinstance(final, dict)
-                or final.get("market_ticker") != ticker
-                or final.get("scheduled_ts_ns") != checkpoint
-                or final.get("forecast") not in ("ABOVE", "BELOW")):
+                or type(close) is not int
+                or not 90 * NS < close - now <= 900 * NS):
             return None
-        try:
-            probability = _number(final.get("directional_probability"))
-        except ValueError:
-            return None
-        if not D("0.69") < probability <= 1:
-            return None
-        side = "UP" if final["forecast"] == "ABOVE" else "DOWN"
-        return ticker, side, close, probability
+        return ticker, close
 
     @staticmethod
     def _size(budget: D, quote: ScalpQuote) -> tuple[D, D, D, D] | None:
@@ -443,12 +438,12 @@ class PaperScalpTrader:
         if risk["loss_streak"] >= 3:
             self._last_signal = "THREE_SIMULATED_LOSSES"
             return
-        info = self._live_entry_side(now)
+        info = self._current_market_info(now)
         if info is None:
-            self._history.clear()
-            self._last_signal = "WAITING_FOR_VERIFIED_69_PERCENT_FINAL"
+            self._reset_history()
+            self._last_signal = "WAITING_FOR_ACTIVE_MARKET"
             return
-        ticker, side, close, probability = info
+        ticker, close = info
         if self.ledger.ticker_count(ticker) >= MAX_PAPER_CYCLES_PER_TICKER:
             self._last_signal = "MARKET_CYCLE_LIMIT"
             return
@@ -457,33 +452,60 @@ class PaperScalpTrader:
             if now - previous[0]["exit_ns"] < REENTRY_COOLDOWN_NS:
                 self._last_signal = "REENTRY_COOLDOWN"
                 return
-        if self._history_ticker != ticker or (
-                self._history and self._history[-1].side != side):
-            self._history.clear()
+        if self._history_ticker != ticker:
+            self._reset_history()
             self._history_ticker = ticker
+        # Both outcomes come from the SAME public orderbook snapshot. Never
+        # infer directional momentum by comparing two different REST reads.
         try:
-            quote = self._quote(ticker, side, now)
+            market, book = self.client.quote(ticker)
+            if not self._is_market_open(market, ticker):
+                raise ValueError("Public market identity or status mismatch")
+            quotes = {
+                side: quote_from_kalshi(book, side, timestamp_ns=now)
+                for side in ("UP", "DOWN")
+            }
         except Exception:
-            self._history.clear()
+            self._reset_history()
             self._last_signal = "NO_VALID_PUBLIC_SCALP_BOOK"
             return
-        if self._history and quote.timestamp_ns <= self._history[-1].timestamp_ns:
+        if any(self._history[side] and
+               now <= self._history[side][-1].timestamp_ns
+               for side in ("UP", "DOWN")):
             self._last_signal = "NONMONOTONIC_BOOK_OBSERVATION"
             return
-        self._history.append(quote)
+
         budget = min(self._amount, risk["cash"] * MAX_PAPER_BUDGET_FRACTION)
-        sized = self._size(budget, quote)
-        if sized is None:
-            self._last_signal = "NO_FEE_INCLUSIVE_PAPER_SIZE"
+        candidates = []
+        last_reason = "INSUFFICIENT_BOOK_HISTORY"
+        for side in ("UP", "DOWN"):
+            quote = quotes[side]
+            history = self._history[side]
+            history.append(quote)
+            sized = self._size(budget, quote)
+            if sized is None:
+                last_reason = "NO_FEE_INCLUSIVE_PAPER_SIZE"
+                continue
+            qty, _, _, _ = sized
+            decision = paper_momentum_entry_signal(
+                tuple(history), qty, int((close - now) / NS),
+            )
+            if decision.action == "RESEARCH_BUY_SIGNAL":
+                # Choose the strongest supported direction; no simultaneous
+                # inventory and no side selection using a terminal classifier.
+                momentum = quote.bid - history[0].bid
+                candidates.append((momentum, side, quote, sized))
+            else:
+                last_reason = decision.reason
+        if not candidates:
+            self._last_signal = last_reason
             return
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
+            self._last_signal = "AMBIGUOUS_TWO_SIDED_MOMENTUM"
+            return
+        _, side, quote, sized = candidates[0]
         qty, entry_price, fee, paid = sized
-        decision = entry_signal(
-            tuple(self._history), probability, qty,
-            int((close - now) / NS),
-        )
-        self._last_signal = decision.reason
-        if decision.action != "RESEARCH_BUY_SIGNAL":
-            return
         exit_bid = quote.bid - SIMULATED_SLIPPAGE_PER_CONTRACT
         if exit_bid <= 0:
             self._last_signal = "NO_EXECUTABLE_SIMULATED_EXIT"
@@ -494,12 +516,12 @@ class PaperScalpTrader:
         if immediate_loss >= stop:
             self._last_signal = "STOP_ALREADY_BREACHED_BY_SIMULATED_COSTS"
             return
-        # Unique index and single serialized tick prevent double inventory.
+        # The SQLite unique index and serialized tick prevent overlap.
         self.ledger.insert(
             ticker=ticker, side=side, quantity=qty, price=entry_price,
             fee=fee, paid=paid, now_ns=now, close_ns=close,
         )
-        self._history.clear()
+        self._reset_history()
         self._last_signal = "PAPER_BUY_SIMULATED"
 
     def tick(self, now_ns: int | None = None, *, settlement=None) -> dict:
