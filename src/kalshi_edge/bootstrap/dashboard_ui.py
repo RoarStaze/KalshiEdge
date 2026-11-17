@@ -409,7 +409,7 @@ function renderLive(data){
  clock();
  const banner=el("lock-banner");
  banner.className="lock-banner "+(locked?"locked":current&&data.checkpoint_ts_ns/1e6<=Date.now()?"pending":"");
- if(locked){text("lock-heading","▣  8-MIN RECORD SAVED · LIVE MONITOR ON");text("lock-description","The 8-minute historical record is frozen; live probability and scalp diagnostics continue until market close.");
+ if(locked){text("lock-heading","▣  8-MIN FINAL FORECAST ARCHIVED · LIVE MONITOR ON");text("lock-description","The 8-minute historical record is frozen; live probability and scalp diagnostics continue until market close.");
  }else if(current&&data.checkpoint_ts_ns/1e6>Date.now()){
    text("lock-heading","♧  LIVE THROUGH MARKET CLOSE");text("lock-description","The live estimate keeps updating; an immutable 8-minute record is archived at "+local(data.checkpoint_ts_ns/1e6)+".");
  }else if(current){text("lock-heading","◌  8-MIN RECORD PENDING · LIVE MONITOR ON");text("lock-description","Live probability can still change. The historical checkpoint record has not been verified.");
