@@ -78,7 +78,7 @@ HERO_MARKUP = r"""
     <div><div class="hero-clock-label">ROUND CLOSES IN</div><div class="hero-clock-number" id="hero-countdown">—</div></div>
    </div>
    <div class="hero-clock-right">
-    <div class="hero-clock-label" id="hero-lock-label">FORECAST LOCKS AT</div>
+    <div class="hero-clock-label" id="hero-lock-label">8-MIN RECORD AT</div>
     <div class="hero-lock-time" id="hero-lock-at">—</div>
    </div>
   </div>
