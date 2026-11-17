@@ -195,22 +195,19 @@ def test_market_rollover_never_fabricates_sale_or_settlement(tmp_path):
 def test_same_market_cap_and_durable_budget_limit(tmp_path):
     engine, live, client = make(tmp_path)
     engine.arm("50")
-    enter(engine, live, client)
-    client.next_book = book(".95", ".03")
-    engine.tick()
-    live.advance(12)
-    enter(engine, live, client)
-    client.next_book = book(".95", ".03")
-    engine.tick()
-    live.advance(12)
-    enter(engine, live, client)
-    client.next_book = book(".95", ".03")
-    engine.tick()
-    live.advance(12)
+    cap=engine.status()["max_cycles_per_market"]
+    assert cap >= 3
+    for cycle in range(cap):
+        enter(engine, live, client)
+        assert engine.status()["open_position"] is not None, cycle
+        client.next_book = book(".95", ".03")
+        engine.tick()
+        assert engine.status()["open_position"] is None
+        live.advance(12)
+    assert len(engine.status()["recent_cycles"]) == cap
     enter(engine, live, client)
     assert engine.status()["open_position"] is None
-    assert len(engine.status()["recent_cycles"]) == 3
-    assert engine.status()["max_cycles_per_market"] >= 3
+    assert engine.status()["last_signal"]=="MARKET_CYCLE_LIMIT"
 
 
 def test_down_side_uses_no_bid_and_separate_simulated_accounting(tmp_path):
