@@ -418,3 +418,47 @@ def test_legacy_open_paper_entry_keeps_original_one_cent_target(tmp_path):
     assert result["open_position"] is None
     assert result["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
     assert Decimal(result["recent_cycles"][0]["paper_net_pnl"])>=Decimal(".01")
+
+
+def test_legacy_sqlite_paper_database_migrates_without_erasing_open_inventory(tmp_path):
+    import sqlite3
+    database=tmp_path/"trading"/"paper_scalp.sqlite3"
+    database.parent.mkdir(parents=True,exist_ok=True)
+    with sqlite3.connect(database) as db:
+        db.execute("""CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+        db.execute("INSERT INTO settings(key,value) VALUES('initial_bankroll','1000')")
+        db.execute("""CREATE TABLE cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            side TEXT NOT NULL,
+            status TEXT NOT NULL,
+            quantity TEXT NOT NULL,
+            entry_price TEXT NOT NULL,
+            entry_fee TEXT NOT NULL,
+            total_paid TEXT NOT NULL,
+            entered_at_ns INTEGER NOT NULL,
+            close_ns INTEGER NOT NULL,
+            peak_net TEXT NOT NULL DEFAULT '0',
+            exit_price TEXT,
+            exit_fee TEXT,
+            exit_ns INTEGER,
+            exit_reason TEXT,
+            paper_net_pnl TEXT
+        )""")
+        db.execute("""INSERT INTO cycles(
+            ticker,side,status,quantity,entry_price,entry_fee,total_paid,
+            entered_at_ns,close_ns,peak_net) VALUES(
+            ?,?,'OPEN',?,?,?,?,?,?,'0')""",(
+            TICKER,"UP","1",".8",".02",".82",
+            1_900_000_000*NS-10*NS,1_900_000_720*NS,
+        ))
+    engine,live,client=make(tmp_path)
+    opened=engine.status()["open_position"]
+    assert opened["status"]=="OPEN"
+    assert opened["profit_target"] is None
+    assert opened["side"]=="UP"
+    assert not engine.status()["enabled"]
+    client.next_book=book(".87",".11")
+    engine.tick()
+    assert engine.status()["open_position"] is None
+    assert engine.status()["recent_cycles"][0]["exit_reason"]=="TAKE_PROFIT_SIGNAL"
