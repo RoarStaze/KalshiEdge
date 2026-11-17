@@ -29,7 +29,8 @@ def market():
     }
 
 
-def transport(*, bad_book=False, rate_limit_first=False, second_market=False):
+def transport(*, bad_book=False, rate_limit_first=False, second_market=False,
+              rate_limit_attempts=(), retry_after="1"):
     requests = []
     state = {"series_attempts": 0}
 
@@ -40,8 +41,9 @@ def transport(*, bad_book=False, rate_limit_first=False, second_market=False):
         path = req.url.path
         if path.endswith("/series/KXGOLD15M"):
             state["series_attempts"] += 1
-            if rate_limit_first and state["series_attempts"] == 1:
-                return httpx.Response(429, headers={"Retry-After": "1"})
+            if (rate_limit_first and state["series_attempts"] == 1
+                    or state["series_attempts"] in rate_limit_attempts):
+                return httpx.Response(429, headers={"Retry-After": retry_after})
             return httpx.Response(200, json=SERIES)
         if path.endswith("/markets"):
             assert req.url.params["series_ticker"] == "KXGOLD15M"
@@ -138,6 +140,29 @@ def test_collector_records_429_then_recovers_without_fabricating_data(tmp_path):
     assert events[1]["status"] == "CAPTURED"
     assert sleeps and sleeps[0] >= 10
     assert inspect_gold_collector_status(tmp_path)["failed_cycles"] == 1
+
+
+def test_collector_respects_server_retry_after(tmp_path):
+    adapter, _ = transport(rate_limit_first=True, retry_after="85")
+    sleeps = []
+    with httpx.Client(transport=adapter) as client:
+        run_continuous_gold_collection(
+            tmp_path, client=client, interval_seconds=10, max_cycles=2,
+            sleep=sleeps.append,
+        )
+    assert sleeps[0] >= 85
+
+
+def test_collector_resets_exponential_backoff_after_success(tmp_path):
+    adapter, _ = transport(rate_limit_attempts=(1, 3))
+    sleeps = []
+    with httpx.Client(transport=adapter) as client:
+        report = run_continuous_gold_collection(
+            tmp_path, client=client, interval_seconds=10, max_cycles=4,
+            sleep=sleeps.append,
+        )
+    assert report["failed_cycles"] == 2
+    assert sleeps == [20, 10, 20]
 
 
 def test_collector_status_rejects_tampered_even_if_filename_unchanged(tmp_path):
