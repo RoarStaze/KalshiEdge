@@ -130,7 +130,7 @@ function renderRoundPriceHero(data){
  heroClockUpdatedMono=heroClockBaseRemainingMs===null?null:performance.now();
  updateRoundPriceClock();
  const locked=!!data.final_forecast;
- text("hero-lock-label",locked?"FORECAST LOCKED AT":"FORECAST LOCKS AT");
+ text("hero-lock-label",locked?"8-MIN RECORD SAVED":"8-MIN RECORD AT");
  text("hero-lock-at",validMarket
     ?new Date(data.checkpoint_ts_ns/1e6).toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"numeric",minute:"2-digit"})+" ET"
     :"—");
