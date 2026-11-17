@@ -215,6 +215,11 @@ class PaperScalpTrader:
         ), D("0"))
         losing_streak = 0
         for row in closed:
+            # The circuit breaker is scoped to the current UTC session.
+            # A three-loss streak yesterday must not permanently deadlock
+            # the paper engine after the daily risk budget resets.
+            if _utc_day(row["exit_ns"]) != _utc_day(now_ns):
+                break
             if _number(row["paper_net_pnl"]) >= 0:
                 break
             losing_streak += 1
