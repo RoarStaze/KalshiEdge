@@ -237,8 +237,13 @@ def assess_reversal_risk(
 
     contiguous = []
     next_ts = None
+    epoch = latest.get("market_stream_epoch")
     for item in reversed(matching):
         if not _valid(item, market_ticker):
+            break
+        # A reconnect can occur within the predictor's 1Hz interval:
+        # never join a new order-book stream to earlier observations.
+        if type(epoch) is int and item.get("market_stream_epoch") != epoch:
             break
         ts = item["prediction_ts_ns"]
         if ts > now_ns or now_ns - ts > WINDOW_NS:
