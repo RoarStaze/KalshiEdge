@@ -80,7 +80,9 @@ def test_authenticated_market_snapshot_projects_held_side_and_live_pnl(tmp_path)
             assert ticker == "KXBTC15M-TEST"
             return {"market": {"ticker": ticker, "status": "active"}}, _book()
 
-    trader = ManualTrader(tmp_path, client=FakeAccount(), market_client=FakeMarket())
+    from types import SimpleNamespace
+    trader = ManualTrader(tmp_path, vault=SimpleNamespace(exists=lambda: True),
+                          client=FakeAccount(), market_client=FakeMarket())
     result = trader.market("KXBTC15M-TEST")
     assert result["position_yes"] == "2.0000"
     assert result["held_side"] == "UP"
