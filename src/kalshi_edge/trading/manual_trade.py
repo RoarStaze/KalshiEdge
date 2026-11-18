@@ -415,9 +415,14 @@ class ManualTrader:
             cache = self._account_cache
             exposure = (cache.get("exposure") if cache is not None
                         and cache["ticker"] == ticker else None)
-            # Any new holding invalidates an earlier flat/SOLD marker.
-            if position != 0 and self._last_sell is not None and self._last_sell["ticker"] == ticker:
-                self._last_sell = None
+            # A position API can lag the freshly confirmed SELL. Keep the
+            # sale marker until flat has actually been observed; invalidate it
+            # only after a *later* new holding appears.
+            if self._last_sell is not None and self._last_sell["ticker"] == ticker:
+                if position == 0:
+                    self._last_sell["flat_seen"] = True
+                elif self._last_sell.get("flat_seen"):
+                    self._last_sell = None
             last_sell = (dict(self._last_sell) if position == 0 and self._last_sell is not None
                          and self._last_sell["ticker"] == ticker else None)
         average_entry = (exposure / abs(position) if
@@ -783,8 +788,8 @@ class ManualTrader:
         # Never estimate a realized gain without a fresh matching cost basis.
         realized = None
         if data["action"] == "SELL" and fills > 0 and actual_proceeds is not None:
-            basis = working.get("position_exposure_dollars")
-            held = Decimal(working["position_yes"])
+            basis = fresh.get("position_exposure_dollars")
+            held = Decimal(fresh["position_yes"])
             if basis is not None and held != 0:
                 purchase_basis = Decimal(basis)
                 if purchase_basis.is_finite() and purchase_basis >= 0:
@@ -802,7 +807,12 @@ class ManualTrader:
                     "outcome": data["outcome"],
                     "realized_pnl_dollars": realized,
                     "fill_count": _shares(fills),
+                    "flat_seen": False,
                 }
+        elif data["action"] == "BUY" and fills > 0:
+            with self._account_lock:
+                if self._last_sell is not None and self._last_sell["ticker"] == data["ticker"]:
+                    self._last_sell = None
         return {
             "realized_pnl_dollars": realized,
             "status": "FILLED" if fills == Decimal(working["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
