@@ -17,6 +17,10 @@ from typing import Iterable
 # installed packages, including local changes without a new git commit.
 _DASHBOARD_FILES = (
     "bootstrap/final_history.py",
+    "bootstrap/site_pages.py",
+    "bootstrap/strat_ui.py",
+    "trading/strat_policy.py",
+    "trading/strat_paper.py",
     "bootstrap/scalp_paper_ui.py",
     "trading/paper_scalper.py",
     "trading/scalp_policy.py",
