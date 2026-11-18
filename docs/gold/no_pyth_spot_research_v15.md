@@ -59,6 +59,16 @@ if (-not $dataset) { throw "Import XAUUSD CSV first" }
 
 The command reports chronological accuracy, Brier score, log loss and coverage on **independent XAU/USD proxy labels**, not Kalshi trading profits. No models are saved or activated, and the existing Pyth-based historical research route is left intact.
 
+### Optional fourth component: local FinBERT macro language features
+
+The existing V1.4 macro adapter also works with this independent spot dataset. Supply an external JSON list of headlines with **verified `published_ns` and `first_observed_ns`** and an existing sentiment `score` between -1 and +1. Only news actually known at or before each historical decision time counts. To score the headlines with FinBERT instead of supplying scores, specify a local model directory already containing compatible weights; the tool does not download a model.
+
+```powershell
+& $py -m kalshi_edge.gold --build-spot-research "data\gold\external\xauusd-m1.csv" --output-root data/gold --macro-events "data\gold\external\news_asof.json" --finbert-local-dir "C:\Models\finbert"
+```
+
+This optional fourth component requires suitable independently timestamped historical news and locally installed Torch/Transformers packages. No economic headlines are manufactured or retrieved from future archives without point-in-time evidence.
+
 ## What this does *not* solve
 
 - Exact Pyth `Metal.Index.1OZGOLD/USD` historical settlement values or the matching Kalshi contract time/rounding rules.
