@@ -96,9 +96,8 @@ def evaluate_up_momentum(
         return idle("SPREAD_TOO_WIDE", speed, ratio)
     if recent * now_dt < MIN_BURST or ask_recent * now_dt < MIN_BURST:
         return idle("NO_FAST_UP_BURST", speed, ratio)
-    if not (a.bid <= mid.bid < last.bid
-            and a.ask <= mid.ask < last.ask
-            and recent >= prior * D("1.5") if prior > 0 else
-            a.bid <= mid.bid < last.bid and a.ask <= mid.ask < last.ask):
+    rising = a.bid <= mid.bid < last.bid and a.ask <= mid.ask < last.ask
+    accelerating = prior <= 0 or recent >= prior * D("1.5")
+    if not (rising and accelerating):
         return idle("NO_NEW_ACCELERATION", speed, ratio)
     return MomentumResult("BUY", "NEW_FAST_UP_MOMENTUM", speed, ratio)
