@@ -119,7 +119,7 @@ positionLive={
 };
 renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
 if(nodes["lock-heading"].textContent!=="SOLD")throw Error("SOLD state missing");
-if(nodes["lock-description"].textContent!=="REALIZED P/L −$0.0074")
+if(nodes["lock-description"].textContent!=="REALIZED P/L −$0.0074 est.")
  throw Error("signed sale loss missing");
 positionLive.last_sell.realized_pnl_dollars="0.2350";
 renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
