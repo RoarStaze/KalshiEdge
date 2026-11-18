@@ -372,6 +372,12 @@ document.addEventListener("kalshiedge:position-snapshot",event=>{
     /^KXBTC15M-[A-Za-z0-9-]+$/.test(item.ticker)?item:null;
  renderPositionBanner(live);
 });
+function exactPnlAmount(raw){
+ const parts=raw.replace(/^-/, "").split(".");
+ const fraction=(parts[1]||"").padEnd(4,"0");
+ return parts[0]+"."+(fraction==="0000"||fraction.endsWith("00")
+    ?fraction.slice(0,2):fraction);
+}
 function renderPositionBanner(data){
  const banner=el("lock-banner");
  const details=el("lock-description");
@@ -408,9 +414,7 @@ function renderPositionBanner(data){
    details.className="lock-desc pnl-pending";
    text("lock-description",confirmed?"REALIZED P/L —":"UNREALIZED P/L —");
   }else{
-   const exact=Number(sold.realized_pnl_dollars).toFixed(4);
-   const amount=Math.abs(profit).toFixed(4).endsWith("00")
-     ?Math.abs(profit).toFixed(2):exact.replace(/^-/, "");
+   const amount=exactPnlAmount(sold.realized_pnl_dollars);
    details.className="lock-desc "+(profit<0?"pnl-loss":"pnl-gain");
    text("lock-description","REALIZED P/L "+(profit<0?"−":"+")+"$"+amount);
   }
@@ -429,8 +433,7 @@ function renderPositionBanner(data){
   return;
  }
  const profit=Number(value);
- const shown=Math.abs(profit)<.01&&profit!==0?
-   Math.abs(profit).toFixed(4):Math.abs(profit).toFixed(2);
+ const shown=exactPnlAmount(value);
  details.className="lock-desc "+(profit<0?"pnl-loss":"pnl-gain");
  text("lock-description","UNREALIZED P/L "+(profit<0?"−":"+")+"$"+shown+" est.");
 }
