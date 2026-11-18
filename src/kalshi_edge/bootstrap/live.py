@@ -44,6 +44,7 @@ class LiveStateError(RuntimeError):
 
 class LivePredictionRecord(PredictionRecord):
     strike: float | None = None
+    market_stream_epoch: int | None = Field(default=None, ge=0)
     seconds_remaining: float | None = Field(default=None, ge=0.0)
     kalshi_yes_bid: float | None = Field(default=None, ge=0.0, le=1.0)
     kalshi_yes_ask: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -151,6 +152,7 @@ class LiveFeatureState:
 
     def __init__(self) -> None:
         self.market: LiveMarket | None = None
+        self.market_stream_epoch = 0
         # Only the latest book quote is needed for immediate market health.
         # Fixed event-count limits truncate previous minutes at fast delta rates.
         self.quotes: list[LiveQuote] = []
@@ -187,6 +189,7 @@ class LiveFeatureState:
         # observations cannot be safely joined across a lost connection.
         # Clear the latched error only because we discard all old feed state
         # and require fresh snapshots/observations before new predictions.
+        self.market_stream_epoch += 1
         self.quotes.clear()
         self._minute_quote_closes.clear()
         self.trades.clear()
@@ -466,6 +469,7 @@ class LivePredictor:
             model_hash=self.model_hash,
             reason=reason,
             strike=None if market is None else market.strike,
+            market_stream_epoch=self.state.market_stream_epoch,
             seconds_remaining=None if market is None else max(0.0, (market.close_ts_ns - now_ns) / NS),
             kalshi_yes_bid=None if quote is None else quote.yes_bid,
             kalshi_yes_ask=None if quote is None else quote.yes_ask,
@@ -661,6 +665,7 @@ class LivePredictor:
                 fusion_hash = self._signal_fusion.sha256
         confidence = min(1.0, 2.0 * abs(p_yes - 0.5))
 
+        flow_signed, flow_total = self.state.recent_taker_flow(now_ns)
         return LivePredictionRecord(
             prediction_ts_ns=now_ns,
             market_ticker=market.ticker,
@@ -672,13 +677,14 @@ class LivePredictor:
             model_hash=self.model_hash,
             reason=None,
             strike=market.strike,
+            market_stream_epoch=self.state.market_stream_epoch,
             seconds_remaining=seconds_remaining,
             kalshi_yes_bid=quote.yes_bid,
             kalshi_yes_ask=quote.yes_ask,
             kalshi_yes_bid_depth=quote.yes_bid_depth,
             kalshi_yes_ask_depth=quote.yes_ask_depth,
-            kalshi_taker_signed_volume_10s=self.state.recent_taker_flow(now_ns)[0],
-            kalshi_taker_total_volume_10s=self.state.recent_taker_flow(now_ns)[1],
+            kalshi_taker_signed_volume_10s=flow_signed,
+            kalshi_taker_total_volume_10s=flow_total,
             kalshi_prior=values["kalshi_prior"],
             brti_value=self.state.latest_brti.value,
             btc_reference=self.state.latest_bar.close,
