@@ -542,6 +542,15 @@ SCRIPT = r"""
    snapshot=value;
    renderAccountSummary(value);
    renderHolding();
+   // The forecast-card position strip consumes this already-authenticated,
+   // read-only market response. No duplicate portfolio requests or orders.
+   document.dispatchEvent(new CustomEvent("kalshiedge:position-snapshot",{detail:{
+    ticker:value.ticker,
+    position_yes:value.position_yes,
+    position_pnl_status:value.pnl_status,
+    position_unrealized_pnl_dollars:value.unrealized_pnl_dollars,
+    observed_at_ms:Date.now()
+   }}));
    shown("manual-up",value.up_ask==null?"UP —":"UP "+priceCents(value.up_ask));
    shown("manual-down",value.down_ask==null?"DOWN —":"DOWN "+priceCents(value.down_ask));
    await refreshPreview();
@@ -549,6 +558,7 @@ SCRIPT = r"""
    if(generation!==marketGeneration||placing)return;
    snapshot=null;previewGeneration++;clearQuote();setLiquidity(false);
    renderAccountSummary(null);
+   document.dispatchEvent(new CustomEvent("kalshiedge:position-snapshot",{detail:null}));
    shown("manual-status",e.message);
    shown("manual-account","Kalshi market or credentials unavailable");
   }
