@@ -311,14 +311,16 @@ SCRIPT = r"""
   shown("manual-auto-status",
    (messages[autoCurrent.state]||"AutoTrade uses your entered dollar amount, up to available cash (including fees) and executable liquidity; buys only after the eight-minute final forecast.")+quoteInfo);
   if(selected&&armed)shown("manual-status",autoCurrent.message||"Waiting for locked final forecast");
+  renderAutoPosition();
   if(selected)renderAutoPayout();
  }
  function setMode(next){
   if(placing)return;
-  if(autoPending()){shown("manual-status","Cancel AutoTrade before switching modes.");return}
+  // An armed AutoTrade does not lock the user out of the SELL tab.
+  // Returning to BUY restores AUTO mode instead of enabling competing manual buys.
   if(action==="BUY"&&!autoSelected)buyUnits=byId("manual-units").value;
   action=next;
-  autoSelected=false;
+  autoSelected=next==="BUY"&&autoPending();
   byId("manual-buy").classList.toggle("active",next==="BUY");
   byId("manual-sell").classList.toggle("active",next==="SELL");
   byId("manual-submit").classList.toggle("sell",next==="SELL");
@@ -575,6 +577,7 @@ SCRIPT = r"""
    snapshot=value;
    renderAccountSummary(value);
    renderHolding();
+   renderAutoPosition();
    // The forecast-card position strip consumes this already-authenticated,
    // read-only market response. No duplicate portfolio requests or orders.
    document.dispatchEvent(new CustomEvent("kalshiedge:position-snapshot",{detail:{
@@ -582,6 +585,7 @@ SCRIPT = r"""
     position_yes:value.position_yes,
     position_pnl_status:value.pnl_status,
     position_unrealized_pnl_dollars:value.unrealized_pnl_dollars,
+    last_sell:value.last_sell,
     observed_at_ms:Date.now()
    }}));
    shown("manual-up",value.up_ask==null?"UP —":"UP "+priceCents(value.up_ask));
