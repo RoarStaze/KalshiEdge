@@ -47,6 +47,10 @@ class LivePredictionRecord(PredictionRecord):
     seconds_remaining: float | None = Field(default=None, ge=0.0)
     kalshi_yes_bid: float | None = Field(default=None, ge=0.0, le=1.0)
     kalshi_yes_ask: float | None = Field(default=None, ge=0.0, le=1.0)
+    kalshi_yes_bid_depth: float | None = Field(default=None, ge=0.0)
+    kalshi_yes_ask_depth: float | None = Field(default=None, ge=0.0)
+    kalshi_taker_signed_volume_10s: float | None = None
+    kalshi_taker_total_volume_10s: float | None = Field(default=None, ge=0.0)
     kalshi_prior: float | None = Field(default=None, ge=0.0, le=1.0)
     brti_value: float | None = Field(default=None, gt=0.0)
     btc_reference: float | None = Field(default=None, gt=0.0)
@@ -255,6 +259,28 @@ class LiveFeatureState:
             return
 
         raise TypeError("unsupported Kalshi live event")
+
+    def recent_taker_flow(self, now_ns: int, *, seconds: int = 10) -> tuple[float, float]:
+        """Signed aggressor volume observed in a causal recent interval.
+
+        Existing 300-second deque is chronologically ordered and already
+        pruned on updates. Reverse-traverse only until the window boundary;
+        skip future timestamps rather than silently using a later fill.
+        """
+        if not 0 < seconds <= 300:
+            raise ValueError("trade flow horizon must be within 300 seconds")
+        cutoff = now_ns - seconds * NS
+        signed = total = 0.0
+        for trade in reversed(self.trades):
+            if trade.source_ts_ns < cutoff:
+                break
+            if trade.source_ts_ns > now_ns or (
+                self.market is not None and trade.market_ticker != self.market.ticker
+            ):
+                continue
+            total += trade.count
+            signed += trade.count if trade.taker_side == "yes" else -trade.count
+        return signed, total
 
     def update_binance(self, bar: BinanceBar) -> None:
         if self.latest_binance_ts_ns is not None:
@@ -649,6 +675,10 @@ class LivePredictor:
             seconds_remaining=seconds_remaining,
             kalshi_yes_bid=quote.yes_bid,
             kalshi_yes_ask=quote.yes_ask,
+            kalshi_yes_bid_depth=quote.yes_bid_depth,
+            kalshi_yes_ask_depth=quote.yes_ask_depth,
+            kalshi_taker_signed_volume_10s=self.state.recent_taker_flow(now_ns)[0],
+            kalshi_taker_total_volume_10s=self.state.recent_taker_flow(now_ns)[1],
             kalshi_prior=values["kalshi_prior"],
             brti_value=self.state.latest_brti.value,
             btc_reference=self.state.latest_bar.close,
