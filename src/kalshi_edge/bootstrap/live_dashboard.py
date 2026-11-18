@@ -106,15 +106,15 @@ def _recent_monitor_records(root: Path, *, now_ns: int) -> list[dict[str, Any]]:
                 except (ValueError, UnicodeDecodeError):
                     continue
                 age = now_ns - record.prediction_ts_ns
-                if age > 45 * NS:
+                if age > 90 * NS:
                     break
-                if 0 <= age <= 45 * NS:
+                if 0 <= age <= 90 * NS:
                     recent.append(record.model_dump(mode="json"))
-                if len(recent) >= 64:
+                if len(recent) >= 128:
                     break
         except OSError as exc:
             LOG.warning("Unable to inspect recent prediction tail %s: %s", path, exc)
-        if len(recent) >= 64:
+        if len(recent) >= 128:
             break
     recent.reverse()
     return recent
