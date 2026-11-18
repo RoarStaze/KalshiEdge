@@ -139,8 +139,7 @@ async function refresh(){
      r.exit_price==null?"—":Number(r.exit_price)*100+"¢",
      r.quantity,r.paper_net_pnl==null?"OPEN":money(r.paper_net_pnl)]))}
   el("arm").disabled=s.enabled;el("pause").disabled=!s.enabled;
-  const asks=await fetch("/api/manual-trade/market?ticker="+encodeURIComponent(ticker||""),{cache:"no-store"}).then(r=>r.ok?r.json():null).catch(()=>null);
-  set("upAsk",asks?.up_ask==null?"—":(Number(asks.up_ask)*100).toFixed(1)+"¢");
+  set("upAsk",s.up_ask_cents==null?"—":s.up_ask_cents+"¢");
  }catch(e){set("feedback","Status unavailable: "+e.message)}
 }
 async function action(kind){
