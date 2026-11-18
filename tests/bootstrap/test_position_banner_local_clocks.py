@@ -52,7 +52,7 @@ def test_position_banner_renders_verified_up_down_and_stale_states_in_node():
 
     if shutil.which("node") is None:
         pytest.skip("node is optional")
-    start = PAGE.index("function renderPositionBanner(data){")
+    start = PAGE.index("function exactPnlAmount(raw){")
     end = PAGE.index("function renderScalpMonitor(data){", start)
     js = PAGE[start:end]
     harness = r'''
@@ -101,7 +101,7 @@ def test_position_banner_shows_verified_sold_and_signed_realized_pnl():
 
     if shutil.which("node") is None:
         pytest.skip("node is optional")
-    start = PAGE.index("function renderPositionBanner(data){")
+    start = PAGE.index("function exactPnlAmount(raw){")
     end = PAGE.index("function renderScalpMonitor(data){", start)
     js = PAGE[start:end]
     harness = r'''
