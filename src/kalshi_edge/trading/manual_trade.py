@@ -89,6 +89,37 @@ def quote_from_book(book: dict, action: str, outcome: str) -> dict:
     return {"yes_price": yes_price, "unit_cash": unit_cash, "available": quantity, "book_side": book_side}
 
 
+def estimate_held_position_pnl(
+    book: dict, *, position: Decimal, exposure: Decimal | None,
+) -> dict[str, str | None]:
+    """Read-only, indicative net liquidation P/L for the actual held side.
+
+    Uses an executable-side Kalshi bid with enough *top-level* quantity to
+    quote the entire holding. Fees use the same non-direct reference estimate
+    as the manual sell preview, not an exchange-guaranteed fill or final P/L.
+    Never value a position at its ask, model forecast, or an invented midpoint.
+    """
+    if not position.is_finite() or position == 0:
+        return {"held_side": None, "pnl_status": "NO_POSITION",
+                "unrealized_pnl_dollars": None}
+    side = "UP" if position > 0 else "DOWN"
+    unavailable = {"held_side": side, "unrealized_pnl_dollars": None}
+    if exposure is None or not exposure.is_finite() or exposure < 0:
+        return {**unavailable, "pnl_status": "COST_BASIS_UNAVAILABLE"}
+    try:
+        quote = quote_from_book(book, "SELL", side)
+    except TradingError:
+        return {**unavailable, "pnl_status": "NO_SELL_QUOTE"}
+    count = abs(position)
+    if quote["available"] < count:
+        return {**unavailable, "pnl_status": "INSUFFICIENT_LIQUIDITY"}
+    unit = quote["unit_cash"]
+    fee = reference_nondirect_fee(unit, count)
+    proceeds = max(Decimal("0"), count * unit - fee)
+    return {"held_side": side, "pnl_status": "ESTIMATED",
+            "unrealized_pnl_dollars": _money(proceeds - exposure)}
+
+
 class KalshiOrderClient:
     """Signed authenticated Kalshi GET requests and explicit one-shot order POST."""
     def __init__(self, vault, *, transport=None):
@@ -404,6 +435,7 @@ class ManualTrader:
             and cache.get("portfolio_total") is not None else None,
             "position_yes": _money(position),
             "position_exposure_dollars": _money(exposure) if exposure is not None else None,
+            **estimate_held_position_pnl(book, position=position, exposure=exposure),
             "average_entry_price": _money(average_entry) if average_entry is not None else None,
         }
 
