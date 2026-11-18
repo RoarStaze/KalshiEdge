@@ -58,3 +58,31 @@ def test_insufficient_full_position_bid_liquidity_fails_closed():
     assert result["held_side"] == "UP"
     assert result["unrealized_pnl_dollars"] is None
     assert result["pnl_status"] == "INSUFFICIENT_LIQUIDITY"
+
+
+def test_authenticated_market_snapshot_projects_held_side_and_live_pnl(tmp_path):
+    from kalshi_edge.trading.manual_trade import ManualTrader
+
+    class FakeAccount:
+        def get(self, path, params=None):
+            if path == "/portfolio/balance":
+                return {"balance_dollars": "3.0000", "balance": 300,
+                        "portfolio_value": 150}
+            if path == "/portfolio/positions":
+                return {"market_positions": [{
+                    "ticker": "KXBTC15M-TEST", "position_fp": "2.00",
+                    "market_exposure_dollars": "1.00",
+                }]}
+            raise AssertionError("Unexpected read: " + path)
+
+    class FakeMarket:
+        def quote(self, ticker):
+            assert ticker == "KXBTC15M-TEST"
+            return {"market": {"ticker": ticker, "status": "active"}}, _book()
+
+    trader = ManualTrader(tmp_path, client=FakeAccount(), market_client=FakeMarket())
+    result = trader.market("KXBTC15M-TEST")
+    assert result["position_yes"] == "2.0000"
+    assert result["held_side"] == "UP"
+    assert result["pnl_status"] == "ESTIMATED"
+    assert result["unrealized_pnl_dollars"] == "0.1600"
