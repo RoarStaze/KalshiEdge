@@ -53,3 +53,15 @@ def test_taker_flow_is_time_bounded_and_does_not_use_future_events():
 def test_empty_taker_window_returns_zero_not_invented_pressure():
     state=LiveFeatureState()
     assert state.recent_taker_flow(START, seconds=10) == (0.0, 0.0)
+
+
+def test_stream_epoch_advances_for_reconnection_on_same_market():
+    state=LiveFeatureState()
+    m=LiveMarket(ticker=TICKER,strike=64000,
+                 open_ts_ns=START-400*NS,close_ts_ns=START+900*NS)
+    first=state.market_stream_epoch
+    state.update_market(m)
+    second=state.market_stream_epoch
+    state.update_market(m)
+    assert second == first+1
+    assert state.market_stream_epoch == second+1
