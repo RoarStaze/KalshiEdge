@@ -92,3 +92,44 @@ check(nodes["lock-heading"].textContent==="POSITION UPDATING","stale holdings");
         ["node", "-"], input=harness, text=True, capture_output=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_position_banner_shows_verified_sold_and_signed_realized_pnl():
+    import shutil
+    import subprocess
+    import pytest
+
+    if shutil.which("node") is None:
+        pytest.skip("node is optional")
+    start = PAGE.index("function renderPositionBanner(data){")
+    end = PAGE.index("function renderScalpMonitor(data){", start)
+    js = PAGE[start:end]
+    harness = r'''
+const nodes={"lock-banner":{className:""},"lock-heading":{textContent:""},
+             "lock-description":{className:"",textContent:""}};
+const el=id=>nodes[id];
+const text=(id,value)=>{nodes[id].textContent=String(value)};
+let positionLive=null;
+''' + js + r'''
+const t=Date.now();
+positionLive={
+ ticker:"KXBTC15M-TEST", position_yes:"0.0000", observed_at_ms:t,
+ last_sell:{ticker:"KXBTC15M-TEST",status:"SOLD",
+           realized_pnl_dollars:"-0.0074"}
+};
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+if(nodes["lock-heading"].textContent!=="SOLD")throw Error("SOLD state missing");
+if(nodes["lock-description"].textContent!=="REALIZED P/L −$0.0074")
+ throw Error("signed sale loss missing");
+positionLive.last_sell.realized_pnl_dollars="0.2350";
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+if(nodes["lock-description"].textContent!=="REALIZED P/L +$0.23")
+ throw Error("positive sale profit missing");
+positionLive.last_sell.ticker="KXBTC15M-OTHER";
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+if(nodes["lock-heading"].textContent!=="NO POSITION")
+ throw Error("cross-ticker sale leaked");
+'''
+    result = subprocess.run(["node", "-"], input=harness, text=True,
+                            capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
