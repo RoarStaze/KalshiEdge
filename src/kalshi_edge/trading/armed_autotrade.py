@@ -200,6 +200,27 @@ class ArmedAutoTrader:
                                message="AutoTrade cancelled; no further orders")
             return dict(self._state)
 
+    def skip_market_for_manual_sell(self, ticker: str) -> bool:
+        """Serialize with order tick; never re-buy a manually sold market.
+
+        Keep continuous AutoTrade armed for later rounds. An in-flight AUTO
+        tick completes first, so the manual sell's fresh account/quote checks
+        can detect any position change instead of racing a simultaneous BUY.
+        """
+        if not isinstance(ticker, str) or not TICKER_PATTERN.fullmatch(ticker):
+            return False
+        with self._busy:
+            with self._lock:
+                if (self._state["state"] != "WAITING"
+                        or self._state.get("ticker") != ticker):
+                    return False
+                self._processed.add(ticker)
+                self._state.update(
+                    last_result="MANUAL_SELL",
+                    message="Manual SELL requested; skip this market, wait for next",
+                )
+                return True
+
     def _set(self, **kwargs):
         with self._lock:
             self._state.update(**kwargs)
