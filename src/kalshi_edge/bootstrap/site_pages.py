@@ -391,6 +391,7 @@ NAV = """<nav class="site-nav" aria-label="Primary navigation">
  <a class="site-nav-link" href="/trade">Trade</a>
  <a class="site-nav-link" href="/train">Train</a>
  <a class="site-nav-link" href="/history">History</a>
+ <a class="site-nav-link" href="/strat">Strat</a>
  <a class="site-nav-link" href="/api">API</a>
 </nav>"""
 
