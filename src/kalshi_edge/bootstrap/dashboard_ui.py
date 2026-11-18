@@ -416,7 +416,7 @@ function renderPositionBanner(data){
   }else{
    const amount=exactPnlAmount(sold.realized_pnl_dollars);
    details.className="lock-desc "+(profit<0?"pnl-loss":"pnl-gain");
-   text("lock-description","REALIZED P/L "+(profit<0?"−":"+")+"$"+amount);
+   text("lock-description","REALIZED P/L "+(profit<0?"−":"+")+"$"+amount+" est.");
   }
   return;
  }
