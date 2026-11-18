@@ -13,6 +13,9 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 import math
 from pathlib import Path
+from typing import Any, Sequence
+
+from .macro_context import asof_macro_features
 
 from .historical_research import (
     ASSUMED_LABEL_DELAY_SECONDS, FEATURE_NAMES, N_HISTORY_BARS, _features,
@@ -96,6 +99,7 @@ def _load_csv(path: Path) -> tuple[dict[int, tuple[float, float, float, float]],
 
 def _row_for_round(
     start: int, prices: dict[int, tuple[float, float, float, float]],
+    macro_events: Sequence[dict[str, Any]],
 ) -> tuple[SpotResearchRow | None, str | None]:
     """Use only 1m bars known before the seven-minute decision.
 
@@ -117,6 +121,7 @@ def _row_for_round(
     opening_reference = prices[start-MS_MINUTE][3]
     ending_reference = prices[close-MS_MINUTE][3]
     label = 1 if ending_reference >= opening_reference else 0
+    macro = asof_macro_features(macro_events, decision*NS_PER_MS)
     return SpotResearchRow(
         ticker=f"SPOT-XAUUSD-{start}",
         close_ns=close*NS_PER_MS, decision_ns=decision*NS_PER_MS,
@@ -124,10 +129,14 @@ def _row_for_round(
         label_available_proxy_ns=(close + ASSUMED_LABEL_DELAY_SECONDS*1000)*NS_PER_MS,
         label=label, source=SOURCE, features=features,
         lag_returns_bps=lag_returns,
+        macro_sentiment=macro["sentiment"], macro_count=macro["count"],
     ), None
 
 
-def build_spot_research(source_csv: Path, output_root: Path) -> dict:
+def build_spot_research(
+    source_csv: Path, output_root: Path, *,
+    macro_events: Sequence[dict[str, Any]] = (),
+) -> dict:
     """Write SHA-256-auditable, nondeployable direction-proxy examples."""
     prices, digest = _load_csv(Path(source_csv))
     starts = sorted(prices)
@@ -135,8 +144,8 @@ def build_spot_research(source_csv: Path, output_root: Path) -> dict:
     latest = starts[-1]
     rows: list[SpotResearchRow] = []
     excluded: Counter[str] = Counter()
-    for start in range(earliest, latest-MS_ROUND+MS_MINUTE, MS_ROUND):
-        row, reason = _row_for_round(start, prices)
+    for start in range(earliest, latest-MS_ROUND+2*MS_MINUTE, MS_ROUND):
+        row, reason = _row_for_round(start, prices, macro_events)
         if row is None:
             excluded[reason or "UNSPECIFIED"] += 1
         else:
@@ -151,6 +160,7 @@ def build_spot_research(source_csv: Path, output_root: Path) -> dict:
         "source_market": "INDEPENDENT_XAUUSD_SPOT_NOT_PYTH_OR_KALSHI",
         "excluded": dict(sorted(excluded.items())),
         "source_minute_bars": len(prices),
+        "macro_status": "ASOF_NEWS_NONDEPLOYABLE" if macro_events else "NOT_PROVIDED",
         "assumed_market_duration_seconds": 900,
         "assumed_prediction_checkpoint_remaining_seconds": 480,
         "assumed_label_delay_hours": 24,
@@ -198,8 +208,13 @@ def spot_research_rows(doc: dict) -> list[SpotResearchRow]:
                 or row.feature_end_ns > row.decision_ns - 60*1_000_000_000
                 or row.label_available_proxy_ns < row.close_ns + 86400*1_000_000_000
                 or row.label not in (0, 1) or type(row.label) is not int
-                or row.source != SOURCE or row.macro_sentiment is not None
-                or row.macro_count != 0
+                or row.source != SOURCE or type(row.macro_count) is not int
+                or row.macro_count < 0
+                or (row.macro_sentiment is None and row.macro_count != 0)
+                or (row.macro_sentiment is not None and
+                    (type(row.macro_sentiment) not in (int, float)
+                     or not math.isfinite(row.macro_sentiment)
+                     or not -1 <= row.macro_sentiment <= 1))
                 or len(row.features) != len(FEATURE_NAMES)
                 or len(row.lag_returns_bps) != N_HISTORY_BARS - 1
                 or not all(type(x) in (int,float) and math.isfinite(x)
