@@ -67,7 +67,8 @@ def test_order_training_history_and_api_ids_unchanged():
         html = render(route)
         for target in ("manual-submit", "train-now", "history-rows", "api-credentials-form"):
             assert html.count('id="' + target + '"') == 1
-        assert html.count('class="site-nav-link') == 4
+        assert html.count('class="site-nav-link') == 5
+        assert 'href="/strat"' in html
         assert "pointer-events:none" in html
 
 

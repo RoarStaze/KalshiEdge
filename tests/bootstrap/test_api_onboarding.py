@@ -36,10 +36,11 @@ def template():
     return integrate_api_credentials(integrate_manual_trade(integrate_round_price_hero(PAGE)))
 
 
-def test_four_link_navigation_and_no_intro_on_trade():
+def test_five_link_navigation_and_no_intro_on_trade():
     for section in ("trade", "train", "history", "api"):
         page = render_site_page(template(), section)
-        assert page.count('class="site-nav-link') == 4
+        assert page.count('class="site-nav-link') == 5
+        assert 'href="/strat"' in page
         for link in ("trade", "train", "history", "api"):
             assert f'href="/{link}"' in page
         assert f'aria-current="page">{"API" if section == "api" else section.title()}</a>' in page
