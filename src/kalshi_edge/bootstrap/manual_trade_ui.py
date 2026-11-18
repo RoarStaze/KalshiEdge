@@ -209,8 +209,9 @@ SCRIPT = r"""
  const compactPnl=v=>{
    if(typeof v!=="string"||!/^-?[0-9]+(?:[.][0-9]+)?$/.test(v))return "—";
    const value=Number(v);if(!Number.isFinite(value))return "—";
-   const amount=Math.abs(value)<.01&&value!==0?
-      Math.abs(value).toFixed(4):Math.abs(value).toFixed(2);
+   const parts=v.replace(/^-/, "").split(".");
+   const fractional=(parts[1]||"").padEnd(4,"0");
+   const amount=parts[0]+"."+(fractional.endsWith("00")?fractional.slice(0,2):fractional);
    return (value<0?"−":"+")+"$"+amount;
  };
  function renderAutoPosition(){
