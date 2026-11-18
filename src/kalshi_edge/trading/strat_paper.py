@@ -1,0 +1,306 @@
+"""Isolated experimental 15-minute Bitcoin UP-momentum PAPER auto-trader.
+
+Never imports authenticated order clients or submits orders. Fills are
+hypothetical and include 1c per-share slippage plus fee estimates. The
+four strategy rules determine entries and exits; risk limits only veto
+entries. No model forecast or confidence threshold is consulted.
+"""
+from __future__ import annotations
+
+from collections import deque
+from datetime import datetime, timezone
+from decimal import Decimal, ROUND_FLOOR
+from pathlib import Path
+import logging
+import threading
+import time
+from typing import Callable
+
+from .paper import PublicMarketClient
+from .paper_scalper import PaperScalpLedger
+from .risk import taker_fee_reserve
+from .scalp_policy import quote_from_kalshi
+from .strat_policy import UpQuote, evaluate_up_momentum
+
+D = Decimal
+NS = 1_000_000_000
+LOG = logging.getLogger(__name__)
+SLIPPAGE = D("0.01")
+MAX_CYCLES = 12
+COOLDOWN_NS = 6 * NS
+DAILY_LOSS_LIMIT = D("2.00")
+INITIAL_CAPITAL = D("100.00")
+
+
+def _cash(x: D) -> str:
+    return format(x.quantize(D("0.0001")), "f")
+
+
+class StratPaperTrader:
+    """One UP inventory at a time, multiple completed cycles per ticker."""
+    def __init__(
+        self, root: Path, read_live: Callable[[], dict], *,
+        client=None, clock: Callable[[], int] = time.time_ns,
+        settlement_reader: Callable[[str], str | None] | None = None,
+    ):
+        self.ledger = PaperScalpLedger(
+            Path(root).resolve() / "trading" / "strat_up_paper.sqlite3",
+            INITIAL_CAPITAL,
+        )
+        self.read_live = read_live
+        self.client = client if client is not None else PublicMarketClient()
+        self.clock = clock
+        self.settlement_reader = settlement_reader
+        self._lock = threading.RLock()
+        self._enabled = False   # restart NEVER authorizes new positions
+        self._budget = D("1.00")
+        self._samples: deque[UpQuote] = deque(maxlen=5)
+        self._ticker: str | None = None
+        self._last_exit_ns = 0
+        self._exit_latched = False
+        self._last_signal = "DISARMED"
+        self._last_speed = 0.0
+        self._last_ratio: float | None = None
+
+    def _market(self, now: int) -> tuple[str, int] | None:
+        try:
+            live = self.read_live()
+        except Exception:
+            return None
+        if not isinstance(live, dict):
+            return None
+        ticker = live.get("market_ticker")
+        close = live.get("market_close_ts_ns")
+        prediction = live.get("latest_prediction")
+        if (not isinstance(ticker, str)
+                or not ticker.startswith("KXBTC15M-")
+                or not ticker.replace("-", "").isalnum()
+                or type(close) is not int
+                or not 0 < close - now <= 900 * NS
+                or not isinstance(prediction, dict)
+                or prediction.get("market_ticker") != ticker
+                or type(prediction.get("prediction_ts_ns")) is not int
+                or not 0 <= now - prediction["prediction_ts_ns"] <= 8 * NS):
+            return None
+        return ticker, close
+
+    def _quote(self, ticker: str, now: int):
+        market, book = self.client.quote(ticker)
+        info = market.get("market") if isinstance(market, dict) else None
+        if not isinstance(info, dict) or info.get("ticker") != ticker:
+            raise ValueError("Unverified public market identity")
+        if info.get("status") not in ("active", "open"):
+            raise ValueError("Public market is no longer tradable")
+        q = quote_from_kalshi(book, "UP", timestamp_ns=now)
+        return UpQuote(ticker, now, q.bid, q.ask,
+                       q.bid_available, q.ask_available)
+
+    def _settle(self, row: dict, now: int) -> bool:
+        """Use only a verified result; never infer a win from quote movement."""
+        ticker = row["ticker"]
+        side = None
+        if self.settlement_reader is not None:
+            try:
+                side = self.settlement_reader(ticker)
+            except Exception:
+                LOG.exception("Strat official settlement lookup failed")
+        if side not in ("yes", "no"):
+            return False
+        qty = D(row["quantity"])
+        payout = qty if side == "yes" else D("0")
+        pnl = payout - D(row["total_paid"])
+        self.ledger.close(
+            row["id"], price=D("1") if side == "yes" else D("0"),
+            fee=D("0"), now_ns=now, reason="OFFICIAL_SETTLEMENT",
+            pnl=pnl, settled=True)
+        self._exit_latched = False
+        self._last_signal = "OFFICIALLY_SETTLED_" + side.upper()
+        return True
+
+    def _stats(self, now: int) -> dict:
+        rows = self.ledger.recent(100000)
+        done = [r for r in rows if r["status"] in ("CLOSED", "SETTLED")]
+        pnl = sum((D(r["paper_net_pnl"]) for r in done), D("0"))
+        today = datetime.fromtimestamp(now / NS, timezone.utc).date()
+        loss = sum((
+            -D(r["paper_net_pnl"]) for r in done
+            if D(r["paper_net_pnl"]) < 0 and
+            datetime.fromtimestamp(r["exit_ns"] / NS, timezone.utc).date() == today
+        ), D("0"))
+        opened = self.ledger.open_position()
+        cash = self.ledger.initial_bankroll + pnl
+        if opened is not None:
+            cash -= D(opened["total_paid"])
+        return {"pnl": pnl, "loss": loss, "open": opened, "cash": cash}
+
+    def status(self) -> dict:
+        with self._lock:
+            now = self.clock()
+            stats = self._stats(now)
+            position = stats["open"]
+            return {
+                "mode": "EXPERIMENTAL_PAPER_ONLY",
+                "enabled": self._enabled,
+                "live_orders_enabled": False,
+                "budget_dollars": _cash(self._budget),
+                "virtual_cash_dollars": _cash(stats["cash"]),
+                "paper_net_pnl_dollars": _cash(stats["pnl"]),
+                "daily_paper_loss_dollars": _cash(stats["loss"]),
+                "open_position": position,
+                "round_trips": self.ledger.recent(25),
+                "last_signal": self._last_signal,
+                "speed_cents_per_second": round(self._last_speed, 3),
+                "acceleration_ratio": self._last_ratio,
+                "market_ticker": self._ticker,
+                "samples": len(self._samples),
+                "scan_interval_seconds": 0.75,
+                "max_cycles_per_market": MAX_CYCLES,
+                "rules": {
+                    "buy_min_remaining_seconds": 420,
+                    "up_ask_cents_range": [65, 85],
+                    "entry": "NEW_EXECUTABLE_UP_ACCELERATION",
+                    "exit": "UP_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
+                },
+                "warning": ("Paper only: simulated top-of-book fills with 1c "
+                            "slippage per contract per leg and estimated fees. "
+                            "No demonstrated positive after-fee expectancy; "
+                            "an unfilled or illiquid exit can remain open."),
+            }
+
+    def arm(self, amount: str) -> dict:
+        with self._lock:
+            try:
+                budget = D(amount)
+            except Exception as exc:
+                raise ValueError("Invalid Strat dollar amount") from exc
+            stats = self._stats(self.clock())
+            if (not budget.is_finite() or budget.as_tuple().exponent < -2
+                    or budget < D("0.10") or budget > D("5.00")
+                    or budget > max(D("0"), stats["cash"]) * D("0.05")):
+                raise ValueError("Strat budget must be $0.10–$5 and <=5% paper cash")
+            self._budget = budget
+            self._enabled = True
+            self._last_signal = "SCANNING_UP_MOMENTUM"
+            return self.status()
+
+    def pause(self) -> dict:
+        with self._lock:
+            self._enabled = False
+            self._last_signal = (
+                "ENTRIES_PAUSED_STILL_MONITORING_UP_POSITION"
+                if self.ledger.open_position() else "PAUSED")
+            return self.status()
+
+    def _enter(self, quote: UpQuote, close: int, now: int, stats: dict) -> None:
+        price = quote.ask + SLIPPAGE
+        if price >= D("1") or quote.bid_depth <= 0:
+            self._last_signal = "NO_SAFE_SIMULATED_ENTRY"
+            return
+        budget = min(self._budget, stats["cash"])
+        upper = min(quote.ask_depth, quote.bid_depth, budget / price, D("1000"))
+        maximum = int((upper / D("0.01")).to_integral_value(rounding=ROUND_FLOOR))
+        lo, hi = 0, max(0, maximum)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            qty = D(mid) / 100
+            if qty * price + taker_fee_reserve(price, qty) <= budget:
+                lo = mid
+            else:
+                hi = mid - 1
+        if lo <= 0:
+            self._last_signal = "BUDGET_OR_DEPTH_TOO_SMALL"
+            return
+        qty = D(lo) / 100
+        fee = taker_fee_reserve(price, qty)
+        self.ledger.insert(
+            ticker=quote.ticker, side="UP", quantity=qty,
+            price=price, fee=fee, paid=qty * price + fee,
+            now_ns=now, close_ns=close,
+        )
+        self._last_signal = "PAPER_BOUGHT_UP_FAST_MOMENTUM"
+
+    def _exit(self, row: dict, quote: UpQuote, now: int) -> None:
+        qty = D(row["quantity"])
+        if quote.bid_depth < qty or quote.bid <= SLIPPAGE:
+            self._last_signal = "EXIT_SIGNAL_LATCHED_WAITING_FOR_BID_DEPTH"
+            return
+        sale = quote.bid - SLIPPAGE
+        fee = taker_fee_reserve(sale, qty)
+        pnl = qty * sale - fee - D(row["total_paid"])
+        self.ledger.close(
+            row["id"], price=sale, fee=fee, now_ns=now,
+            reason="UP_MOMENTUM_SLOWED", pnl=pnl,
+        )
+        self._last_exit_ns = now
+        self._exit_latched = False
+        self._last_signal = "PAPER_SOLD_UP_MOMENTUM_SLOWED"
+
+    def tick(self, now_ns: int | None = None) -> dict:
+        with self._lock:
+            now = self.clock() if now_ns is None else now_ns
+            stats = self._stats(now)
+            opened = stats["open"]
+            market_info = self._market(now)
+            if opened is not None:
+                ticker, close = opened["ticker"], opened["close_ns"]
+            elif market_info is not None:
+                ticker, close = market_info
+            else:
+                self._samples.clear()
+                self._ticker = None
+                self._last_signal = "WAITING_FOR_FRESH_MARKET"
+                return self.status()
+            if self._ticker != ticker:
+                self._samples.clear()
+                self._ticker = ticker
+                self._exit_latched = False
+            if close <= now:
+                if opened is not None and not self._settle(opened, now):
+                    self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
+                return self.status()
+            try:
+                quote = self._quote(ticker, now)
+            except Exception as exc:
+                self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
+                return self.status()
+            self._samples.append(quote)
+            remain = (close - now) / NS
+            signal = evaluate_up_momentum(
+                list(self._samples), remain,
+                holding=opened is not None,
+                exit_latched=self._exit_latched,
+            )
+            self._last_speed = signal.speed_cents_per_second
+            self._last_ratio = signal.acceleration_ratio
+            if opened is not None:
+                if signal.action == "SELL":
+                    self._exit_latched = True
+                    self._exit(opened, quote, now)
+                else:
+                    self._last_signal = signal.reason
+            elif not self._enabled:
+                self._last_signal = "DISARMED_OR_PAUSED"
+            elif market_info != (ticker, close):
+                self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
+            elif stats["loss"] >= DAILY_LOSS_LIMIT:
+                self._last_signal = "DAILY_PAPER_LOSS_CIRCUIT"
+            elif self.ledger.ticker_count(ticker) >= MAX_CYCLES:
+                self._last_signal = "MAX_MARKET_CYCLES"
+            elif now - self._last_exit_ns < COOLDOWN_NS:
+                self._last_signal = "REENTRY_COOLDOWN"
+            elif signal.action == "BUY":
+                self._enter(quote, close, now, stats)
+            else:
+                self._last_signal = signal.reason
+            return self.status()
+
+    def run_forever(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                self.tick()
+            except Exception:
+                LOG.exception("Strat paper tick failed closed")
+            stop.wait(0.75)
+
+    def close(self) -> None:
+        self.client.close()
