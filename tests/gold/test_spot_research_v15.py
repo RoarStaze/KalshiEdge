@@ -139,3 +139,10 @@ def test_cli_no_api_key_or_pyth_artifact_required(tmp_path, capsys):
     assert main(["--build-spot-research", str(file),
                  "--output-root", str(tmp_path / "gold")]) == 0
     assert "XAUUSD_15M_SPOT_DIRECTION_PROXY_NOT_KALSHI" in capsys.readouterr().out
+
+
+def test_final_complete_fifteen_minute_window_is_not_dropped(tmp_path):
+    file = tmp_path / "xauusd.csv"
+    make_csv(file, n=60)
+    result = build_spot_research(file, tmp_path / "gold")
+    assert result["candidate_research_rows"] == 3  # starts 00:15, 00:30, 00:45
