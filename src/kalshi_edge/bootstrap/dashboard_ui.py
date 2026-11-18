@@ -388,7 +388,7 @@ function renderPositionBanner(data){
   return;
  }
  const raw=status.position_yes;
- if(typeof raw!=="string"||!/^-?\\d+(?:\\.\\d+)?$/.test(raw)){
+ if(typeof raw!=="string"||!/^-?[0-9]+(?:[.][0-9]+)?$/.test(raw)){
   banner.className="lock-banner position-flat";
   details.className="lock-desc pnl-pending";
   text("lock-heading","POSITION UPDATING");
@@ -408,7 +408,7 @@ function renderPositionBanner(data){
  text("lock-heading",up?"BOUGHT UP":"BOUGHT DOWN");
  const value=status.position_unrealized_pnl_dollars;
  const validPnl=status.position_pnl_status==="ESTIMATED"&&
-   typeof value==="string"&&/^-?\\d+(?:\\.\\d+)?$/.test(value)&&
+   typeof value==="string"&&/^-?[0-9]+(?:[.][0-9]+)?$/.test(value)&&
    Number.isFinite(Number(value));
  if(!validPnl){
   details.className="lock-desc pnl-pending";
