@@ -228,7 +228,7 @@ SCRIPT = r"""
      const sold=snapshot?.last_sell;
      if(sold?.status==="SOLD"&&sold.ticker===snapshot.ticker){
        pnl=sold.realized_pnl_dollars;
-       message="SOLD · REALIZED P/L "+compactPnl(pnl);
+       message="SOLD · REALIZED P/L "+compactPnl(pnl)+" est."; 
      }else{message="NO POSITION";}
    }
    target.className="mt-auto-position"+(action==="BUY"&&autoSelected?"":" mt-hidden")+
