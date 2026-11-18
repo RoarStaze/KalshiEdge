@@ -9,7 +9,6 @@ from kalshi_edge.bootstrap.site_pages import render_site_page
 
 
 def test_top_forecast_banner_is_position_only_and_reuses_live_market_snapshot():
-    page = render_site_page(integrate_round_price_hero(PAGE), "trade") if False else None
     # The full active trade template includes manual market account reads.
     from kalshi_edge.bootstrap.manual_trade_ui import integrate_manual_trade
     page = render_site_page(integrate_manual_trade(integrate_round_price_hero(PAGE)), "trade")
