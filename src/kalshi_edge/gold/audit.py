@@ -355,8 +355,20 @@ def main(argv: list[str] | None = None) -> int:
             min_train=args.min_train, min_test=args.min_test,
         )
     elif args.build_spot_research is not None:
+        events = []
+        if args.macro_events is not None:
+            events = json.loads(args.macro_events.read_text(encoding="utf-8"))
+            if not isinstance(events, list):
+                parser.error("--macro-events must be a JSON list")
+        if args.finbert_local_dir is not None:
+            if args.macro_events is None:
+                parser.error("--finbert-local-dir requires --macro-events")
+            from .macro_context import score_finbert_local
+            events = score_finbert_local(events, local_model_path=args.finbert_local_dir)
         from .spot_research import build_spot_research
-        report = build_spot_research(args.build_spot_research, args.output_root)
+        report = build_spot_research(
+            args.build_spot_research, args.output_root, macro_events=events,
+        )
     elif args.compare_spot_research is not None:
         from .research_models import compare_spot_research_models
         report = compare_spot_research_models(
