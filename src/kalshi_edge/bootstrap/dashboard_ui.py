@@ -445,8 +445,22 @@ function renderScalpMonitor(data){
  badge.textContent=level;
  const good=level!=="UNAVAILABLE"&&Number.isFinite(risk.observed_ts_ns)&&Number.isFinite(data.server_time_ns);
  const age=good?Math.max(0,Math.round((data.server_time_ns-risk.observed_ts_ns)/1e9)):null;
+ const driverLabels={
+  MODEL_ADVERSE_TREND:"Model momentum",KALSHI_QUOTE_ADVERSE_TREND:"Kalshi quote pressure",
+  MODEL_NEAR_50:"Model near 50%",NEAR_STRIKE:"BTC near strike",
+  MODEL_DISAGREEMENT:"Model disagreement",WIDE_SPREAD:"Wide spread",
+  WIDENING_SPREAD:"Spread widening",ADVERSE_QUEUE_IMBALANCE:"Bid/ask imbalance",
+  ADVERSE_TAKER_FLOW:"Aggressive trades",BRTI_VOLATILITY_PRESSURE:"Strike volatility",
+  EARLY_FLIP_PRESSURE:"Early flip pressure"
+ };
+ const drivers=Array.isArray(risk.risk_drivers)?risk.risk_drivers
+   .filter(key=>Object.hasOwn(driverLabels,key)).map(key=>driverLabels[key]).slice(0,3):[];
+ const quality=["FULL","PARTIAL"].includes(risk.signal_quality)?risk.signal_quality:"BASE";
+ const score=Number.isFinite(risk.risk_score)?" · Stress index "+risk.risk_score+"/100 (heuristic)":"";
  text("scalp-reversal-detail",good
-    ?"Live 1s model + Kalshi YES quote · "+risk.observation_count+" samples · "+age+"s old"
+    ?"5/15/30s multi-signal · "+quality+" evidence"+score+
+      (drivers.length?" · "+drivers.join(", "):" · No major stress drivers")+
+      " · "+age+"s old"
     :"Insufficient, unhealthy or stale live market data; not safe to classify.");
  const alert=good?risk.flip_alert:null;
  const flip=el("scalp-flip-alert");
@@ -455,8 +469,13 @@ function renderScalpMonitor(data){
    &&Number.isFinite(alert.age_seconds)&&alert.age_seconds<=5){
    flip.className="scalp-flip-status active "+(alert.direction==="DOWN"?"down":"up");
    flip.textContent=alert.direction;
+   const names={model:"Model",kalshi_quote:"Kalshi price",brti:"BRTI",
+     queue_imbalance:"Book depth",taker_flow:"Trade flow",binance:"Binance"};
+   const evidence=Array.isArray(alert.supporting_signals)?
+     alert.supporting_signals.filter(key=>Object.hasOwn(names,key)).map(key=>names[key]).slice(0,5):[];
    text("scalp-flip-detail","Early warning: model still "+alert.current_direction+
-     " · model and Kalshi quote moving toward "+alert.direction+" · not confirmed.");
+     " · "+(evidence.length?evidence.join(" + "):"model and Kalshi quote")+
+     " pointing "+alert.direction+" · unconfirmed.");
  }else{
    flip.className="scalp-flip-status";
    flip.textContent=good?"MONITORING":"UNAVAILABLE";
