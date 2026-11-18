@@ -53,7 +53,7 @@ let action="BUY",autoSelected=true,snapshot=null;
 snapshot={ticker:"KXBTC15M-TEST",position_yes:"0.40",
           pnl_status:"ESTIMATED",unrealized_pnl_dollars:"0.0420"};
 renderAutoPosition();
-if(!node.textContent.includes("BOUGHT UP · UNREALIZED P/L +$0.04"))
+if(!node.textContent.includes("BOUGHT UP · UNREALIZED P/L +$0.0420"))
  throw Error("Holding status unavailable below AUTO");
 snapshot.position_yes="0.0000";
 snapshot.last_sell={status:"SOLD",ticker:"KXBTC15M-TEST",
