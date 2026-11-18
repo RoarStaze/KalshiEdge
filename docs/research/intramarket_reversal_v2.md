@@ -34,7 +34,7 @@ cd "$HOME\Desktop\KalshiEdge"
 & .\.venv\Scripts\python.exe -m kalshi_edge.bootstrap.flip_replay "data\bootstrap\predictions\YYYY-MM-DD\predictions.jsonl"
 ```
 
-The replay processes observations in recorded order and scores first warnings against an **observed future Kalshi YES quote midpoint crossing 50¢** within 15 seconds. It excludes incomplete future windows and feed gaps, deduplicates repeated warnings, and reports a Wilson 95% interval. That label is a **surrogate only**: it is not a verified executable sell price, a 15-minute settlement label, or after-fees profit.
+The replay processes observations in recorded order and scores first warnings against an **observed future Kalshi YES quote midpoint crossing 50¢, confirmed on two consecutive observations**, within 15 seconds. It excludes incomplete future windows and feed gaps, deduplicates repeated warnings, and reports a Wilson 95% interval. That label is a **surrogate only**: it is not a verified executable sell price, a 15-minute settlement label, or after-fees profit.
 
 ### To demonstrate a genuine scalping advantage
 
