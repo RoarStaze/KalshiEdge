@@ -104,8 +104,15 @@ def evaluate_prediction_stream(
             for alert in list(pending):
                 if ts > alert["at"] and ts <= alert["deadline"]:
                     crossed = mid <= .5 if alert["side"] == "DOWN" else mid >= .5
-                    if crossed and alert["first_cross"] is None:
-                        alert["first_cross"] = ts
+                    if crossed:
+                        if alert["candidate_cross"] is None:
+                            alert["candidate_cross"] = ts
+                        elif alert["first_cross"] is None:
+                            # Require two consecutive causal quote observations,
+                            # not a single transient crossing of the midline.
+                            alert["first_cross"] = alert["candidate_cross"]
+                    else:
+                        alert["candidate_cross"] = None
                 if ts >= alert["deadline"]:
                     if alert["first_cross"] is not None:
                         hits += 1
@@ -133,7 +140,7 @@ def evaluate_prediction_stream(
             alerts += 1
             pending.append({
                 "side": side, "at": ts, "deadline": ts + horizon_ns,
-                "first_cross": None,
+                "first_cross": None, "candidate_cross": None,
             })
     abandon()
     resolved = hits + misses
