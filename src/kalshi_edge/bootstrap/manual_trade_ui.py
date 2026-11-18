@@ -595,6 +595,7 @@ SCRIPT = r"""
    if(generation!==marketGeneration||placing)return;
    snapshot=null;previewGeneration++;clearQuote();setLiquidity(false);
    renderAccountSummary(null);
+   renderAutoPosition();
    document.dispatchEvent(new CustomEvent("kalshiedge:position-snapshot",{detail:null}));
    shown("manual-status",e.message);
    shown("manual-account","Kalshi market or credentials unavailable");
@@ -697,7 +698,12 @@ SCRIPT = r"""
    byId("manual-confirm").classList.add("show");
   }catch(e){
    shown("manual-status","Order not confirmed: "+e.message+" · Check Kalshi before retrying.");
-  }finally{placing=false}
+  }finally{
+   placing=false;
+   // The authenticated exchange position, not an optimistic fill assumption,
+   // determines whether the top banner says BOUGHT or SOLD.
+   refreshMarket();
+  }
  }
  byId("manual-buy").addEventListener("click",()=>setMode("BUY"));
  byId("manual-sell").addEventListener("click",()=>setMode("SELL"));
