@@ -222,6 +222,14 @@ def main(argv: list[str] | None = None) -> int:
         "--compare-historical-research", type=Path, default=None,
         help="compare XGBoost, lagged time-series, and regime research models on a held-out dataset",
     )
+    modes.add_argument(
+        "--build-spot-research", type=Path, default=None,
+        help="build independent 15m XAUUSD spot-direction proxy dataset from licensed 1m UTC CSV; no Pyth or Kalshi labels",
+    )
+    modes.add_argument(
+        "--compare-spot-research", type=Path, default=None,
+        help="compare XGBoost, lagged returns and regime models on independent XAUUSD spot proxy only",
+    )
     parser.add_argument("--interval-seconds", type=int, default=30,
                         help="continuous gold collector polling interval, 10..3600 seconds")
     parser.add_argument("--max-cycles", type=int, default=None,
@@ -344,6 +352,15 @@ def main(argv: list[str] | None = None) -> int:
         from .research_models import compare_research_models
         report = compare_research_models(
             args.compare_historical_research,
+            min_train=args.min_train, min_test=args.min_test,
+        )
+    elif args.build_spot_research is not None:
+        from .spot_research import build_spot_research
+        report = build_spot_research(args.build_spot_research, args.output_root)
+    elif args.compare_spot_research is not None:
+        from .research_models import compare_spot_research_models
+        report = compare_spot_research_models(
+            args.compare_spot_research,
             min_train=args.min_train, min_test=args.min_test,
         )
     else:
