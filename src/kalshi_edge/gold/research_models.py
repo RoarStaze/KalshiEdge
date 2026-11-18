@@ -82,9 +82,35 @@ def compare_research_models(
     decision time; no fabricated zero-sentiment feature is treated as evidence.
     """
     doc = inspect_research_dataset(Path(dataset_path))
-    train, test = _split(
+    return _compare_candidate_rows(
         extract_research_rows(doc), min_train=min_train, min_test=min_test,
+        experiment="GOLD_V14_HISTORICAL_FOUR_COMPONENT_RESEARCH",
+        label_status="KALSHI_REPORTED_UNVERIFIED",
+        feature_source="UNVERIFIED_PYTH_HISTORICAL_OHLC",
     )
+
+
+def compare_spot_research_models(
+    dataset_path: Path, *, min_train: int = 100, min_test: int = 30,
+) -> dict:
+    """Compare independent XAUUSD spot-direction proxy models without Pyth.
+
+    This cannot establish any predictive advantage for the Kalshi contract.
+    """
+    from .spot_research import inspect_spot_research, spot_research_rows, LABEL, SOURCE
+    doc = inspect_spot_research(Path(dataset_path))
+    return _compare_candidate_rows(
+        spot_research_rows(doc), min_train=min_train, min_test=min_test,
+        experiment="XAUUSD_15M_SPOT_ONLY_PROXY_COMPARISON",
+        label_status=LABEL, feature_source=SOURCE,
+    )
+
+
+def _compare_candidate_rows(
+    rows, *, min_train: int, min_test: int,
+    experiment: str, label_status: str, feature_source: str,
+) -> dict:
+    train, test = _split(rows, min_train=min_train, min_test=min_test)
     try:
         import numpy as np
         from sklearn.cluster import KMeans
@@ -152,11 +178,11 @@ def compare_research_models(
         t_macro = np.hstack([augmented_test, macro_matrix(test)])
         models["regime_with_asof_macro"] = _metrics(xgb(x_macro, t_macro), y_test)
     return {
-        "experiment": "GOLD_V14_HISTORICAL_FOUR_COMPONENT_RESEARCH",
+        "experiment": experiment,
         "research_only": True, "deployable": False,
         "trading_enabled": False, "models_saved": False,
-        "label_status": "KALSHI_REPORTED_UNVERIFIED",
-        "feature_source": "UNVERIFIED_PYTH_HISTORICAL_OHLC",
+        "label_status": label_status,
+        "feature_source": feature_source,
         "assumed_checkpoint_seconds": 480,
         "assumed_label_delay_hours": 24,
         "features_include_future_labels": False,
@@ -168,5 +194,5 @@ def compare_research_models(
         "train_max_label_available_ns": max(r.label_available_proxy_ns for r in train),
         "test_start_ns": min(r.decision_ns for r in test),
         "models": models,
-        "note": "Retrospective, provenance-limited research; not validated Pyth settlement or executable P/L.",
+        "note": "Retrospective proxy research only. This is not validated Kalshi settlement or executable after-fee P/L.",
     }
