@@ -69,7 +69,7 @@ def test_early_down_warning_with_model_quote_brti_and_aggressor_pressure():
     rows = []
     for i in range(35):
         j = max(0, i - 24)
-        rows.append(row(i, p=.82 - .012*j, mid=.80 - .009*j,
+        rows.append(row(i, p=.82 - .027*j, mid=.80 - .009*j,
                         brti=64080-3.2*j,
                         depth_yes=max(2., 25. - j), depth_no=30.+j,
                         signed=-6. if j else 0., total=10. if j else 0.))
