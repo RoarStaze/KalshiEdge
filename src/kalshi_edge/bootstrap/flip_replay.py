@@ -55,6 +55,7 @@ def evaluate_prediction_stream(
     pending: list[dict[str, Any]] = []
     last_event: dict[str, int] = {}
     last_ticker = None
+    last_epoch = None
     last_ts = None
     eligible_ticks = alerts = hits = misses = unresolved = invalid_lines = 0
     leads: list[float] = []
@@ -78,6 +79,7 @@ def evaluate_prediction_stream(
                 continue
             ts = item.prediction_ts_ns
             ticker = item.market_ticker
+            epoch = item.market_stream_epoch
             if not ticker or item.status != "OK" or not item.feed_quality.healthy:
                 abandon()
                 recent.clear()
@@ -85,13 +87,13 @@ def evaluate_prediction_stream(
                 continue
             # A disconnected, nonmonotonic or cross-market stream is not a
             # continuous observation of the future target event.
-            if (last_ticker != ticker or
+            if (last_ticker != ticker or last_epoch != epoch or
                     (last_ts is not None
                      and not 0 < ts-last_ts <= MAX_GAP_NS)):
                 abandon()
                 recent.clear()
                 last_event.clear()
-            last_ticker, last_ts = ticker, ts
+            last_ticker, last_epoch, last_ts = ticker, epoch, ts
             record = item.model_dump(mode="json")
             mid = _quote_mid(record)
             if mid is None:
