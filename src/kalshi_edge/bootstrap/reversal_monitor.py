@@ -15,8 +15,10 @@ NS = 1_000_000_000
 WINDOW_NS = 45 * NS
 MAX_AGE_NS = 5 * NS
 MAX_GAP_NS = 4 * NS
-FLIP_LIFETIME_NS = 20 * NS
 DIRECTION_HYSTERESIS = 0.06
+PRE_FLIP_WINDOW_SECONDS = 15
+PRE_FLIP_MIN_PROBABILITY_DRIFT = 0.055
+PRE_FLIP_MIN_QUOTE_DRIFT = 0.02
 
 
 def _unavailable() -> dict[str, Any]:
@@ -62,49 +64,65 @@ def _direction(p: float) -> str | None:
     return None
 
 
-def _recent_flip(series: list[dict[str, Any]], now_ns: int) -> dict[str, Any] | None:
-    """Require two sequential, decisive samples on both sides of a flip.
+def _pre_flip_warning(
+    series: list[dict[str, Any]], baseline: dict[str, Any], now_ns: int,
+) -> dict[str, Any] | None:
+    """Causal *early* model-side warning, never an already-confirmed flip.
 
-    An exchange quote move in the same direction is also required. This
-    prevents model-only midline noise from becoming a flip alert.
+    The model predicts end-of-round settlement, NOT an independently trained
+    short-horizon reversal probability. These provisional 15-second lookahead
+    thresholds are monitoring heuristics, requiring a model move AND a Kalshi
+    YES quote move. Future outcomes cannot be guaranteed or inferred here.
     """
-    confirmed_side = None
-    confirmed_mid = None
-    candidate = None
-    count = 0
-    last_ts = None
-    detected = None
-    for item in series:
-        side = _direction(item["p_yes"])
-        ts = item["prediction_ts_ns"]
-        if side is None:
-            candidate, count = None, 0
-            last_ts = ts
-            continue
-        if side == candidate and last_ts is not None and ts - last_ts <= MAX_GAP_NS:
-            count += 1
-        else:
-            candidate, count = side, 1
-        last_ts = ts
-        if count != 2 or side == confirmed_side:
-            continue
-        mid = _quote_mid(item)
-        if confirmed_side is not None and confirmed_mid is not None and mid is not None:
-            delta = mid - confirmed_mid
-            # 1.5 cents in Kalshi YES contract price, not 1.5% BTC.
-            price_confirmed = delta >= .015 if side == "UP" else delta <= -.015
-            if price_confirmed:
-                detected = {
-                    "direction": confirmed_side + "_TO_" + side,
-                    "detected_ts_ns": ts,
-                }
-        confirmed_side, confirmed_mid = side, mid
+    latest = series[-1]
+    p = latest["p_yes"]
+    if p == .5:
+        return None
+    current = "UP" if p > .5 else "DOWN"
+    target = "DOWN" if current == "UP" else "UP"
+    toward = -1 if current == "UP" else 1
+    # Old side must still be decisive; do not label an already completed
+    # p_yes 50% crossing as a prediction or recycle earlier confirmations.
+    if _direction(baseline["p_yes"]) != current:
+        return None
+    distance_to_cross = abs(p - .5)
+    if not .005 <= distance_to_cross <= .17:
+        return None
 
-    if detected is None or now_ns - detected["detected_ts_ns"] > FLIP_LIFETIME_NS:
+    mid = _quote_mid(latest)
+    baseline_mid = _quote_mid(baseline)
+    # The *exchange quote*, too, must remain on the old side. Otherwise
+    # the alert merely describes a price flip that has already occurred.
+    if mid is None or baseline_mid is None or (mid - .5) * -toward <= 0:
+        return None
+    delta_p = toward * (p - baseline["p_yes"])
+    delta_book = toward * (mid - baseline_mid)
+    if delta_p < PRE_FLIP_MIN_PROBABILITY_DRIFT or delta_book < PRE_FLIP_MIN_QUOTE_DRIFT:
+        return None
+    elapsed_s = (latest["prediction_ts_ns"] - baseline["prediction_ts_ns"]) / NS
+    if elapsed_s <= 0 or distance_to_cross / (delta_p / elapsed_s) > PRE_FLIP_WINDOW_SECONDS:
+        return None
+
+    # The newest observations must support the trend. A rebound should
+    # immediately clear the warning, not leave an old red/green alert lit.
+    recent = next(
+        (item for item in reversed(series[:-1])
+         if latest["prediction_ts_ns"] - item["prediction_ts_ns"] >= 2 * NS),
+        None,
+    )
+    if recent is None:
+        return None
+    recent_mid = _quote_mid(recent)
+    if (recent_mid is None
+            or toward * (p - recent["p_yes"]) < .008
+            or toward * (mid - recent_mid) < .005):
         return None
     return {
-        **detected,
-        "age_seconds": max(0, (now_ns - detected["detected_ts_ns"]) // NS),
+        "kind": "PRE_FLIP_WARNING",
+        "direction": target,
+        "current_direction": current,
+        "detected_ts_ns": latest["prediction_ts_ns"],
+        "age_seconds": max(0, (now_ns - latest["prediction_ts_ns"]) // NS),
     }
 
 
@@ -162,7 +180,7 @@ def assess_reversal_risk(
     adverse_book = max(0.0, -side_sign * (mid - old_mid))
     near_neutral = abs(p - .5)
 
-    alert = _recent_flip(contiguous, now_ns)
+    alert = _pre_flip_warning(contiguous, baseline, now_ns)
     if alert or adverse_p >= .05 or adverse_book >= .04 or near_neutral < .06:
         level = "HIGH"
     elif adverse_p >= .025 or adverse_book >= .02 or near_neutral < .15:

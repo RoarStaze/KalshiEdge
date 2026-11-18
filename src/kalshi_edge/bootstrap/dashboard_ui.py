@@ -255,7 +255,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
     </div>
     <div class="scalp-monitor-note" id="scalp-flip-detail" style="margin-bottom:0">Potential shifts only; no automatic trade execution.</div>
    </div>
-   <div class="scalp-monitor-disclaimer">Heuristic signal-instability alerts, not calibrated reversal odds or a profitable scalp guarantee.</div>
+   <div class="scalp-monitor-disclaimer">Early flip warnings are unvalidated heuristics, not guaranteed directional predictions or trade signals.</div>
   </section>
  </article>
  <div class="context">
@@ -450,17 +450,19 @@ function renderScalpMonitor(data){
     :"Insufficient, unhealthy or stale live market data; not safe to classify.");
  const alert=good?risk.flip_alert:null;
  const flip=el("scalp-flip-alert");
- if(alert&&["UP_TO_DOWN","DOWN_TO_UP"].includes(alert.direction)&&Number.isFinite(alert.age_seconds)&&alert.age_seconds<=20){
-   const isDown=alert.direction==="UP_TO_DOWN";
-   flip.className="scalp-flip-status active "+(isDown?"down":"up");
-   flip.textContent=(isDown?"UP → DOWN":"DOWN → UP")+" · POTENTIAL";
-   text("scalp-flip-detail","Model direction switched with Kalshi quote confirmation · detected "+alert.age_seconds+"s ago.");
+ if(alert&&alert.kind==="PRE_FLIP_WARNING"&&["UP","DOWN"].includes(alert.direction)
+   &&alert.current_direction===(alert.direction==="DOWN"?"UP":"DOWN")
+   &&Number.isFinite(alert.age_seconds)&&alert.age_seconds<=5){
+   flip.className="scalp-flip-status active "+(alert.direction==="DOWN"?"down":"up");
+   flip.textContent=alert.direction;
+   text("scalp-flip-detail","Early warning: model still "+alert.current_direction+
+     " · model and Kalshi quote moving toward "+alert.direction+" · not confirmed.");
  }else{
    flip.className="scalp-flip-status";
-   flip.textContent=good?"NO RECENT FLIP":"UNAVAILABLE";
+   flip.textContent=good?"MONITORING":"UNAVAILABLE";
    text("scalp-flip-detail",good
-     ?"Watching for a sustained direction change with quote confirmation."
-     :"Flip alerts paused until fresh data is restored.");
+     ?"No qualifying pre-flip warning. Watching live model and Kalshi quote movement."
+     :"Flip warnings paused until fresh market data is restored.");
  }
 }
 function renderLive(data){
