@@ -546,6 +546,14 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 if not isinstance(body, dict) or set(body) != {"preview_id"} or not isinstance(body["preview_id"], str):
                     raise TradingError("Expected a single valid preview ID")
                 ticker = self._manual_ticker()
+                # Allow an explicit manual SELL even while continuous AutoTrade
+                # is armed. Serialize the current-market skip against auto's
+                # in-flight order tick before attempting the exchange SELL.
+                preview_action = getattr(manual, "preview_action", None)
+                skip_auto = getattr(auto, "skip_market_for_manual_sell", None)
+                if (callable(preview_action) and callable(skip_auto)
+                        and preview_action(body["preview_id"]) == "SELL"):
+                    skip_auto(ticker)
                 result = manual.place(body["preview_id"], ticker)
                 self._json(200, result)
             except (TradingError, ValueError, TypeError, KeyError) as exc:
