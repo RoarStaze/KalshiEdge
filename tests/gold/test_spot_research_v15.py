@@ -146,3 +146,25 @@ def test_final_complete_fifteen_minute_window_is_not_dropped(tmp_path):
     make_csv(file, n=60)
     result = build_spot_research(file, tmp_path / "gold")
     assert result["candidate_research_rows"] == 3  # starts 00:15, 00:30, 00:45
+
+
+def test_optional_asof_financial_language_scores_cannot_use_future_news(tmp_path):
+    file = tmp_path / "xauusd.csv"
+    make_csv(file, n=300)
+    first_decision = START * 1_000_000 + (15 + 7) * 60 * 1_000_000_000
+    events = [
+        {"headline": "Market uncertainty falls", "published_ns": first_decision-12*1_000_000_000,
+         "first_observed_ns": first_decision-10*1_000_000_000, "score": .7},
+        {"headline": "Future price shock", "published_ns": first_decision+1_000_000_000,
+         "first_observed_ns": first_decision+2*1_000_000_000, "score": -1.0},
+    ]
+    result = build_spot_research(file, tmp_path / "gold", macro_events=events)
+    assert result["macro_status"] == "ASOF_NEWS_NONDEPLOYABLE"
+    rows = spot_research_rows(inspect_spot_research(Path(result["artifact_path"])))
+    assert rows[0].macro_count == 1
+    assert rows[0].macro_sentiment == .7
+    assert rows[1].macro_count == 2
+    with pytest.raises(ValueError, match="timestamp"):
+        build_spot_research(file, tmp_path / "gold", macro_events=[
+            {"headline": "Unverifiable news", "score": .9}
+        ])
