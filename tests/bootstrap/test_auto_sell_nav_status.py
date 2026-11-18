@@ -59,6 +59,6 @@ snapshot.position_yes="0.0000";
 snapshot.last_sell={status:"SOLD",ticker:"KXBTC15M-TEST",
                    realized_pnl_dollars:"-0.0074"};
 renderAutoPosition();
-if(!node.textContent.includes("SOLD · REALIZED P/L −$0.0074"))
+if(!node.textContent.includes("SOLD · REALIZED P/L −$0.0074 est."))
  throw Error("Confirmed sale status unavailable below AUTO");
 """)
