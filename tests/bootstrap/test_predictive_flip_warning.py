@@ -91,3 +91,43 @@ def test_flip_ui_only_says_target_up_or_down_not_confirmed_past_direction():
     assert 'Model direction switched with Kalshi quote confirmation' not in PAGE
     assert 'UP_TO_DOWN' not in PAGE
     assert 'DOWN_TO_UP' not in PAGE
+
+
+def test_browser_renders_only_up_down_or_monitoring_when_live():
+    """Execute the real rendering function, not just matching template text."""
+    import shutil
+    import subprocess
+    import pytest
+    from kalshi_edge.bootstrap.dashboard_ui import PAGE
+
+    if shutil.which("node") is None:
+        pytest.skip("node unavailable")
+    start = PAGE.index("function renderScalpMonitor(data){")
+    end = PAGE.index("function renderLive(data){", start)
+    body = PAGE[start:end]
+    harness = r'''
+const nodes={};
+const el=id=>nodes[id]||(nodes[id]={textContent:"",className:""});
+const text=(id,value)=>{el(id).textContent=String(value)};
+''' + body + r'''
+const now=1e12;
+const live=alert=>({status:"LIVE",server_time_ns:now,reversal_risk:{
+ level:"HIGH",observed_ts_ns:now,observation_count:16,flip_alert:alert}});
+const pre=(direction,current_direction)=>({
+ kind:"PRE_FLIP_WARNING",direction,current_direction,age_seconds:0});
+renderScalpMonitor(live(pre("DOWN","UP")));
+if(el("scalp-flip-alert").textContent!=="DOWN")throw Error("DOWN text wrong");
+if(!el("scalp-flip-detail").textContent.includes("model still UP"))
+ throw Error("DOWN not presented as early warning");
+renderScalpMonitor(live(pre("UP","DOWN")));
+if(el("scalp-flip-alert").textContent!=="UP")throw Error("UP text wrong");
+renderScalpMonitor(live(null));
+if(el("scalp-flip-alert").textContent!=="MONITORING")
+ throw Error("Stale or unqualified flip still shown");
+renderScalpMonitor({status:"DEGRADED",reversal_risk:{level:"UNAVAILABLE"}});
+if(el("scalp-flip-alert").textContent!=="UNAVAILABLE")
+ throw Error("Missing data must fail closed");
+'''
+    result = subprocess.run(["node", "-"], input=harness, text=True,
+                            capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
