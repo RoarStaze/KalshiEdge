@@ -170,11 +170,9 @@ def _pre_flip_warning(
     b0, b1 = _brti(baseline), _brti(latest)
     if strike is not None and b0 is not None and b1 is not None:
         extra_sources += 1
-        # BRTI is the relevant settlement reference, not a hypothetical trade.
-        # If it has ALREADY moved through the strike, we are too late to
-        # classify a pre-BRTI flip as an early warning.
-        if (b1 - strike) * -toward <= 0:
-            return None
+        # A BRTI strike breach may LEAD the Kalshi quote. Do not veto a
+        # warning while the Kalshi quote and model are still on the old side.
+        # This monitors Kalshi contract direction, not a historical BRTI flip.
         if toward * (b1 - b0) / strike * 10_000 >= .45:
             support.append("brti")
             extra_support += 1
