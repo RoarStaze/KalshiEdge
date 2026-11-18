@@ -44,6 +44,17 @@ h1{font-size:clamp(29px,4vw,42px);font-weight:700;letter-spacing:-1.6px;margin:8
 .lock-banner.locked .lock-heading{color:var(--cyan)}
 .lock-banner.pending .lock-heading{color:#c5c2b7}
 .lock-desc{font-size:12px;line-height:1.5;color:#d4dbe0;margin-top:8px}
+/* Position-only header: actual holdings, never archived forecast status. */
+.forecast .lock-banner.position-up{background:#102e29;border-color:#267b66;border-left-color:#36dda9}
+.forecast .lock-banner.position-down{background:#322329;border-color:#9b5263;border-left-color:#ff8197}
+.forecast .lock-banner.position-flat{background:#1b2629;border-color:#3b5356;border-left-color:#91aaa7}
+.forecast .lock-banner .lock-heading{font-weight:850}
+.forecast .lock-banner.position-up .lock-heading{color:#62edbc}
+.forecast .lock-banner.position-down .lock-heading{color:#ff91a3}
+.forecast .lock-banner .lock-desc.pnl-gain{color:#53e6b2;font-weight:750;font-variant-numeric:tabular-nums}
+.forecast .lock-banner .lock-desc.pnl-loss{color:#ff7d93;font-weight:750;font-variant-numeric:tabular-nums}
+.forecast .lock-banner .lock-desc.pnl-pending{color:#a6bdba;font-weight:650}
+
 .direction{font-size:clamp(62px,8vw,83px);line-height:1.05;font-weight:300;letter-spacing:-3px;margin:12px 0 12px}
 .direction.up{color:var(--mint)}.direction.down{color:var(--pink)}.direction.skip{color:var(--amber)}
 .direction.waiting{font-size:42px;letter-spacing:-1px;color:#9bafc3;margin:22px 0}
@@ -209,7 +220,7 @@ footer{font-size:11px;line-height:1.8;color:#849baf;margin-top:24px}
 <section class="layout" aria-label="Current round">
  <article class="card forecast">
   <div class="panel-label">THIS ROUND'S FORECAST</div>
-  <div class="lock-banner pending" id="lock-banner"><div class="lock-heading" id="lock-heading">◌ &nbsp; WAITING FOR MARKET</div><div class="lock-desc" id="lock-description">Connecting to a currently open Kalshi BTC market.</div></div>
+  <div class="lock-banner position-flat" id="lock-banner" aria-label="Actual held position and estimated unrealized profit or loss"><div class="lock-heading" id="lock-heading">POSITION UPDATING</div><div class="lock-desc pnl-pending" id="lock-description" role="status" aria-live="polite">UNREALIZED P/L —</div></div>
   <div class="direction waiting" id="direction">WAITING</div>
   <div class="direction-caption" id="direction-caption">No current model call available.</div>
   <div class="confidence-row"><div class="confidence-value" id="confidence">—</div><div><div class="confidence-label">Forecast probability</div><div class="confidence-sub" id="confidence-sub">Probability of the predicted direction · model estimate, not accuracy</div></div></div>
@@ -352,6 +363,64 @@ const pill=s=>{const span=document.createElement("span");span.className="pill "+
 let live=null,history=null;
 function countdown(ms){if(!Number.isFinite(ms))return "—";let sec=Math.max(0,Math.floor((ms-Date.now())/1000));return String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")}
 function clock(){if(!live||!live.market_close_ts_ns)return;text("round-countdown",countdown(live.market_close_ts_ns/1e6))}
+/* Reuse verified holdings from the Trade card's existing authenticated GET.
+   Never let a model forecast or a simulated order impersonate an owned position. */
+let positionLive=null;
+document.addEventListener("kalshiedge:position-snapshot",event=>{
+ const item=event.detail;
+ positionLive=item&&typeof item==="object"&&typeof item.ticker==="string"&&
+    /^KXBTC15M-[A-Za-z0-9-]+$/.test(item.ticker)?item:null;
+ renderPositionBanner(live);
+});
+function renderPositionBanner(data){
+ const banner=el("lock-banner");
+ const details=el("lock-description");
+ const now=Date.now();
+ const status=positionLive,valid=!!status&&
+   (!data?.market_ticker||status.ticker===data.market_ticker)&&
+   Number.isFinite(status.observed_at_ms)&&
+   now>=status.observed_at_ms&&now-status.observed_at_ms<=10000;
+ if(!valid){
+  banner.className="lock-banner position-flat";
+  details.className="lock-desc pnl-pending";
+  text("lock-heading","POSITION UPDATING");
+  text("lock-description","UNREALIZED P/L —");
+  return;
+ }
+ const raw=status.position_yes;
+ if(typeof raw!=="string"||!/^-?\\d+(?:\\.\\d+)?$/.test(raw)){
+  banner.className="lock-banner position-flat";
+  details.className="lock-desc pnl-pending";
+  text("lock-heading","POSITION UPDATING");
+  text("lock-description","UNREALIZED P/L —");
+  return;
+ }
+ const held=Number(raw);
+ if(!Number.isFinite(held)||held===0){
+  banner.className="lock-banner position-flat";
+  details.className="lock-desc pnl-pending";
+  text("lock-heading","NO POSITION");
+  text("lock-description","UNREALIZED P/L —");
+  return;
+ }
+ const up=held>0;
+ banner.className="lock-banner "+(up?"position-up":"position-down");
+ text("lock-heading",up?"BOUGHT UP":"BOUGHT DOWN");
+ const value=status.position_unrealized_pnl_dollars;
+ const validPnl=status.position_pnl_status==="ESTIMATED"&&
+   typeof value==="string"&&/^-?\\d+(?:\\.\\d+)?$/.test(value)&&
+   Number.isFinite(Number(value));
+ if(!validPnl){
+  details.className="lock-desc pnl-pending";
+  text("lock-description","UNREALIZED P/L —");
+  return;
+ }
+ const profit=Number(value);
+ const shown=Math.abs(profit)<.01&&profit!==0?
+   Math.abs(profit).toFixed(4):Math.abs(profit).toFixed(2);
+ details.className="lock-desc "+(profit<0?"pnl-loss":"pnl-gain");
+ text("lock-description","UNREALIZED P/L "+(profit<0?"−":"+")+"$"+shown+" est.");
+}
 function renderScalpMonitor(data){
  const risk=data.reversal_risk||{},level=["LOW","MEDIUM","HIGH"].includes(risk.level)&&data.status==="LIVE"
    ?risk.level:"UNAVAILABLE";
@@ -401,13 +470,7 @@ function renderLive(data){
    text("lock-time-label",locked?"Locked at":"Forecast locks at");
  }else{text("lock-time","—");text("lock-time-label","Forecast locks at")}
  clock();
- const banner=el("lock-banner");
- banner.className="lock-banner "+(locked?"locked":current&&data.checkpoint_ts_ns/1e6<=Date.now()?"pending":"");
- if(locked){text("lock-heading","▣  8-MIN FINAL FORECAST ARCHIVED · LIVE MONITOR ON");text("lock-description","The 8-minute historical record is frozen; live probability and scalp diagnostics continue until market close.");
- }else if(current&&data.checkpoint_ts_ns/1e6>Date.now()){
-   text("lock-heading","♧  LIVE THROUGH MARKET CLOSE");text("lock-description","The live estimate keeps updating; an immutable 8-minute record is archived at "+local(data.checkpoint_ts_ns/1e6)+".");
- }else if(current){text("lock-heading","◌  8-MIN RECORD PENDING · LIVE MONITOR ON");text("lock-description","Live probability can still change. The historical checkpoint record has not been verified.");
- }else{text("lock-heading","◌  WAITING FOR MARKET");text("lock-description","Awaiting current Kalshi BTC market discovery and fresh predictions.")}
+ renderPositionBanner(data);
  const side=p?.status==="OK"?p.predicted_side:null;
  const display=side==="ABOVE"?"UP":side==="BELOW"?"DOWN":side==="SKIP"?"SKIP":current?"WAITING":"WAITING";
  const direction=el("direction");direction.className="direction "+(display==="UP"?"up":display==="DOWN"?"down":display==="SKIP"?"skip":"waiting");direction.textContent=display;
