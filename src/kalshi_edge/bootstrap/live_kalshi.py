@@ -50,6 +50,10 @@ class LiveQuote(BaseModel):
     source_ts_ns: int = Field(gt=0)
     yes_bid: float | None = Field(default=None, ge=0.0, le=1.0)
     yes_ask: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Kalshi's YES and NO book levels are the two sides of one YES quote.
+    # Preserve best-level queue size without inventing deeper-book liquidity.
+    yes_bid_depth: float | None = Field(default=None, ge=0.0)
+    yes_ask_depth: float | None = Field(default=None, ge=0.0)
     exchange_ts_ns: int | None = Field(default=None, gt=0)
 
 
@@ -315,6 +319,8 @@ class KalshiLiveFeed:
             source_ts_ns=receive_ts_ns,
             yes_bid=float(max(yes)) if yes else None,
             yes_ask=float(min(asks)) if asks else None,
+            yes_bid_depth=float(yes[max(yes)]) if yes else None,
+            yes_ask_depth=float(asks[min(asks)]) if asks else None,
             exchange_ts_ns=exchange_ts_ns,
         )
 
