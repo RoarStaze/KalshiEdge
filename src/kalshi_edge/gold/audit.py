@@ -210,6 +210,18 @@ def main(argv: list[str] | None = None) -> int:
         "--verify-settlement-evidence", type=Path, default=None,
         help="fail-closed audit of gold inventory vs an unattested Pyth history import",
     )
+    modes.add_argument(
+        "--fetch-pyth-history", action="store_true",
+        help="download bounded Pyth Pro historical OHLC using PYTH_API_KEY in environment; no oracle verification",
+    )
+    modes.add_argument(
+        "--build-historical-research", type=Path, default=None,
+        help="reconstruct nondeployable gold research rows from a gold inventory and Pyth history imports",
+    )
+    modes.add_argument(
+        "--compare-historical-research", type=Path, default=None,
+        help="compare XGBoost, lagged time-series, and regime research models on a held-out dataset",
+    )
     parser.add_argument("--interval-seconds", type=int, default=30,
                         help="continuous gold collector polling interval, 10..3600 seconds")
     parser.add_argument("--max-cycles", type=int, default=None,
@@ -222,6 +234,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="Unix end second of downloaded OHLC request (required for import)")
     parser.add_argument("--pyth-channel", choices=("real_time", "fixed_rate@200ms"),
                         default="real_time")
+    parser.add_argument("--pyth-artifact", type=Path, action="append", default=[],
+                        help="SHA-256-named Pyth historical import for research-only dataset (repeatable)")
+    parser.add_argument("--macro-events", type=Path, default=None,
+                        help="optional JSON list of timestamped, previously scored research headlines")
+    parser.add_argument("--finbert-local-dir", type=Path, default=None,
+                        help="optional locally installed FinBERT model folder; no network downloads")
+    parser.add_argument("--min-train", type=int, default=100,
+                        help="minimum historical research training rows")
+    parser.add_argument("--min-test", type=int, default=30,
+                        help="minimum historical research holdout rows")
     parser.add_argument("--inventory-artifact", type=Path, default=None,
                         help="hashed gold inventory to use with settlement evidence audit")
     parser.add_argument("--oracle-history-artifact", type=Path, default=None,
@@ -287,6 +309,42 @@ def main(argv: list[str] | None = None) -> int:
         report = audit_settlement_evidence(
             args.inventory_artifact, args.verify_settlement_evidence,
             args.output_root,
+        )
+    elif args.fetch_pyth_history:
+        if args.pyth_from_ts is None or args.pyth_to_ts is None:
+            parser.error("--fetch-pyth-history requires --pyth-from-ts and --pyth-to-ts")
+        key = os.environ.get("PYTH_API_KEY")
+        if not key:
+            parser.error("--fetch-pyth-history requires PYTH_API_KEY in the environment")
+        from .pyth_fetch import fetch_pyth_backfill
+        report = fetch_pyth_backfill(
+            args.output_root, start_ts=args.pyth_from_ts,
+            end_ts=args.pyth_to_ts, api_key=key,
+            channel=args.pyth_channel,
+        )
+    elif args.build_historical_research is not None:
+        if not args.pyth_artifact:
+            parser.error("--build-historical-research requires --pyth-artifact")
+        events = []
+        if args.macro_events is not None:
+            events = json.loads(args.macro_events.read_text(encoding="utf-8"))
+            if not isinstance(events, list):
+                parser.error("--macro-events must be a JSON list")
+        if args.finbert_local_dir is not None:
+            if args.macro_events is None:
+                parser.error("--finbert-local-dir requires --macro-events")
+            from .macro_context import score_finbert_local
+            events = score_finbert_local(events, local_model_path=args.finbert_local_dir)
+        from .historical_research import assemble_research_dataset
+        report = assemble_research_dataset(
+            args.build_historical_research, args.pyth_artifact,
+            args.output_root, macro_events=events,
+        )
+    elif args.compare_historical_research is not None:
+        from .research_models import compare_research_models
+        report = compare_research_models(
+            args.compare_historical_research,
+            min_train=args.min_train, min_test=args.min_test,
         )
     else:
         report = collect_contract_audit(args.output_root, sample_markets=args.sample_markets)
