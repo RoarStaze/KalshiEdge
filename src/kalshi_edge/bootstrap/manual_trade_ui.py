@@ -45,6 +45,9 @@ STYLE = r"""
 .manual-trade .mt-auto-arm:disabled{opacity:.45;cursor:not-allowed}
 .manual-trade .mt-auto-arm.armed{background:#3a3020;color:#f6d889;border-color:#a18748}
 .manual-trade .mt-auto-status{font-size:12px;line-height:1.6;margin-top:9px;color:#f1cc70;min-height:19px}
+.manual-trade .mt-auto-position{font-size:12px;font-weight:800;line-height:1.5;margin-top:8px;color:#a8c0bc;font-variant-numeric:tabular-nums}
+.manual-trade .mt-auto-position.gain{color:#43e8b0}
+.manual-trade .mt-auto-position.loss{color:#ff7e90}
 .manual-trade .mt-auto-history{margin-top:22px;border-top:1px solid #49433a;padding-top:17px}
 .manual-trade .mt-auto-history-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:12px;color:#ebd18f;font-weight:800}
 .manual-trade .mt-auto-performance{border:1px solid #344540;background:#172320;border-radius:10px;padding:10px 12px;margin-bottom:12px;color:#a9b9b5;font-size:12px;line-height:1.6}
@@ -156,6 +159,7 @@ SECTION = r"""
    <button type="button" id="manual-submit" class="mt-action" disabled>Buy with 1-Click</button>
    <button type="button" id="manual-auto-arm" class="mt-auto-arm mt-hidden" disabled>Arm AutoTrade</button>
    <div class="mt-auto-status mt-hidden" id="manual-auto-status" role="status" aria-live="polite"></div>
+   <div class="mt-auto-position mt-hidden" id="manual-auto-position-status" role="status" aria-live="polite">NO POSITION</div>
    <div class="mt-warning" id="manual-status" role="status" aria-live="polite">Awaiting a live Kalshi market…</div>
    <div class="mt-fine">Real orders · quotes and fees can change · unfilled IOC quantity is canceled</div>
    <section class="mt-auto-history mt-hidden" id="manual-auto-history" aria-label="AutoTrade execution history">
@@ -202,6 +206,35 @@ SCRIPT = r"""
  let autoCurrent={state:"IDLE"},lastHistoryFetch=0,autoHistoryRows=[];
  const signedPnl=v=>typeof v==="string"&&/^-?\d+(\.\d+)?$/.test(v)?
     (v.startsWith("-")?"−":"+")+"$"+v.replace(/^-/, ""):"—";
+ const compactPnl=v=>{
+   if(typeof v!=="string"||!/^-?[0-9]+(?:[.][0-9]+)?$/.test(v))return "—";
+   const value=Number(v);if(!Number.isFinite(value))return "—";
+   const amount=Math.abs(value)<.01&&value!==0?
+      Math.abs(value).toFixed(4):Math.abs(value).toFixed(2);
+   return (value<0?"−":"+")+"$"+amount;
+ };
+ function renderAutoPosition(){
+   const target=byId("manual-auto-position-status");
+   target.classList.toggle("mt-hidden",!(action==="BUY"&&autoSelected));
+   const raw=snapshot?.position_yes;
+   const held=typeof raw==="string"&&/^-?[0-9]+(?:[.][0-9]+)?$/.test(raw)
+     ?Number(raw):NaN;
+   let message="POSITION UPDATING",pnl=null;
+   if(Number.isFinite(held)&&held!==0){
+     pnl=snapshot?.pnl_status==="ESTIMATED"?snapshot.unrealized_pnl_dollars:null;
+     message=(held>0?"BOUGHT UP":"BOUGHT DOWN")+" · UNREALIZED P/L "+compactPnl(pnl);
+   }else if(Number.isFinite(held)&&held===0){
+     const sold=snapshot?.last_sell;
+     if(sold?.status==="SOLD"&&sold.ticker===snapshot.ticker){
+       pnl=sold.realized_pnl_dollars;
+       message="SOLD · REALIZED P/L "+compactPnl(pnl);
+     }else{message="NO POSITION";}
+   }
+   target.className="mt-auto-position"+(action==="BUY"&&autoSelected?"":" mt-hidden")+
+     (typeof pnl==="string"&&pnl.startsWith("-")?" loss":
+       typeof pnl==="string"&&compactPnl(pnl)!=="—"?" gain":"");
+   target.textContent=message;
+ }
  function renderAutoPayout(){
   if(action!=="BUY"||!autoSelected)return;
   const current=autoHistoryRows.find(entry=>snapshot&&entry.ticker===snapshot.ticker&&entry.max_payout_dollars!=null);
