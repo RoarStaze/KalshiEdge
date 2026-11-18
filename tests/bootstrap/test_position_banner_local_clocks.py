@@ -123,7 +123,7 @@ if(nodes["lock-description"].textContent!=="REALIZED P/L −$0.0074")
  throw Error("signed sale loss missing");
 positionLive.last_sell.realized_pnl_dollars="0.2350";
 renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
-if(nodes["lock-description"].textContent!=="REALIZED P/L +$0.23")
+if(nodes["lock-description"].textContent!=="REALIZED P/L +$0.2350")
  throw Error("positive sale profit missing");
 positionLive.last_sell.ticker="KXBTC15M-OTHER";
 renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
