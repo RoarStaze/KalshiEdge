@@ -397,10 +397,22 @@ function renderPositionBanner(data){
  }
  const held=Number(raw);
  if(!Number.isFinite(held)||held===0){
+  const sold=status.last_sell;
+  const confirmed=!!sold&&sold.status==="SOLD"&&sold.ticker===status.ticker;
   banner.className="lock-banner position-flat";
-  details.className="lock-desc pnl-pending";
-  text("lock-heading","NO POSITION");
-  text("lock-description","UNREALIZED P/L —");
+  text("lock-heading",confirmed?"SOLD":"NO POSITION");
+  const profit=confirmed&&typeof sold.realized_pnl_dollars==="string"&&
+    /^-?[0-9]+(?:[.][0-9]+)?$/.test(sold.realized_pnl_dollars)
+      ?Number(sold.realized_pnl_dollars):NaN;
+  if(!Number.isFinite(profit)){
+   details.className="lock-desc pnl-pending";
+   text("lock-description",confirmed?"REALIZED P/L —":"UNREALIZED P/L —");
+  }else{
+   const amount=Math.abs(profit)<.01&&profit!==0?
+     Math.abs(profit).toFixed(4):Math.abs(profit).toFixed(2);
+   details.className="lock-desc "+(profit<0?"pnl-loss":"pnl-gain");
+   text("lock-description","REALIZED P/L "+(profit<0?"−":"+")+"$"+amount);
+  }
   return;
  }
  const up=held>0;
