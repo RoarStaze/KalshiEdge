@@ -130,3 +130,15 @@ def test_pre_flip_signal_does_not_survive_crossing():
     after=run(rows)
     assert before["flip_alert"] is None or before["flip_alert"]["direction"] == "DOWN"
     assert after["flip_alert"] is None
+
+
+def test_same_ticker_websocket_reconnect_does_not_stitch_old_trends():
+    rows=[row(i) for i in range(35)]
+    for item in rows[:30]:
+        item["market_stream_epoch"]=1
+    for item in rows[30:]:
+        item["market_stream_epoch"]=2
+    assert run(rows)["level"] == "UNAVAILABLE"
+    for item in rows:
+        item["market_stream_epoch"]=2
+    assert run(rows)["level"] == "LOW"
