@@ -36,7 +36,8 @@ def test_approved_price_and_time_hero_is_in_main_dashboard():
     assert "CURRENT PRICE" in page
     assert "ROUND CLOSES IN" in page
     assert "Kalshi BRTI" in page
-    assert "America/New_York" in page
+    assert "America/New_York" not in page
+    assert 'timeZoneName:"short"' in page
     assert "font-variant-numeric:tabular-nums" in page
 
 
