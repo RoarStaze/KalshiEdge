@@ -64,7 +64,8 @@ def test_integration_preserves_original_forecast_and_live_status_elements():
     for id_value in ("direction", "confidence", "record-details", "strike", "btc", "train-now", "history-rows"):
         assert f'id="{id_value}"' in page
     assert "THIS ROUND'S FORECAST" in page
-    assert "FINAL FORECAST" in page
+    assert "Forecast record details" in page
+    assert "8-MIN FINAL FORECAST ARCHIVED · LIVE MONITOR ON" not in page
     assert "setInterval(refreshLive" in page
 
 def test_forecast_retains_original_page_grid_and_card_dimensions():
