@@ -61,6 +61,7 @@ class StratPaperTrader:
         self._last_signal = "DISARMED"
         self._last_speed = 0.0
         self._last_ratio: float | None = None
+        self._last_ask_cents: str | None = None
 
     def _market(self, now: int) -> tuple[str, int] | None:
         try:
@@ -152,6 +153,7 @@ class StratPaperTrader:
                 "speed_cents_per_second": round(self._last_speed, 3),
                 "acceleration_ratio": self._last_ratio,
                 "market_ticker": self._ticker,
+                "up_ask_cents": self._last_ask_cents,
                 "samples": len(self._samples),
                 "scan_interval_seconds": 0.75,
                 "max_cycles_per_market": MAX_CYCLES,
@@ -193,7 +195,8 @@ class StratPaperTrader:
 
     def _enter(self, quote: UpQuote, close: int, now: int, stats: dict) -> None:
         price = quote.ask + SLIPPAGE
-        if price >= D("1") or quote.bid_depth <= 0:
+        # The actual simulated entry must also remain inside the user cap.
+        if price > D("0.85") or quote.bid_depth <= 0:
             self._last_signal = "NO_SAFE_SIMULATED_ENTRY"
             return
         budget = min(self._budget, stats["cash"])
@@ -251,6 +254,7 @@ class StratPaperTrader:
                 self._last_signal = "WAITING_FOR_FRESH_MARKET"
                 return self.status()
             if self._ticker != ticker:
+                self._last_ask_cents = None
                 self._samples.clear()
                 self._ticker = ticker
                 self._exit_latched = False
@@ -258,12 +262,16 @@ class StratPaperTrader:
                 if opened is not None and not self._settle(opened, now):
                     self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
                 return self.status()
+            if opened is None and not self._enabled:
+                self._last_signal = "DISARMED_OR_PAUSED"
+                return self.status()
             try:
                 quote = self._quote(ticker, now)
             except Exception as exc:
                 self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
                 return self.status()
             self._samples.append(quote)
+            self._last_ask_cents = format(quote.ask * 100, ".2f")
             remain = (close - now) / NS
             signal = evaluate_up_momentum(
                 list(self._samples), remain,
