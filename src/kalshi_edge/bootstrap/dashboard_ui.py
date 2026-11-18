@@ -408,8 +408,9 @@ function renderPositionBanner(data){
    details.className="lock-desc pnl-pending";
    text("lock-description",confirmed?"REALIZED P/L —":"UNREALIZED P/L —");
   }else{
-   const amount=Math.abs(profit)<.01&&profit!==0?
-     Math.abs(profit).toFixed(4):Math.abs(profit).toFixed(2);
+   const exact=Number(sold.realized_pnl_dollars).toFixed(4);
+   const amount=Math.abs(profit).toFixed(4).endsWith("00")
+     ?Math.abs(profit).toFixed(2):exact.replace(/^-/, "");
    details.className="lock-desc "+(profit<0?"pnl-loss":"pnl-gain");
    text("lock-description","REALIZED P/L "+(profit<0?"−":"+")+"$"+amount);
   }
