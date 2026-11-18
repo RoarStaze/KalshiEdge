@@ -779,7 +779,32 @@ class ManualTrader:
                 max_payout = _money(fills)
             else:
                 actual_proceeds = _money(principal - fee_paid) if fee_paid is not None else None
+        # Actual liquidation proceeds/fees come from the exchange response.
+        # Never estimate a realized gain without a fresh matching cost basis.
+        realized = None
+        if data["action"] == "SELL" and fills > 0 and actual_proceeds is not None:
+            basis = working.get("position_exposure_dollars")
+            held = Decimal(working["position_yes"])
+            if basis is not None and held != 0:
+                purchase_basis = Decimal(basis)
+                if purchase_basis.is_finite() and purchase_basis >= 0:
+                    allocated = purchase_basis * fills / abs(held)
+                    realized = _money(Decimal(actual_proceeds) - allocated)
+        complete_sell = (
+            data["action"] == "SELL" and data.get("sell_all") is True
+            and fills > 0 and fills == Decimal(working["count"])
+            and fills == abs(Decimal(working["position_yes"]))
+        )
+        if complete_sell:
+            with self._account_lock:
+                self._last_sell = {
+                    "ticker": data["ticker"], "status": "SOLD",
+                    "outcome": data["outcome"],
+                    "realized_pnl_dollars": realized,
+                    "fill_count": _shares(fills),
+                }
         return {
+            "realized_pnl_dollars": realized,
             "status": "FILLED" if fills == Decimal(working["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
             "order_id": order_id, "ticker": data["ticker"],
             "action": data["action"], "outcome": data["outcome"],
