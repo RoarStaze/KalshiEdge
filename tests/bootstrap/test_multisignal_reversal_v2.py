@@ -124,7 +124,7 @@ def test_pre_flip_signal_does_not_survive_crossing():
     rows = []
     for i in range(36):
         j = max(0,i-24)
-        rows.append(row(i,p=.82-.015*j,mid=.78-.012*j,
+        rows.append(row(i,p=.82-.03*j,mid=.78-.012*j,
                         brti=64100-4*j,depth_yes=6,depth_no=40))
     before=run(rows[:35])
     after=run(rows)
