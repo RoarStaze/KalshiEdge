@@ -26,6 +26,7 @@ from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
 from .round_price_ui import integrate_round_price_hero
 from .site_pages import render_site_page
+from .strat_ui import render_strat_page
 from kalshi_edge.gold.research_ui import render_gold_page
 from kalshi_edge.gold.experiment import gold_experiment_status
 from .api_credentials_ui import integrate_api_credentials
@@ -344,7 +345,7 @@ def read_final_history(root: Path) -> dict[str, Any]:
     }
 
 
-def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_trader=None, auto_trader=None, paper_scalper=None) -> type[BaseHTTPRequestHandler]:
+def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_vault=None, manual_trader=None, auto_trader=None, paper_scalper=None, strat_trader=None) -> type[BaseHTTPRequestHandler]:
     from .training_cycle import TrainingController, CycleError
     from kalshi_edge.trading.paper import PaperTrader  # lazy: paper imports final_history
     training_controller = controller or TrainingController(root)
@@ -367,6 +368,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                         history_path=root / "data" / "autotrade_history.sqlite3")
         if manual is not None else None
     )
+
+    strat = strat_trader
+    strat_page = render_strat_page().encode("utf-8")
 
     # Build the three local routes once. Do not inject AutoTrader UI;
     # legacy signed API routes remain available to authorized localhost tools.
@@ -393,6 +397,52 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        def _strat_get(self) -> None:
+            if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
+                self._json(403, {"error": "Local host required"})
+                return
+            if strat is None:
+                self._json(503, {"error": "Strat experimental worker unavailable"})
+                return
+            self._json(200, strat.status())
+
+        def _strat_post(self) -> None:
+            origin = f"http://127.0.0.1:{self.server.server_port}"
+            if (self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}"
+                    or self.headers.get("Origin") != origin
+                    or self.headers.get("Content-Type") != "application/json"
+                    or self.headers.get("X-KalshiEdge-Action") != "strat"
+                    or self.headers.get("Sec-Fetch-Site", "same-origin")
+                    not in ("same-origin", "none")):
+                self._json(403, {"error": "Same-origin Strat action required"})
+                return
+            if strat is None:
+                self._json(503, {"error": "Strat experimental worker unavailable"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "-1")
+                if not 0 <= length <= 128:
+                    raise ValueError("Invalid Strat action size")
+                payload = json.loads(self.rfile.read(length))
+                if self.path == "/api/strat/arm":
+                    if (not isinstance(payload, dict) or set(payload) != {"amount"}
+                            or not isinstance(payload["amount"], str)):
+                        raise ValueError("Strat arm accepts only a dollar amount")
+                    result = strat.arm(payload["amount"])
+                elif self.path == "/api/strat/pause":
+                    if payload != {}:
+                        raise ValueError("Strat pause accepts no overrides")
+                    result = strat.pause()
+                else:
+                    self._json(404, {"error": "Unknown Strat action"})
+                    return
+                self._json(200, result)
+            except (ValueError, TypeError, KeyError) as exc:
+                self._json(409, {"error": str(exc)[:160]})
+            except Exception:
+                LOG.exception("Strat control action failed")
+                self._json(503, {"error": "Strat control failed; inspect logs"})
 
         def _paper_scalp_get(self) -> None:
             if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
@@ -628,6 +678,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self._json(404, {"error": "unknown AutoTrader action"})
 
         def do_POST(self) -> None:
+            if self.path.startswith("/api/strat/"):
+                self._strat_post()
+                return
             if self.path.startswith("/api/paper-scalp/"):
                 self._paper_scalp_post()
                 return
@@ -703,6 +756,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 return False
 
         def do_GET(self) -> None:
+            if self.path == "/api/strat/status":
+                self._strat_get()
+                return
             if self.path == "/api/paper-scalp/status":
                 self._paper_scalp_get()
                 return
@@ -734,7 +790,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             if path == "/trade" and not self._has_saved_credentials():
                 self._local_redirect("/api")
                 return
-            if path in ("/trade", "/train", "/history", "/api"):
+            if path == "/strat":
+                content = strat_page
+                kind = "text/html; charset=utf-8"
+            elif path in ("/trade", "/train", "/history", "/api"):
                 content = routed_pages[path[1:]]
                 kind = "text/html; charset=utf-8"
             elif path in ("/gold", "/gold/train", "/gold/history", "/gold/data"):
@@ -865,6 +924,11 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         root, lambda: read_live_dashboard(root),
         settlement_reader=verified_paper_settlement,
     )
+    from kalshi_edge.trading.strat_paper import StratPaperTrader
+    strat_trader = StratPaperTrader(
+        root, lambda: read_live_dashboard(root),
+        settlement_reader=verified_paper_settlement,
+    )
     from kalshi_edge.trading.armed_autotrade import ArmedAutoTrader
     auto_trader = ArmedAutoTrader(
         manual_trader, lambda: read_live_dashboard(root),
@@ -874,6 +938,10 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         target=paper_trader.run_forever, args=(stop,),
         name="kalshi-paper-autotrader", daemon=True,
     )
+    strat_worker = threading.Thread(
+        target=strat_trader.run_forever, args=(stop,),
+        name="kalshiedge-experimental-strat", daemon=True,
+    )
     scalp_worker = threading.Thread(
         target=paper_scalper.run_forever, args=(stop,),
         name="kalshiedge-paper-scalp-monitor", daemon=True,
@@ -882,7 +950,7 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         ("127.0.0.1", port),
         _make_handler(root, controller=controller, paper_trader=paper_trader,
                       credential_vault=credential_vault, manual_trader=manual_trader, auto_trader=auto_trader,
-                      paper_scalper=paper_scalper),
+                      paper_scalper=paper_scalper, strat_trader=strat_trader),
     )
     server.daemon_threads = True
     # Resume the same verified training run after application shutdown.
@@ -895,6 +963,7 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     worker.start()
     paper_worker.start()
     scalp_worker.start()
+    strat_worker.start()
     print(f"KalshiEdge final history: http://127.0.0.1:{port}/", flush=True)
     print("Read-only local webpage; Ctrl+C to stop.", flush=True)
     try:
@@ -905,11 +974,14 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         stop.set()
         paper_trader.enable(False)
         paper_scalper.pause()
+        strat_trader.pause()
         controller.stop()
         server.server_close()
         worker.join(timeout=2)
         paper_worker.join(timeout=3)
         scalp_worker.join(timeout=3)
+        strat_worker.join(timeout=3)
+        strat_trader.close()
         paper_scalper.close()
         paper_trader.market_client.close()
         if auto_trader is not None:
