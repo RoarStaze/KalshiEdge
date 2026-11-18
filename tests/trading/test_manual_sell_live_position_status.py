@@ -85,3 +85,57 @@ def test_partial_sell_never_claims_full_exit(tmp_path):
     assert result["status"] == "PARTIAL"
     assert trader.market(TICKER)["last_sell"] is None
     assert trader.market(TICKER)["held_side"] == "UP"
+
+
+def test_manual_sell_http_path_suppresses_reentry_before_exchange_place(tmp_path, monkeypatch):
+    """A manual SELL request skips same-round AUTO before any order action."""
+    import threading
+    from http.server import ThreadingHTTPServer
+    import httpx
+    from kalshi_edge.bootstrap import final_history
+
+    monkeypatch.setattr(final_history, "read_live_dashboard",
+                        lambda *_a, **_k: {"market_ticker": TICKER})
+    actions = []
+
+    class FakeManual:
+        def preview_action(self, preview_id):
+            assert preview_id == "sell-1"
+            return "SELL"
+
+        def place(self, preview_id, ticker):
+            actions.append(("place", ticker))
+            return {"status": "FILLED", "ticker": ticker, "action": "SELL",
+                    "outcome": "UP", "fill_count": "1.00"}
+
+    class FakeAuto:
+        def skip_market_for_manual_sell(self, ticker):
+            actions.append(("skip_auto", ticker))
+            return True
+
+    class FakeVault:
+        def exists(self):
+            return True
+
+    handler = final_history._make_handler(
+        tmp_path, manual_trader=FakeManual(), auto_trader=FakeAuto(),
+        credential_vault=FakeVault()
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = "http://127.0.0.1:" + str(server.server_port)
+        with httpx.Client(timeout=5, trust_env=False) as client:
+            response = client.post(
+                base + "/api/manual-trade/order",
+                headers={"Origin": base, "X-KalshiEdge-Action": "manual-trade",
+                         "Sec-Fetch-Site": "same-origin"},
+                json={"preview_id": "sell-1"},
+            )
+        assert response.status_code == 200, response.text
+        assert actions == [("skip_auto", TICKER), ("place", TICKER)]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
