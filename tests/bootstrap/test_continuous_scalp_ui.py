@@ -84,3 +84,32 @@ def test_trade_card_displays_flip_alert_below_reversal_risk_and_uses_live_probab
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_monitor_stays_available_after_prediction_log_exceeds_tail_limit(tmp_path):
+    """The monitor must discard a partial line, not the entire 512-KiB tail."""
+    now_ns = CLOSE - 250 * NS
+    day = datetime.fromtimestamp(now_ns / NS, timezone.utc).date().isoformat()
+    path = tmp_path / "predictions" / day / "predictions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        # A partial, invalid historic line in the tail mimics a long-running
+        # predictor file. It must not obscure fresh, valid predictions.
+        file.write("{" + "x" * (512 * 1024 + 200) + "\n")
+        for i in range(20):
+            at = now_ns - (19 - i) * NS
+            record = LivePredictionRecord(
+                prediction_ts_ns=at, market_ticker=TICKER,
+                status="OK", feed_quality=FeedQuality(healthy=True),
+                model_hash="a" * 64, model_version="bootstrap-hybrid-v5",
+                strike=60_000.0, seconds_remaining=(CLOSE - at) / NS,
+                p_yes=.78, p_no=.22, predicted_side="ABOVE",
+                kalshi_yes_bid=.71, kalshi_yes_ask=.73,
+            )
+            file.write(record.model_dump_json() + "\n")
+    assert path.stat().st_size > 512 * 1024
+    result = read_live_dashboard(tmp_path, now_ns=now_ns)
+    assert result["status"] == "LIVE"
+    assert result["latest_prediction"]["prediction_ts_ns"] == now_ns
+    assert result["reversal_risk"]["level"] == "LOW"
+    assert result["reversal_risk"]["observation_count"] >= 8

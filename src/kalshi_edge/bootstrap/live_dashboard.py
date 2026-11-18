@@ -99,7 +99,7 @@ def _recent_monitor_records(root: Path, *, now_ns: int) -> list[dict[str, Any]]:
                 stream.seek(max(0, end - TAIL_BYTES))
                 chunk = stream.read()
             if end > TAIL_BYTES:
-                chunk = chunk.partition(b"\\n")[2]
+                chunk = chunk.partition(b"\n")[2]
             for line in reversed(chunk.splitlines()):
                 try:
                     record = LivePredictionRecord.model_validate_json(line)
