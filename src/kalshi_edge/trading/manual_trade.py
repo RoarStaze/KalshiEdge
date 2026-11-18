@@ -226,6 +226,7 @@ class ManualTrader:
         self._account_lock = threading.Lock()
         self._account_cache = None
         self._last_balance_get_at = None
+        self._last_sell = None  # confirmed full manual SELL, current process only
 
     def _account(self, ticker: str, *, fresh: bool = False):
         with self._account_lock:
@@ -395,6 +396,12 @@ class ManualTrader:
         plan = self.size_order(balance, action, outcome, units, decimal(amount),
                                position, book, market)
         plan["ticker"] = ticker
+        if action == "SELL":
+            with self._account_lock:
+                saved = self._account_cache
+                exposure = (saved.get("exposure") if saved is not None
+                            and saved.get("ticker") == ticker else None)
+            plan["position_exposure_dollars"] = _money(exposure) if exposure is not None else None
         return plan
 
     def market(self, ticker):
@@ -408,6 +415,11 @@ class ManualTrader:
             cache = self._account_cache
             exposure = (cache.get("exposure") if cache is not None
                         and cache["ticker"] == ticker else None)
+            # Any new holding invalidates an earlier flat/SOLD marker.
+            if position != 0 and self._last_sell is not None and self._last_sell["ticker"] == ticker:
+                self._last_sell = None
+            last_sell = (dict(self._last_sell) if position == 0 and self._last_sell is not None
+                         and self._last_sell["ticker"] == ticker else None)
         average_entry = (exposure / abs(position) if
                          exposure is not None and position != 0 else None)
         if average_entry is not None and not 0 <= average_entry <= 1:
@@ -435,6 +447,7 @@ class ManualTrader:
             and cache.get("portfolio_total") is not None else None,
             "position_yes": _money(position),
             "position_exposure_dollars": _money(exposure) if exposure is not None else None,
+            "last_sell": last_sell,
             **estimate_held_position_pnl(book, position=position, exposure=exposure),
             "average_entry_price": _money(average_entry) if average_entry is not None else None,
         }
@@ -475,6 +488,14 @@ class ManualTrader:
             }
         return {"preview_id": preview_id, "expires_in_seconds": QUOTE_LIFETIME_SECONDS,
                 "units": units, "input_amount": str(amount), **plan}
+
+    def preview_action(self, preview_id: str) -> str | None:
+        """Identify an already authorized preview without consuming it."""
+        with self._lock:
+            item = self._pending.get(preview_id)
+            if item is None or time.monotonic() - item["at"] > QUOTE_LIFETIME_SECONDS:
+                return None
+            return item.get("action")
 
     def place(self, preview_id, current_ticker):
         """Strict 1-click manual submit: never worsen the accepted preview."""
