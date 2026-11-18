@@ -42,3 +42,53 @@ def test_clock_uses_computers_local_timezone_without_pinned_eastern_time():
     assert '" ET"' not in HERO_SCRIPT
     assert "timeZoneName:\"short\"" in HERO_SCRIPT
     assert "toLocaleTimeString(undefined" in HERO_SCRIPT
+
+
+def test_position_banner_renders_verified_up_down_and_stale_states_in_node():
+    """Behavioral DOM test, including signs and stale-data reset."""
+    import shutil
+    import subprocess
+    import pytest
+
+    if shutil.which("node") is None:
+        pytest.skip("node is optional")
+    start = PAGE.index("function renderPositionBanner(data){")
+    end = PAGE.index("function renderScalpMonitor(data){", start)
+    js = PAGE[start:end]
+    harness = r'''
+const nodes={
+  "lock-banner":{className:""},
+  "lock-heading":{textContent:""},
+  "lock-description":{className:"",textContent:""}
+};
+const el=id=>nodes[id];
+const text=(id,value)=>{nodes[id].textContent=String(value)};
+let positionLive=null;
+''' + js + r'''
+function check(ok,label){if(!ok)throw new Error(label)}
+const t=Date.now();
+positionLive={
+ ticker:"KXBTC15M-TEST",position_yes:"2.0000",
+ position_pnl_status:"ESTIMATED",position_unrealized_pnl_dollars:"0.1600",
+ observed_at_ms:t
+};
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+check(nodes["lock-heading"].textContent==="BOUGHT UP","UP holding");
+check(nodes["lock-description"].textContent.includes("+$0.16"),"positive P/L");
+positionLive.position_yes="-2.0000";
+positionLive.position_unrealized_pnl_dollars="-0.4300";
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+check(nodes["lock-heading"].textContent==="BOUGHT DOWN","DOWN holding");
+check(nodes["lock-description"].textContent.includes("−$0.43"),"negative P/L");
+positionLive.position_pnl_status="INSUFFICIENT_LIQUIDITY";
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+check(nodes["lock-description"].textContent==="UNREALIZED P/L —","no invented profit");
+positionLive.position_pnl_status="ESTIMATED";
+positionLive.observed_at_ms=t-20000;
+renderPositionBanner({market_ticker:"KXBTC15M-TEST"});
+check(nodes["lock-heading"].textContent==="POSITION UPDATING","stale holdings");
+'''
+    result = subprocess.run(
+        ["node", "-"], input=harness, text=True, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
