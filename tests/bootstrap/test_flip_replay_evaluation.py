@@ -81,3 +81,17 @@ def test_replay_never_writes_orders_or_mutates_input(tmp_path):
     result=evaluate_prediction_stream(file)
     assert file.read_bytes()==before
     assert result["live_orders_enabled"] is False
+
+
+def test_one_tick_transient_quote_cross_does_not_count_as_confirmed_flip(tmp_path):
+    file=tmp_path/"predictions.jsonl"
+    write_stream(file,later_cross=False)
+    lines=[json.loads(line) for line in file.read_text().splitlines()]
+    # One 1Hz transient exchange quote print is not a sustained reversal.
+    lines[35]["kalshi_yes_bid"] = .44
+    lines[35]["kalshi_yes_ask"] = .46
+    file.write_text("".join(json.dumps(line)+"\n" for line in lines))
+    result=evaluate_prediction_stream(file,horizon_seconds=15)
+    assert result["resolved"] == 1
+    assert result["hits"] == 0
+    assert result["misses"] == 1
