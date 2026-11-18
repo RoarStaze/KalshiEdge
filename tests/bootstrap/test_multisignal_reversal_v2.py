@@ -142,3 +142,19 @@ def test_same_ticker_websocket_reconnect_does_not_stitch_old_trends():
     for item in rows:
         item["market_stream_epoch"]=2
     assert run(rows)["level"] == "LOW"
+
+
+def test_leading_brti_strike_break_can_warn_before_kalshi_quote_flips():
+    rows=[]
+    for i in range(35):
+        j=max(0,i-24)
+        rows.append(row(i, p=.82-.027*j, mid=.76-.016*j,
+                        brti=64015.-4*j, depth_yes=3, depth_no=30,
+                        signed=-4 if j else 0, total=7 if j else 0))
+    assert rows[-1]["p_yes"] > .5
+    assert rows[-1]["kalshi_yes_bid"] > .5
+    assert rows[-1]["brti_value"] < rows[-1]["strike"]
+    result=run(rows)
+    assert result["flip_alert"] is not None
+    assert result["flip_alert"]["direction"] == "DOWN"
+    assert "brti" in result["flip_alert"]["supporting_signals"]
