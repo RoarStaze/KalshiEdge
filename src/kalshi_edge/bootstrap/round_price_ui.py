@@ -120,7 +120,7 @@ function renderRoundPriceHero(data){
     &&Number.isFinite(data.market_close_ts_ns)&&Number.isFinite(data.checkpoint_ts_ns);
  text("hero-strike",validMarket?money(strike):"—");
  text("hero-strike-time",validMarket
-    ?new Date(data.market_close_ts_ns/1e6).toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"numeric",minute:"2-digit"})+" ET · market closes"
+    ?new Date(data.market_close_ts_ns/1e6).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit",timeZoneName:"short"})+" · market closes"
     :"Waiting for the next round");
  heroClockCloseMs=validMarket?data.market_close_ts_ns/1e6:null;
  heroClockBaseRemainingMs=validMarket&&Number.isFinite(data.server_time_ns)
@@ -130,7 +130,7 @@ function renderRoundPriceHero(data){
  const locked=!!data.final_forecast;
  text("hero-lock-label",locked?"8-MIN RECORD SAVED":"8-MIN RECORD AT");
  text("hero-lock-at",validMarket
-    ?new Date(data.checkpoint_ts_ns/1e6).toLocaleTimeString("en-US",{timeZone:"America/New_York",hour:"numeric",minute:"2-digit"})+" ET"
+    ?new Date(data.checkpoint_ts_ns/1e6).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit",timeZoneName:"short"})+""
     :"—");
 
  const price=prediction?.brti_value;

@@ -89,6 +89,37 @@ def quote_from_book(book: dict, action: str, outcome: str) -> dict:
     return {"yes_price": yes_price, "unit_cash": unit_cash, "available": quantity, "book_side": book_side}
 
 
+def estimate_held_position_pnl(
+    book: dict, *, position: Decimal, exposure: Decimal | None,
+) -> dict[str, str | None]:
+    """Read-only, indicative net liquidation P/L for the actual held side.
+
+    Uses an executable-side Kalshi bid with enough *top-level* quantity to
+    quote the entire holding. Fees use the same non-direct reference estimate
+    as the manual sell preview, not an exchange-guaranteed fill or final P/L.
+    Never value a position at its ask, model forecast, or an invented midpoint.
+    """
+    if not position.is_finite() or position == 0:
+        return {"held_side": None, "pnl_status": "NO_POSITION",
+                "unrealized_pnl_dollars": None}
+    side = "UP" if position > 0 else "DOWN"
+    unavailable = {"held_side": side, "unrealized_pnl_dollars": None}
+    if exposure is None or not exposure.is_finite() or exposure < 0:
+        return {**unavailable, "pnl_status": "COST_BASIS_UNAVAILABLE"}
+    try:
+        quote = quote_from_book(book, "SELL", side)
+    except TradingError:
+        return {**unavailable, "pnl_status": "NO_SELL_QUOTE"}
+    count = abs(position)
+    if quote["available"] < count:
+        return {**unavailable, "pnl_status": "INSUFFICIENT_LIQUIDITY"}
+    unit = quote["unit_cash"]
+    fee = reference_nondirect_fee(unit, count)
+    proceeds = max(Decimal("0"), count * unit - fee)
+    return {"held_side": side, "pnl_status": "ESTIMATED",
+            "unrealized_pnl_dollars": _money(proceeds - exposure)}
+
+
 class KalshiOrderClient:
     """Signed authenticated Kalshi GET requests and explicit one-shot order POST."""
     def __init__(self, vault, *, transport=None):
@@ -195,6 +226,7 @@ class ManualTrader:
         self._account_lock = threading.Lock()
         self._account_cache = None
         self._last_balance_get_at = None
+        self._last_sell = None  # confirmed full manual SELL, current process only
 
     def _account(self, ticker: str, *, fresh: bool = False):
         with self._account_lock:
@@ -364,6 +396,12 @@ class ManualTrader:
         plan = self.size_order(balance, action, outcome, units, decimal(amount),
                                position, book, market)
         plan["ticker"] = ticker
+        if action == "SELL":
+            with self._account_lock:
+                saved = self._account_cache
+                exposure = (saved.get("exposure") if saved is not None
+                            and saved.get("ticker") == ticker else None)
+            plan["position_exposure_dollars"] = _money(exposure) if exposure is not None else None
         return plan
 
     def market(self, ticker):
@@ -377,6 +415,16 @@ class ManualTrader:
             cache = self._account_cache
             exposure = (cache.get("exposure") if cache is not None
                         and cache["ticker"] == ticker else None)
+            # A position API can lag the freshly confirmed SELL. Keep the
+            # sale marker until flat has actually been observed; invalidate it
+            # only after a *later* new holding appears.
+            if self._last_sell is not None and self._last_sell["ticker"] == ticker:
+                if position == 0:
+                    self._last_sell["flat_seen"] = True
+                elif self._last_sell.get("flat_seen"):
+                    self._last_sell = None
+            last_sell = (dict(self._last_sell) if position == 0 and self._last_sell is not None
+                         and self._last_sell["ticker"] == ticker else None)
         average_entry = (exposure / abs(position) if
                          exposure is not None and position != 0 else None)
         if average_entry is not None and not 0 <= average_entry <= 1:
@@ -404,6 +452,8 @@ class ManualTrader:
             and cache.get("portfolio_total") is not None else None,
             "position_yes": _money(position),
             "position_exposure_dollars": _money(exposure) if exposure is not None else None,
+            "last_sell": last_sell,
+            **estimate_held_position_pnl(book, position=position, exposure=exposure),
             "average_entry_price": _money(average_entry) if average_entry is not None else None,
         }
 
@@ -443,6 +493,14 @@ class ManualTrader:
             }
         return {"preview_id": preview_id, "expires_in_seconds": QUOTE_LIFETIME_SECONDS,
                 "units": units, "input_amount": str(amount), **plan}
+
+    def preview_action(self, preview_id: str) -> str | None:
+        """Identify an already authorized preview without consuming it."""
+        with self._lock:
+            item = self._pending.get(preview_id)
+            if item is None or time.monotonic() - item["at"] > QUOTE_LIFETIME_SECONDS:
+                return None
+            return item.get("action")
 
     def place(self, preview_id, current_ticker):
         """Strict 1-click manual submit: never worsen the accepted preview."""
@@ -726,7 +784,37 @@ class ManualTrader:
                 max_payout = _money(fills)
             else:
                 actual_proceeds = _money(principal - fee_paid) if fee_paid is not None else None
+        # Actual liquidation proceeds/fees come from the exchange response.
+        # Never estimate a realized gain without a fresh matching cost basis.
+        realized = None
+        if data["action"] == "SELL" and fills > 0 and actual_proceeds is not None:
+            basis = fresh.get("position_exposure_dollars")
+            held = Decimal(fresh["position_yes"])
+            if basis is not None and held != 0:
+                purchase_basis = Decimal(basis)
+                if purchase_basis.is_finite() and purchase_basis >= 0:
+                    allocated = purchase_basis * fills / abs(held)
+                    realized = _money(Decimal(actual_proceeds) - allocated)
+        complete_sell = (
+            data["action"] == "SELL" and data.get("sell_all") is True
+            and fills > 0 and fills == Decimal(working["count"])
+            and fills == abs(Decimal(working["position_yes"]))
+        )
+        if complete_sell:
+            with self._account_lock:
+                self._last_sell = {
+                    "ticker": data["ticker"], "status": "SOLD",
+                    "outcome": data["outcome"],
+                    "realized_pnl_dollars": realized,
+                    "fill_count": _shares(fills),
+                    "flat_seen": False,
+                }
+        elif data["action"] == "BUY" and fills > 0:
+            with self._account_lock:
+                if self._last_sell is not None and self._last_sell["ticker"] == data["ticker"]:
+                    self._last_sell = None
         return {
+            "realized_pnl_dollars": realized,
             "status": "FILLED" if fills == Decimal(working["count"]) else "PARTIAL" if fills > 0 else "NO_FILL",
             "order_id": order_id, "ticker": data["ticker"],
             "action": data["action"], "outcome": data["outcome"],

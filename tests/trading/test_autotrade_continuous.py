@@ -251,3 +251,29 @@ def test_partial_fill_still_progresses_to_next_market(suite):
     market.lock("BELOW")
     engine.tick()
     assert len(orders.orders)==2
+
+
+def test_manual_sell_skips_current_auto_entry_but_preserves_future_rounds(suite):
+    _,market,orders,engine=suite
+    engine.arm("0.70", continuous=True, start_worker=False)
+    assert engine.skip_market_for_manual_sell("KXBTC15M-ROUND1") is True
+    assert engine.status()["state"] == "WAITING"
+    assert engine.status()["last_result"] == "MANUAL_SELL"
+    market.lock("ABOVE")
+    engine.tick()
+    assert not orders.orders
+    market.next_market()
+    engine.tick()
+    market.lock("BELOW")
+    engine.tick()
+    assert len(orders.orders) == 1
+    assert orders.previews[0][0] == "KXBTC15M-ROUND2"
+
+
+def test_manual_sell_skip_never_targets_another_market(suite):
+    _,market,orders,engine=suite
+    engine.arm("0.70", continuous=True, start_worker=False)
+    assert engine.skip_market_for_manual_sell("KXBTC15M-OTHER") is False
+    market.lock("ABOVE")
+    engine.tick()
+    assert len(orders.orders) == 1
