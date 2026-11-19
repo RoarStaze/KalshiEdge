@@ -275,3 +275,33 @@ References:
 - NWS climate daily reports: https://www.weather.gov/climate/
 - Calibration proper scoring and independent data: https://scikit-learn.org/stable/modules/calibration.html
 
+
+### Market-specific airport mapping (verified November 19, 2026)
+
+The Kalshi **Chicago daily high** market `KXHIGHCHI` references
+**CLIMDW / KMDW (Chicago Midway)**, *not* KORD (Chicago O'Hare).
+The earlier O'Hare-only predictor could give a meteorologically good
+forecast for the **wrong airport**. Never reuse KORD labels for Midway
+markets. Both stations remain available for independent research; the
+Weather Forecast dropdown now defaults to Midway.
+
+Current market-to-airport evidence (recheck each market's rules before use):
+
+| Market series | Station ID in rules | Observation airport | WeatherEdge station |
+| --- | --- | --- | --- |
+| KXHIGHCHI | CLIMDW | Chicago Midway | KMDW |
+| KXHIGHDEN | CLIDEN | Denver International | KDEN |
+| KXHIGHTATL | CLIATL | Atlanta Hartsfield-Jackson | KATL |
+| KXHIGHLAX | CLILAX | Los Angeles International | KLAX |
+
+First-party Kalshi market examples:
+- https://kalshi.com/markets/kxhighchi/highest-temperature-in-chicago/kxhighchi-26nov19
+- https://kalshi.com/markets/kxhighden/highest-temperature-in-denver/kxhighden-26nov19
+- https://kalshi.com/markets/kxhightatl/atlanta-max-temperature/kxhightatl-26nov19
+- https://kalshi.com/markets/kxhighlax/highest-temperature-in-los-angeles/kxhighlax-26nov19
+
+The collector automatically begins saving new KMDW airport observations
+and guidance after the next `kalshiedge start`. Existing historical
+KORD rows are preserved but never relabeled. First-party settlement
+labels must match both the named station and the market series.
+
