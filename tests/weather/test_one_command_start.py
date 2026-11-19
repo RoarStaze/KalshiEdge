@@ -153,3 +153,37 @@ def test_test_preview_never_launches_weather(monkeypatch,tmp_path):
     monkeypatch.setattr(preview_site,"run_test_preview",lambda **kw:0)
     monkeypatch.setattr(launcher,"_spawn_service",Mock(side_effect=AssertionError("no background workers")))
     assert launcher.main(["test","--no-browser"])==0
+
+
+
+def test_weather_supervisor_runs_settlement_reconciliation_without_other_command(tmp_path):
+    db=tmp_path/"weather"/"weatheredge.sqlite3"
+    ran=[]
+    async def settlement(path):
+        ran.append(path)
+        return {"mode":"DATA_ONLY","state":"RECONCILED","crosschecked":1,
+                "unverified":0,"details":[]}
+    supervisor=runtime.WeatherSupervisor(
+        db,ensure_decoder=lambda:{"state":"AVAILABLE"},
+        settlement_collect=settlement,
+    )
+    asyncio.run(supervisor.poll_settlements())
+    assert ran==[db]
+    recorded=json.loads((db.parent/"collector-status.json").read_text())
+    assert recorded["settlement"]["state"]=="RECONCILED"
+    assert recorded["settlement"]["crosschecked"]==1
+    assert recorded["real_orders_enabled"] is False
+    health=read_weather_status(tmp_path/"bootstrap")
+    assert health["collector"]["settlement"]["state"]=="RECONCILED"
+
+
+def test_weather_supervisor_settlement_error_does_not_kill_weather_worker(tmp_path):
+    db=tmp_path/"weather"/"weatheredge.sqlite3"
+    async def fails(_):
+        raise RuntimeError("publisher offline")
+    sup=runtime.WeatherSupervisor(db,settlement_collect=fails)
+    asyncio.run(sup.poll_settlements())
+    metadata=json.loads((db.parent/"collector-status.json").read_text())
+    assert metadata["settlement"]["state"]=="UNAVAILABLE"
+    assert metadata["feeds"]["METAR"]["state"]=="STARTING"
+    assert metadata["real_orders_enabled"] is False
