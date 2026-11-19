@@ -21,7 +21,7 @@ _ALLOWED_PUBLISHERS = (
     "https://weather.com/kalshi",
     "https://api.weather.gov/products/",
 )
-_TICKER = re.compile(r"^[A-Z0-9-]{4,100}$")
+_TICKER = re.compile(r"^[A-Z0-9.-]{4,100}$")
 _HEX256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
