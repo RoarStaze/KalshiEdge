@@ -11,6 +11,7 @@ import hmac
 import json
 import math
 import random
+import sqlite3
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -300,15 +301,17 @@ def calibration_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
             stations.append(evaluate_station(station,rows,settled))
         result["stations"]=stations
         result["matched_days"]=sum(s["matched_days"] for s in stations)
-        if result["matched_days"]:
+        if any(x["status"]=="MEASURED_RESEARCH_NOT_CERTIFIED" for x in stations):
             result["status"]="MEASURED_RESEARCH_NOT_CERTIFIED"
+        elif result["matched_days"]:
+            result["status"]="INSUFFICIENT_EVIDENCE"
         elif journal["recorded_noon_snapshots"] and not settled:
             result["status"]="WAITING_FOR_SETTLEMENT_EVIDENCE"
         elif settled:
             result["status"]="WAITING_FOR_MATCHED_NOON_FORECASTS"
         else:
             result["status"]="COLLECTING_PROSPECTIVE_FORECASTS" if journal["recorded_snapshots"] else "WAITING_FOR_PROSPECTIVE_FORECASTS"
-    except (OSError,ValueError,TypeError,json.JSONDecodeError) as exc:
+    except (OSError,ValueError,TypeError,json.JSONDecodeError,sqlite3.Error) as exc:
         result["status"]="CALIBRATION_AUDIT_ERROR"
         result["reason"]=f"{type(exc).__name__}: {exc}"[:250]
         result["stations"]=[evaluate_station(s,[],[]) for s in STATIONS]
