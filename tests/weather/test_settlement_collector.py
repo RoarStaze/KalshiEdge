@@ -25,7 +25,8 @@ EVENT="KXHIGHCHI-26NOV18"
 def publisher(value=62, status="Final", station="CLIMDW", day=DATE):
     # Illustrative explicit-schema HTTPX fixture, NOT a copied TWC response.
     return json.dumps({"data":[{"climateId":station,"date":day,
-                               "highF":value,"status":status}]}).encode()
+                               "highF":value,"status":status,
+                               "temperatureUnit":"F"}]}).encode()
 
 
 def market(suffix, rule, yes):
@@ -52,7 +53,9 @@ def test_twc_publisher_requires_explicit_final_day_station_and_units():
         publisher(day="2026-11-17"), publisher(value=62.7),
         publisher(value=None), b"not json",
         json.dumps({"data":[{"climateId":"CLIMDW","date":DATE,
-                              "highF":62,"status":"Final","unit":"C"}]}).encode(),
+                              "highF":62,"status":"Final","temperatureUnit":"C"}]}).encode(),
+        json.dumps({"data":[{"climateId":"CLIMDW","date":DATE,
+                              "highF":62,"status":"Final"}]}).encode(),
     ):
         with pytest.raises(ValueError):
             extract_twc_high(blob,DAY,"KMDW")
