@@ -232,3 +232,17 @@ def test_no_nwp_inputs_report_individual_source_failures(tmp_path):
     assert result["source_statuses"]["HRRR"] == "INCOMPLETE_HRRR"
     assert result["source_statuses"]["NBM"] == "INCOMPLETE_NBM"
     assert result["mean_f"] is None
+
+
+
+def test_weather_dashboard_explains_missing_model_status_instead_of_blanks():
+    from kalshi_edge.weather.research_ui import render_weather_page
+    page = render_weather_page("forecast")
+    assert 'id="wx-forecast-source-metar"' in page
+    assert 'id="wx-forecast-source-hrrr"' in page
+    assert 'id="wx-forecast-source-nbm"' in page
+    assert 'id="wx-forecast-diagnostic"' in page
+    assert "weather-collect-nwp" in page
+    assert "weather-collect-metars" in page
+    assert "source_statuses" in page
+    assert "/api/manual-trade/" not in page
