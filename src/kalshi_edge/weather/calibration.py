@@ -179,7 +179,7 @@ def _auto_evidence_item(raw: dict, root: Path) -> dict:
     official numeric high, and all returned settled market outcomes.
     """
     from .settlement_collector import (
-        TWC_ENDPOINT, KALSHI_MARKETS_ENDPOINT,
+        TWC_ENDPOINT, KALSHI_MARKETS_ENDPOINT, KALSHI_HISTORICAL_ENDPOINT,
         extract_twc_high, verify_kalshi_markets,
     )
     if not isinstance(raw,dict):
@@ -194,7 +194,10 @@ def _auto_evidence_item(raw: dict, root: Path) -> dict:
         raw.get("market_rules_source")!="THE_WEATHER_COMPANY" or
         raw.get("evidence_state")!="AUTO_CORROBORATED_UNCERTIFIED" or
         raw.get("source_url")!=TWC_ENDPOINT+"?date="+day.isoformat() or
-        raw.get("kalshi_url")!=KALSHI_MARKETS_ENDPOINT+"?event_ticker="+event):
+        raw.get("kalshi_url") not in (
+            KALSHI_MARKETS_ENDPOINT+"?event_ticker="+event,
+            KALSHI_HISTORICAL_ENDPOINT+"?event_ticker="+event
+        )):
         raise ValueError("AUTO_PRIMARY_SOURCE_MISMATCH")
     def original_bytes(filename_key: str, digest_key: str) -> bytes:
         name=raw[filename_key]
