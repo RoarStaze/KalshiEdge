@@ -79,7 +79,7 @@ def test_weather_process_failure_does_not_stop_btc(tmp_path,monkeypatch,capsys):
 
 
 def test_weather_runtime_writes_source_health_for_failed_nwp(tmp_path):
-    db=tmp_path/"weatheredge.sqlite3"
+    db=tmp_path/"weather"/"weatheredge.sqlite3"
     async def metar(path):
         assert path==db
         return {"inserted":1,"mode":"DATA_ONLY"}
@@ -106,7 +106,7 @@ def test_weather_runtime_writes_source_health_for_failed_nwp(tmp_path):
 
 
 def test_weather_runtime_keeps_metar_running_when_decoder_unavailable(tmp_path):
-    db=tmp_path/"weatheredge.sqlite3"
+    db=tmp_path/"weather"/"weatheredge.sqlite3"
     async def metar(path):
         return {"mode":"DATA_ONLY","inserted":2}
     nwp=Mock(side_effect=AssertionError("NWP must not run without decoder"))
