@@ -162,3 +162,16 @@ def test_calibration_endpoint_live_and_preview_do_not_submit_orders(tmp_path):
                 assert client.post(url,json={}).status_code in (403,404)
         finally:
             server.shutdown();server.server_close();worker.join(timeout=3)
+
+
+
+def test_corrupt_weather_database_calibration_endpoint_fails_closed(tmp_path):
+    root=tmp_path/"data"/"bootstrap"
+    db=tmp_path/"data"/"weather"/"weatheredge.sqlite3"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"not a sqlite database")
+    report=calibration_status(root)
+    assert report["status"]=="CALIBRATION_AUDIT_ERROR"
+    assert report["matched_days"]==0
+    assert report["calibration_certified"] is False
+    assert all(x["multiclass_brier"] is None for x in report["stations"])
