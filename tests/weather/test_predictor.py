@@ -247,3 +247,21 @@ def test_weather_dashboard_explains_missing_model_status_instead_of_blanks():
     assert "wx-collector-health" in page
     assert "source_statuses" in page
     assert "/api/manual-trade/" not in page
+
+
+
+def test_same_day_trained_artifact_is_not_usable_for_prior_noon_forecast(tmp_path):
+    # An artifact fitted with today's final daily high would leak future
+    # settlement into an afternoon forecast; require train_end < target day.
+    db,asof=_data(tmp_path)
+    model_dir=tmp_path/"models"
+    model_dir.mkdir()
+    artifact={
+        "station":"KORD","model_kind":"STATION_BIAS_GAUSSIAN_RESEARCH",
+        "bias_f":1.0,"sigma_f":3.0,"train_days":60,
+        "train_end_day":"2026-11-19",
+    }
+    (model_dir/"KORD.json").write_text(json.dumps(artifact))
+    result=read_station_forecast(db,"KORD",asof,model_dir=model_dir)
+    assert result["status"]=="INVALID_MODEL"
+    assert result["mean_f"] is None
