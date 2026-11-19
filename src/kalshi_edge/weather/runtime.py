@@ -24,6 +24,7 @@ from typing import Awaitable, Callable
 from .collection import collect_metars_once
 from .nwp_collection import collect_recent
 from .prospective import capture_station_snapshots
+from .settlement_collector import poll_settlements
 from .status import weather_database_path
 
 
@@ -37,6 +38,7 @@ WEATHER_WHEELS = (
 METAR_SECONDS = 300
 NWP_SECONDS = 1800
 FORECAST_JOURNAL_SECONDS = 600
+SETTLEMENT_POLL_SECONDS = 6 * 3600
 
 
 def _missing_decoder_modules() -> list[str]:
@@ -125,12 +127,15 @@ class WeatherSupervisor:
         nwp_collect: Callable[[Path], Awaitable[dict]] = collect_recent,
         ensure_decoder: Callable[[], dict] | None = None,
         forecast_capture: Callable[[Path], dict] = capture_station_snapshots,
+        settlement_collect: Callable[[Path], Awaitable[dict]] = poll_settlements,
     ):
         self.db_path = Path(db_path)
         self.status_path = collector_health_path(self.db_path)
         self._collect_metar = metar_collect
         self._collect_nwp = nwp_collect
         self._capture_forecasts = forecast_capture
+        self._collect_settlement = settlement_collect
+        self._settlement = {"state": "STARTING", "crosschecked": 0}
         self._forecast_journal = {"state": "STARTING", "inserted": 0}
         self._ensure_decoder = ensure_decoder or (
             lambda: ensure_weather_decoder(Path.cwd())
@@ -150,6 +155,7 @@ class WeatherSupervisor:
             "feeds": self._feeds,
             "decoder": self._decoder_state or {"state": "NOT_CHECKED"},
             "forecast_journal": self._forecast_journal,
+            "settlement": self._settlement,
             "real_orders_enabled": False,
         }
         temp_path = None
@@ -265,6 +271,35 @@ class WeatherSupervisor:
             }
         self._persist()
 
+    async def poll_settlements(self) -> None:
+        """Collect source-verified outcomes only after prior climate days end.
+
+        No Kalshi order API or trading credentials are ever accessed. Missing,
+        preliminary, inconsistent or changed provider data is marked
+        unverified and never promoted into calibration outcomes.
+        """
+        try:
+            report = await asyncio.wait_for(
+                self._collect_settlement(self.db_path), timeout=480
+            )
+            if (not isinstance(report, dict)
+                    or report.get("mode") != "DATA_ONLY"):
+                raise ValueError("unexpected settlement collector response")
+            self._settlement = {
+                "state": report.get("state", "UNVERIFIED"),
+                "crosschecked": int(report.get("crosschecked", 0)),
+                "unverified": int(report.get("unverified", 0)),
+                "details": report.get("details", [])[:20],
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            self._settlement = {
+                "state": "UNAVAILABLE",
+                "reason": f"{type(exc).__name__}: {exc}"[:250],
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        self._persist()
+
     async def run_forever(self) -> None:
         async def every(poll, period: int) -> None:
             while True:
@@ -275,6 +310,7 @@ class WeatherSupervisor:
             every(self.poll_metar, METAR_SECONDS),
             every(self.poll_nwp, NWP_SECONDS),
             every(self.poll_forecasts, FORECAST_JOURNAL_SECONDS),
+            every(self.poll_settlements, SETTLEMENT_POLL_SECONDS),
         )
 
 
