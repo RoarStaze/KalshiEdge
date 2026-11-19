@@ -110,7 +110,7 @@ def test_no_outcomes_means_no_fake_scores_or_90_coverage(tmp_path):
     report=calibration_status(root)
     assert report["mode"]=="PAPER_ONLY"
     assert report["calibration_certified"] is False
-    assert report["status"]=="WAITING_FOR_SETTLEMENT_EVIDENCE"
+    assert report["status"]=="WAITING_FOR_PROSPECTIVE_FORECASTS"
     assert report["matched_days"]==0
     assert all(x["90_interval"] is None for x in report["stations"])
     assert all(x["multiclass_brier"] is None for x in report["stations"])
