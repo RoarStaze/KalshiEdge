@@ -212,3 +212,16 @@ def test_settlement_poller_requires_actual_frozen_forecasts(tmp_path):
     report=asyncio.run(run())
     assert report["state"]=="NO_ELIGIBLE_FORECAST_DAYS"
     assert report["crosschecked"]==0
+
+
+
+def test_settlement_poll_never_limits_journal_to_oldest_800(monkeypatch,tmp_path):
+    from kalshi_edge.weather import settlement_collector as module
+    limits=[]
+    def snapshots(db,*,limit):
+        limits.append(limit)
+        return []
+    monkeypatch.setattr(module,"read_station_snapshots",snapshots)
+    result=asyncio.run(module.poll_settlements(tmp_path/"unused.sqlite3"))
+    assert result["state"]=="NO_ELIGIBLE_FORECAST_DAYS"
+    assert limits and limits[0]>=100_000
