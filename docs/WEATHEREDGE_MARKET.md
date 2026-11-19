@@ -37,6 +37,44 @@ startup does not require those packages. If ecCodes fails to install on Windows,
 inspect the optional dependency error before retrying; do not modify a running
 training environment blindly.
 
+## Troubleshoot `INCOMPLETE_NBM` or empty probability panels
+
+The Weather page displays independent `METAR`, `HRRR` and `NBM` readiness
+fields. If NBM is missing, already-received METAR and HRRR observations will
+remain visible, but **no mixed-source probability distribution is invented**.
+
+The NBM core index publishes both the ordinary `TMP:2 m above ground`
+temperature and `TMP:2 m above ground:...:ens std dev`. Earlier versions
+erroneously matched both; the current parser selects only the ordinary
+temperature field and rejects ambiguous or spread-only inventories. NOAA's
+ordinary and ensemble-spread products are different physical quantities and
+must never be silently interchanged.
+
+To diagnose or re-fetch NBM from the correct official archive, run this
+one-shot command in your KalshiEdge PowerShell virtual environment:
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+& .\.venv\Scripts\python.exe -m kalshi_edge.cli weather-collect-nwp `
+  --models NBM --forecast-hours 1,2,3,4,5,6,7,8,9,10,11,12
+```
+
+Check the JSON output:
+- If `NBM.mode` is `DATA_ONLY` and `points` is positive, fresh
+  NBM guidance was recorded. Keep both collectors running and refresh the
+  Weather Forecast page.
+- If `NBM.status` is `UNAVAILABLE`, read `reason` for the exact failure.
+  Common possibilities are a model-publishing delay, network timeout,
+  GRIB decoder import failure, or a missing ordinary 2-meter temperature
+  field. Do not infer which one occurred from `INCOMPLETE_NBM` alone.
+- If NBM was downloaded but the page remains incomplete, check its
+  `NBM` readiness line; the stored cycle may not include forecast-valid
+  points near the target afternoon high or may be too old.
+
+Also run `kalshi-edge weather-forecast --station KORD` to see
+per-source readiness, selected model-cycle times and last receipt timestamps.
+Forecasts remain **research-only**; none are exchange settlement odds.
+
 ## Start collectors in two separate foreground terminals
 
 METAR observation collection (every five minutes):

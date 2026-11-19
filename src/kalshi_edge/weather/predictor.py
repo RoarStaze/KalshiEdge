@@ -248,7 +248,10 @@ def read_station_forecast(
         "current_f": None, "hours_to_peak": None, "trend_f_per_hour": None,
         "interval_90_f": None, "buckets": [], "n_training_days": 0,
         "metar_event_at": None, "metar_received_at": None,
-        "nwp_receipts_utc": {},
+        "nwp_receipts_utc": {}, "nwp_cycles_utc": {},
+        "source_statuses": {
+            "METAR": "NOT_CHECKED", "HRRR": "NOT_CHECKED", "NBM": "NOT_CHECKED",
+        },
     }
     if not Path(db_path).is_file():
         return result
@@ -257,15 +260,45 @@ def read_station_forecast(
         with closing(sqlite3.connect(uri, uri=True, timeout=.5)) as conn:
             conn.execute("PRAGMA query_only=ON")
             metars = _rows(conn, station, "METAR", start, asof)
-            observed, current, trend, metar_event, metar_receipt = _metars(metars, asof)
+            try:
+                observed, current, trend, metar_event, metar_receipt = _metars(metars, asof)
+            except LookupError as exc:
+                result["source_statuses"]["METAR"] = str(exc)
+                raise
+            result["source_statuses"]["METAR"] = "READY"
             result["observed_max_f"] = round(observed, 3)
             result["current_f"] = round(current, 3)
-            hrrr, hr_run, hr_receipt = _model_day_max("HRRR",
-                _rows(conn, station, "HRRR", asof - NWP_MAX_AGE, asof),
-                start, end, peak, asof)
-            nbm, nb_run, nb_receipt = _model_day_max("NBM",
-                _rows(conn, station, "NBM", asof - NWP_MAX_AGE, asof),
-                start, end, peak, asof)
+            result["metar_event_at"] = metar_event.isoformat()
+            result["metar_received_at"] = metar_receipt.isoformat()
+            result["trend_f_per_hour"] = round(trend, 3)
+            result["hours_to_peak"] = round(
+                max(0., (peak - asof).total_seconds() / 3600), 3)
+            # Diagnose each model independently. A usable HRRR forecast must
+            # remain visible when NBM is late, missing or undecodable.
+            # Never combine available slices from two different model cycles.
+            nwp_maxes = {}
+            missing = []
+            for model in ("HRRR", "NBM"):
+                try:
+                    temperature, cycle, receipt = _model_day_max(
+                        model,
+                        _rows(conn, station, model, asof - NWP_MAX_AGE, asof),
+                        start, end, peak, asof,
+                    )
+                except LookupError as exc:
+                    result["source_statuses"][model] = str(exc)
+                    missing.append(str(exc))
+                else:
+                    result["source_statuses"][model] = "READY"
+                    result[model.lower() + "_max_f"] = round(temperature, 3)
+                    result["nwp_cycles_utc"][model] = cycle
+                    result["nwp_receipts_utc"][model] = receipt
+                    nwp_maxes[model] = temperature
+            if missing:
+                # Preserve every available model/observation field while
+                # leaving probability distribution unpopulated (fail closed).
+                raise LookupError(missing[0])
+            hrrr, nbm = nwp_maxes["HRRR"], nwp_maxes["NBM"]
         hours = max(0., (peak - asof).total_seconds() / 3600)
         if baseline_only:
             bias, sigma, model_kind, n_days = (
@@ -278,12 +311,6 @@ def read_station_forecast(
         mean = max(observed, base + bias)
         result.update({
             "status": "READY_RESEARCH", "model_kind": model_kind,
-            "hrrr_max_f": round(hrrr, 3), "nbm_max_f": round(nbm, 3),
-            "hours_to_peak": round(hours, 3), "trend_f_per_hour": round(trend, 3),
-            "nwp_cycles_utc": {"HRRR": hr_run, "NBM": nb_run},
-            "nwp_receipts_utc": {"HRRR": hr_receipt, "NBM": nb_receipt},
-            "metar_event_at": metar_event.isoformat(),
-            "metar_received_at": metar_receipt.isoformat(),
             "mean_f": round(mean, 3), "sigma_f": round(sigma, 3),
             "interval_90_f": [round(mean-1.64485362695*sigma, 2),
                               round(mean+1.64485362695*sigma, 2)],

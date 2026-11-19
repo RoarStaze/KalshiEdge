@@ -106,12 +106,16 @@ _FORECAST = """
   </div>
   <div class="wx-rows">
    <div class="wx-row"><span>Forecast readiness</span><strong id="wx-forecast-state">WAITING</strong></div>
+   <div class="wx-row"><span>METAR observations</span><strong id="wx-forecast-source-metar">NOT CHECKED</strong></div>
+   <div class="wx-row"><span>HRRR forecast feed</span><strong id="wx-forecast-source-hrrr">NOT CHECKED</strong></div>
+   <div class="wx-row"><span>NBM forecast feed</span><strong id="wx-forecast-source-nbm">NOT CHECKED</strong></div>
    <div class="wx-row"><span>HRRR model peak</span><strong id="wx-forecast-hrrr">—</strong></div>
    <div class="wx-row"><span>NBM model peak</span><strong id="wx-forecast-nbm">—</strong></div>
    <div class="wx-row"><span>Target climate day (standard time)</span><strong id="wx-forecast-day">—</strong></div>
   </div>
   <p id="wx-forecast-asof">Waiting for NOAA receipt timestamps…</p>
   <p id="wx-forecast-freshness">Actual observation and forecast receipt times unavailable.</p>
+  <p id="wx-forecast-diagnostic" role="status" aria-live="polite">Waiting for source diagnostics.</p>
  </article>
  <article class="wx-panel">
   <h2>Fine-grained temperature distribution</h2>
@@ -268,6 +272,23 @@ WEATHER_FORECAST_SCRIPT = r"""<script>
    const station=latest[selector.value];
    if(!station){put("wx-forecast-state","NO DATA");showBuckets([]);return;}
    put("wx-forecast-state",station.status||"UNAVAILABLE");
+   const source_statuses=station.source_statuses||{};
+   put("wx-forecast-source-metar",source_statuses.METAR||"NOT CHECKED");
+   put("wx-forecast-source-hrrr",source_statuses.HRRR||"NOT CHECKED");
+   put("wx-forecast-source-nbm",source_statuses.NBM||"NOT CHECKED");
+   const status=station.status||"UNAVAILABLE";
+   const advice = status==="READY_RESEARCH"?
+      "Forecasting with both model feeds. Experimental probabilities are not validated Kalshi odds.":
+      status.includes("NBM")?
+      "NBM model input is missing or incomplete. Run: kalshi-edge weather-collect-nwp (inspect the reported NBM error). HRRR and METAR remain visible independently.":
+      status.includes("HRRR")?
+      "HRRR model input is missing or incomplete. Run: kalshi-edge weather-collect-nwp (inspect the reported HRRR error).":
+      status.includes("METAR")?
+      "Airport observations unavailable. Run: kalshi-edge weather-collect-metars (check AWC connectivity and timestamps).":
+      status==="MISSING_DATABASE"?
+      "No weather database found. Run the HRRR/NBM and METAR collectors in separate terminals.":
+      "Check the weather collector output for the exact source error. No unsupported probabilities will be shown.";
+   put("wx-forecast-diagnostic",advice);
    put("wx-forecast-day",station.climate_day||"—");
    put("wx-forecast-asof",station.asof?"Snapshot UTC: "+station.asof:"No receipt evidence");
    const rec=station.nwp_receipts_utc||{};
@@ -298,6 +319,10 @@ WEATHER_FORECAST_SCRIPT = r"""<script>
    }catch(_error){
      latest={};put("wx-forecast-state","FEED UNAVAILABLE");
      put("wx-forecast-mean","—");put("wx-forecast-interval","—");
+     put("wx-forecast-source-metar","UNAVAILABLE");
+     put("wx-forecast-source-hrrr","UNAVAILABLE");
+     put("wx-forecast-source-nbm","UNAVAILABLE");
+     put("wx-forecast-diagnostic","Forecast API unavailable; check dashboard health and reload.");
      showBuckets([]);
    }
  }

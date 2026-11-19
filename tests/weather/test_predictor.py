@@ -198,3 +198,51 @@ def test_weather_page_shows_live_station_forecasting_without_manual_orders():
     assert "wx-forecast-buckets" in page
     assert "/api/weather/forecast" in page
     assert "/api/manual-trade/" not in page
+
+
+
+def test_incomplete_nbm_keeps_hrrr_and_metar_source_diagnostics(tmp_path):
+    # A missing NBM field must not make successfully decoded HRRR and METAR
+    # observations disappear from the dashboard. No fake probability is shown.
+    db, asof = _data(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM samples WHERE source='NBM'")
+    result = read_station_forecast(db, "KORD", asof)
+    assert result["status"] == "INCOMPLETE_NBM"
+    assert result["observed_max_f"] == 60.0
+    assert result["hrrr_max_f"] is not None
+    assert result["nwp_cycles_utc"]["HRRR"]
+    assert result["nwp_receipts_utc"]["HRRR"]
+    assert result["metar_event_at"]
+    assert result["metar_received_at"]
+    assert result["source_statuses"]["METAR"] == "READY"
+    assert result["source_statuses"]["HRRR"] == "READY"
+    assert result["source_statuses"]["NBM"] == "INCOMPLETE_NBM"
+    assert result["mean_f"] is None
+    assert result["buckets"] == []
+
+
+def test_no_nwp_inputs_report_individual_source_failures(tmp_path):
+    db, asof = _data(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM samples WHERE source IN ('HRRR', 'NBM')")
+    result = read_station_forecast(db, "KORD", asof)
+    assert result["status"] == "INCOMPLETE_HRRR"
+    assert result["source_statuses"]["METAR"] == "READY"
+    assert result["source_statuses"]["HRRR"] == "INCOMPLETE_HRRR"
+    assert result["source_statuses"]["NBM"] == "INCOMPLETE_NBM"
+    assert result["mean_f"] is None
+
+
+
+def test_weather_dashboard_explains_missing_model_status_instead_of_blanks():
+    from kalshi_edge.weather.research_ui import render_weather_page
+    page = render_weather_page("forecast")
+    assert 'id="wx-forecast-source-metar"' in page
+    assert 'id="wx-forecast-source-hrrr"' in page
+    assert 'id="wx-forecast-source-nbm"' in page
+    assert 'id="wx-forecast-diagnostic"' in page
+    assert "weather-collect-nwp" in page
+    assert "weather-collect-metars" in page
+    assert "source_statuses" in page
+    assert "/api/manual-trade/" not in page
