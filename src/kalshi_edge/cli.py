@@ -93,6 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     app.add_argument("--no-browser", action="store_true", help="do not automatically open the browser")
     app.add_argument("--port", type=int, default=8899, help="local dashboard port (default 8899)")
     # Isolated weather research/observation commands. No exchange orders.
+    sub.add_parser(
+        "weather-watch",
+        help="managed read-only NOAA weather collector (normally run by kalshiedge start)",
+    )
     weather_forecast = sub.add_parser(
         "weather-forecast", help="inspect actual airport proxy probabilities from fresh METAR/HRRR/NBM data"
     )
@@ -347,6 +351,10 @@ def main(argv: list[str] | None = None) -> int:
         if not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535")
         return start(port=args.port, open_browser=not args.no_browser)
+    if args.command == "weather-watch":
+        from .weather.runtime import main as weather_main
+
+        return weather_main()
     if args.command == "weather-forecast":
         from .bootstrap.config import BootstrapSettings
         from .weather.predictor import read_weather_forecasts, read_station_forecast
