@@ -139,6 +139,9 @@ def test_decoder_bootstrap_uses_fixed_binary_packages_and_can_be_disabled(monkey
     command,kwargs=invoked[0]
     assert command[:4]==[runtime.sys.executable,"-m","pip","install"]
     assert "--only-binary=:all:" in command
+    assert "--target" in command
+    target = Path(command[command.index("--target") + 1])
+    assert target.is_relative_to(tmp_path / "data" / "weather")
     assert kwargs["timeout"] <= 240
     assert kwargs["shell"] is False
 
