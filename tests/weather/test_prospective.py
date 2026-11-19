@@ -72,3 +72,29 @@ def test_other_stations_and_out_of_hours_do_not_generate_fake_samples(tmp_path):
     late=capture_station_snapshots(db,asof=t+timedelta(hours=12),stations=("KORD",))
     assert late["inserted"]==0
     assert late["statuses"]["KORD"]=="OUTSIDE_FORECAST_WINDOW"
+
+
+
+def test_managed_weather_worker_records_prospective_snapshots_without_user_commands(tmp_path):
+    import asyncio
+    import json
+    from kalshi_edge.weather.runtime import WeatherSupervisor
+
+    received=[]
+    def capture(db):
+        received.append(db)
+        return {"mode":"PAPER_ONLY","inserted":1,"statuses":{"KORD":"READY_RESEARCH"}}
+
+    worker=WeatherSupervisor(
+        tmp_path/"weatheredge.sqlite3",
+        metar_collect=lambda db: None,
+        nwp_collect=lambda db: None,
+        ensure_decoder=lambda:{"state":"AVAILABLE"},
+        forecast_capture=capture,
+    )
+    asyncio.run(worker.poll_forecasts())
+    assert received==[tmp_path/"weatheredge.sqlite3"]
+    health=json.loads((tmp_path/"collector-status.json").read_text())
+    assert health["forecast_journal"]["state"]=="READY"
+    assert health["forecast_journal"]["inserted"]==1
+    assert health["real_orders_enabled"] is False
