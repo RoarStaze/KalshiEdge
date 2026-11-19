@@ -202,6 +202,35 @@ def _atomic_manifest(path: Path, record: dict) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _revoke_auto_record(path: Path, station: str, climate_day: date) -> None:
+    """Suspend stale labels after a *new* authoritative result contradicts them.
+
+    Old original response captures remain intact for forensics, but a pending
+    or changed settlement is excluded from prospective model scoring.
+    """
+    if not path.is_file():
+        return
+    entries=[json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+             if line.strip()]
+    remain=[row for row in entries if
+            (row.get("station"),row.get("climate_day")) !=
+            (station,climate_day.isoformat())]
+    if len(remain)==len(entries):
+        return
+    encoded=("\\n".join(json.dumps(r,sort_keys=True,allow_nan=False)
+                        for r in remain)+("\\n" if remain else "")).encode("utf-8")
+    temporary=None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent,prefix=".suspended-label-",
+                                         suffix=".tmp",delete=False) as stream:
+            temporary=Path(stream.name)
+            stream.write(encoded);stream.flush();os.fsync(stream.fileno())
+        os.replace(temporary,path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 async def collect_station_day(root: Path, station: str, climate_day: date,
                               *, client: httpx.AsyncClient | None = None,
                               clock: Callable[[],datetime] | None = None,
@@ -222,6 +251,7 @@ async def collect_station_day(root: Path, station: str, climate_day: date,
                                  headers={"User-Agent":"KalshiEdgeWeatherEvidence/0.4"})
     assert client is not None
     try:
+        high=None
         try:
             if twc_body is None:
                 response=await client.get(TWC_ENDPOINT,
@@ -245,6 +275,17 @@ async def collect_station_day(root: Path, station: str, climate_day: date,
                                         climate_day,high)
         except (httpx.HTTPError,ValueError,TypeError,OverflowError,
                 KeyError,json.JSONDecodeError) as exc:
+            if high is not None and twc_body is not None:
+                # Publisher really provided a specific final/revised value,
+                # but we could NOT corroborate it with Kalshi's outcome.
+                # Preserve that publisher revision and revoke any old label.
+                root=Path(root)
+                digest=hashlib.sha256(twc_body).hexdigest()
+                name=(f"{station}_{climate_day.isoformat()}_"
+                      f"twc_{digest[:20]}.json")
+                _atomic_bytes(root/"evidence"/name,twc_body)
+                _revoke_auto_record(root/AUTO_MANIFEST_NAME,
+                                    station,climate_day)
             return {"station":station,"climate_day":climate_day.isoformat(),
                     "state":"UNVERIFIED",
                     "reason":f"{type(exc).__name__}: {exc}"[:220]}
