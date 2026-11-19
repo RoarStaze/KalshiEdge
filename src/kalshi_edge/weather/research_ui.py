@@ -118,7 +118,7 @@ _FORECAST = """
   <p id="wx-forecast-asof">Waiting for NOAA receipt timestamps…</p>
   <p id="wx-forecast-freshness">Actual observation and forecast receipt times unavailable.</p>
   <p id="wx-forecast-diagnostic" role="status" aria-live="polite">Waiting for source diagnostics.</p>
-  <div id="wx-collector-health" class="wx-notice" role="status">Checking automatic NOAA collectors…</div>
+  <div id="wx-collector-health" class="wx-notice" role="status">Checking automatic NOAA collectors and first-party settlement reconciliation…</div>
  </article>
  <article class="wx-panel">
   <h2>Fine-grained temperature distribution</h2>
@@ -215,10 +215,12 @@ _CALIBRATION_PANEL = """
    <strong id="wx-calibration-coverage-ci">—</strong></div>
   <div class="wx-row"><span>Model log loss</span><strong id="wx-calibration-logloss">—</strong></div>
   <div class="wx-row"><span>NBM baseline Brier</span><strong id="wx-calibration-nbm-brier">—</strong></div>
+  <div class="wx-row"><span>First-party automatic crosschecks</span>
+   <strong id="wx-auto-settlement-count">0</strong></div>
   <div class="wx-row"><span>Independently certified</span><strong>NOT CERTIFIED</strong></div>
   <div class="wx-row"><span>Automatically promoted</span><strong>NEVER</strong></div>
  </div>
- <p id="wx-calibration-note">Waiting for recorded forecasts and original publisher settlement evidence.
+ <p id="wx-calibration-note">Automatically checking settled Kalshi markets against original first-party published climate values. Waiting for safely matched evidence.
  No score is inferred from assumed uncertainty.</p>
 </section>
 """
@@ -250,6 +252,10 @@ WEATHER_STATUS_SCRIPT = r"""<script>
    const decoder=collector.decoder||{};
    if(decoder.state&&decoder.state!=="AVAILABLE"&&decoder.state!=="NOT_CHECKED")
       parts.push("GRIB decoder: "+decoder.state+(decoder.reason?" ("+decoder.reason+")":""));
+   const outcome=collector.settlement||{};
+   parts.push("Settlement evidence: "+(outcome.state||"NOT STARTED")+
+      " · crosschecked: "+(outcome.crosschecked??0)+
+      (outcome.reason?" — "+outcome.reason:""));
    for(const source of ["METAR","HRRR","NBM"]){
      const value=collector.feeds?.[source]||{};
      parts.push(source+": "+(value.state||"UNKNOWN")+(value.reason?" — "+value.reason:""));
@@ -414,6 +420,7 @@ WEATHER_CALIBRATION_SCRIPT = r"""<script>
    const row=(latest.stations||[]).find(s=>s.station===station);
    put("wx-calibration-state",row?row.status:latest.status);
    put("wx-calibration-noon-days",latest.journal?.recorded_noon_snapshots??0);
+   put("wx-auto-settlement-count",latest.automated_label_count??0);
    put("wx-calibration-days",row?.matched_days??0);
    const coverage=row?.["90_interval"];
    put("wx-calibration-coverage",coverage?
@@ -431,6 +438,7 @@ WEATHER_CALIBRATION_SCRIPT = r"""<script>
    put("wx-calibration-note",
        explicit+" · Evidence matched: "+(row?.matched_days??0)+
        " independent days · Rejected evidence records: "+(latest.rejected_evidence_count??0)+
+       " · First-party automatic crosschecks: "+(latest.automated_label_count??0)+
        " · No profitability or live-trading claims.");
  }
  async function refresh(){
