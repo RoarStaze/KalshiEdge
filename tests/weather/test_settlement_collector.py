@@ -175,3 +175,40 @@ def test_revised_final_publisher_value_revokes_prior_unconfirmed_auto_label(tmp_
     # in forward calibration as if it were still corroborated.
     assert audit_settlement_evidence(root)[0]==[]
     assert len(list((root/"evidence").glob("*twc*")))>=1
+
+
+
+def test_archived_kalshi_event_uses_official_historical_market_endpoint(tmp_path):
+    root=tmp_path/"weather"
+    calls=[]
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.host=="weather.com":
+            return httpx.Response(200,content=publisher())
+        if request.url.path=="/trade-api/v2/markets":
+            return httpx.Response(200,json={"markets":[],"cursor":""})
+        assert request.url.path=="/trade-api/v2/historical/markets"
+        return httpx.Response(200,json={"markets":markets(),"cursor":""})
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await collect_station_day(
+                root,"KMDW",DAY,client=client,
+                clock=lambda:datetime(2026,11,20,12,tzinfo=timezone.utc))
+    out=asyncio.run(run())
+    assert out["state"]=="CROSSCHECKED_UNCERTIFIED"
+    assert "/trade-api/v2/historical/markets" in calls
+    accepted,rejected=audit_settlement_evidence(root)
+    assert len(accepted)==1 and rejected==[]
+
+
+def test_settlement_poller_requires_actual_frozen_forecasts(tmp_path):
+    db=tmp_path/"weather"/"weatheredge.sqlite3"
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda req: (_ for _ in ()).throw(AssertionError("no HTTP without journal")))
+        ) as client:
+            return await poll_settlements(db,client=client)
+    report=asyncio.run(run())
+    assert report["state"]=="NO_ELIGIBLE_FORECAST_DAYS"
+    assert report["crosschecked"]==0
