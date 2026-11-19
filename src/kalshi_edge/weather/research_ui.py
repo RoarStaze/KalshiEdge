@@ -89,7 +89,8 @@ _FORECAST = """
   <div class="wx-prediction-heading"><h2>Daily high · airport probability forecast</h2>
   <label class="wx-picker-label" for="wx-forecast-station">Station
    <select id="wx-forecast-station" aria-label="Airport weather station">
-    <option value="KORD">Chicago O'Hare (KORD)</option>
+    <option value="KMDW">Chicago Midway (KMDW · Kalshi Chicago)</option>
+    <option value="KORD">Chicago O'Hare (KORD · separate research)</option>
     <option value="KDEN">Denver (KDEN)</option>
     <option value="KATL">Atlanta (KATL)</option>
     <option value="KLAX">Los Angeles (KLAX)</option>
@@ -97,7 +98,8 @@ _FORECAST = """
   <div class="wx-notice">EXPERIMENTAL AIRPORT PROXY · These are modeled
   one-degree temperature probabilities, NOT Kalshi contract odds.
   Contract-specific settlement sources, calibration and forward profitability
-  remain independently unverified. No orders can be placed here.</div>
+  remain independently unverified. Chicago's KXHIGHCHI market uses Midway
+  (KMDW / CLIMDW), not O'Hare (KORD). No orders can be placed here.</div>
   <div class="wx-stats">
    <div class="wx-stat"><span>Predicted daily maximum</span><strong id="wx-forecast-mean">—</strong></div>
    <div class="wx-stat"><span>90% modeled interval (not validated)</span><strong id="wx-forecast-interval">—</strong></div>
@@ -188,7 +190,8 @@ _CALIBRATION_PANEL = """
  <div class="wx-prediction-heading"><h2>Prospective probability calibration</h2>
  <label class="wx-picker-label" for="wx-calibration-station">Airport
  <select id="wx-calibration-station">
- <option value="KORD">Chicago O'Hare</option><option value="KDEN">Denver</option>
+ <option value="KMDW">Chicago Midway · Kalshi</option>
+ <option value="KORD">Chicago O'Hare · research</option><option value="KDEN">Denver</option>
  <option value="KATL">Atlanta</option><option value="KLAX">Los Angeles</option>
  </select></label></div>
  <div class="wx-notice">NO INDEPENDENT CALIBRATION CERTIFICATION. The 90% interval
