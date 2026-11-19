@@ -80,3 +80,29 @@ def test_bad_range_aborts_entire_cycle_without_partial_database_rows(tmp_path):
     with pytest.raises(ValueError,match="206"):
         asyncio.run(run_collection())
     assert not (tmp_path/"db.sqlite3").exists()
+
+
+
+def test_nbm_official_inventory_prefers_ordinary_temperature_not_ensemble_spread():
+    # NCEP publishes ordinary TMP, an ensemble spread of TMP, and other TMP
+    # statistical products in the same core inventory. The spread is NOT a
+    # valid 2m temperature forecast and previously made the selector ambiguous.
+    idx = (
+        "132:400:d=2026111909:TMP:surface:6 hour fcst:\n"
+        "133:900:d=2026111909:TMP:2 m above ground:6 hour fcst:\n"
+        "134:1200:d=2026111909:TMP:2 m above ground:6 hour fcst:ens std dev:\n"
+        "135:1700:d=2026111909:DPT:2 m above ground:6 hour fcst:\n"
+    )
+    choice = select_2m_temperature(parse_index(idx))
+    assert choice.start == 900
+    assert choice.end == 1199
+    assert "ens std dev" not in choice.description
+
+
+def test_nbm_inventory_rejects_spread_only_no_deterministic_temperature():
+    idx = (
+        "133:900:d=2026111909:TMP:2 m above ground:6 hour fcst:ens std dev:\n"
+        "134:1200:d=2026111909:DPT:2 m above ground:6 hour fcst:\n"
+    )
+    with pytest.raises(ValueError, match="missing|ambiguous"):
+        select_2m_temperature(parse_index(idx))
