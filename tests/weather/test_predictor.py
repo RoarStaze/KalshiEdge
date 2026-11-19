@@ -267,3 +267,16 @@ def test_same_day_trained_artifact_is_not_usable_for_prior_noon_forecast(tmp_pat
     result=read_station_forecast(db,"KORD",asof,model_dir=model_dir)
     assert result["status"]=="INVALID_MODEL"
     assert result["mean_f"] is None
+
+
+
+def test_market_ticker_station_and_day_must_match_verified_market_rules():
+    from kalshi_edge.weather.predictor import ticker_matches_station_day
+    from datetime import date
+    day=date(2026,11,19)
+    assert ticker_matches_station_day("KMDW","KXHIGHCHI-26NOV19-T62",day)
+    assert ticker_matches_station_day("KDEN","KXHIGHDEN-26NOV19-B55.5",day)
+    assert not ticker_matches_station_day("KORD","KXHIGHCHI-26NOV19-T62",day)
+    assert not ticker_matches_station_day("KMDW","KXHIGHCHI-26NOV18-T62",day)
+    assert not ticker_matches_station_day("KMDW","KXHIGHCHI-TEST",day)
+    assert not ticker_matches_station_day("KMDW","KXHIGHDEN-26NOV19-T62",day)
