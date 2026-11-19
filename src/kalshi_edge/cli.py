@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from .collector import KalshiCollector
@@ -92,6 +92,26 @@ def build_parser() -> argparse.ArgumentParser:
     app = sub.add_parser("start", help="launch unified local dashboard, live model and settlement tracking")
     app.add_argument("--no-browser", action="store_true", help="do not automatically open the browser")
     app.add_argument("--port", type=int, default=8899, help="local dashboard port (default 8899)")
+    # Isolated weather research/observation commands. No exchange orders.
+    weather_forecast = sub.add_parser(
+        "weather-forecast", help="inspect actual airport proxy probabilities from fresh METAR/HRRR/NBM data"
+    )
+    weather_forecast.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"))
+    weather_forecast.add_argument("--asof", help="timezone-aware historical as-of timestamp for point-in-time audit")
+    weather_train = sub.add_parser(
+        "weather-train", help="fit research-only station model from labeled daily JSONL with chronological holdout"
+    )
+    weather_train.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"), required=True)
+    weather_train.add_argument("--input-jsonl", type=Path, required=True)
+    weather_train.add_argument("--model-out", type=Path, default=None)
+    weather_train.add_argument("--min-days", type=int, default=60)
+    weather_metars = sub.add_parser(
+        "weather-collect-metars", help="read NOAA AWC observations into the WeatherEdge SQLite database"
+    )
+    weather_metars.add_argument("--stations", default="KORD,KDEN,KATL,KLAX")
+    weather_metars.add_argument("--db", type=Path, default=None)
+    weather_metars.add_argument("--watch", action="store_true", help="poll in foreground every five minutes")
+    weather_metars.add_argument("--interval-seconds", type=int, default=300)
     sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
     history = sub.add_parser("final-history", help="show local final-forecast history and sync official Kalshi settlements")
     history.add_argument("--once", action="store_true", help="sync available official settlements once and exit")
@@ -311,6 +331,68 @@ def main(argv: list[str] | None = None) -> int:
         if not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535")
         return start(port=args.port, open_browser=not args.no_browser)
+    if args.command == "weather-forecast":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.predictor import read_weather_forecasts, read_station_forecast
+        from .weather.status import weather_database_path
+
+        root = BootstrapSettings().bootstrap_dir
+        asof = None
+        if args.asof:
+            try:
+                asof = datetime.fromisoformat(args.asof.replace("Z","+00:00"))
+                if asof.utcoffset() is None:
+                    raise ValueError("timestamp lacks UTC offset")
+            except ValueError as exc:
+                parser.error(f"--asof must be timezone-aware: {exc}")
+        if args.station:
+            result = read_station_forecast(weather_database_path(root), args.station, asof)
+            print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+            return 0 if result["status"] == "READY_RESEARCH" else 2
+        result = read_weather_forecasts(root, asof=asof)
+        print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+        return 0 if any(x["status"] == "READY_RESEARCH" for x in result["forecasts"]) else 2
+    if args.command == "weather-train":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.training import train_model_file
+
+        root = BootstrapSettings().bootstrap_dir
+        destination = (args.model_out or
+                       root.parent / "weather" / "models" / f"{args.station}.json")
+        try:
+            model = train_model_file(
+                args.input_jsonl, args.station, destination, min_days=args.min_days
+            )
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            parser.error(f"weather training rejected: {exc}")
+        print(json.dumps({
+            "model_path": str(destination), "mode": "RESEARCH_ONLY",
+            "model": model,
+        }, indent=2, sort_keys=True, allow_nan=False))
+        return 0
+    if args.command == "weather-collect-metars":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.collection import collect_metars_once, watch_metars
+        from .weather.predictor import STATIONS
+        from .weather.status import weather_database_path
+
+        stations = tuple(v.strip().upper() for v in args.stations.split(","))
+        if not stations or any(x not in STATIONS for x in stations):
+            parser.error("--stations must be a nonempty list of KORD,KDEN,KATL,KLAX")
+        if args.interval_seconds < 300:
+            parser.error("--interval-seconds must be at least 300")
+        db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
+        try:
+            if args.watch:
+                asyncio.run(watch_metars(
+                    db, stations=stations, interval_seconds=args.interval_seconds
+                ))
+            else:
+                result = asyncio.run(collect_metars_once(db, stations=stations))
+                print(json.dumps(result, indent=2, sort_keys=True))
+        except KeyboardInterrupt:
+            return 130
+        return 0
     if args.command == "predict-live":
         from .bootstrap.live import run_live
 
