@@ -75,12 +75,23 @@ def parse_index(content: str) -> list[InventoryMessage]:
 
 
 def select_2m_temperature(messages: list[InventoryMessage]) -> InventoryMessage:
+    # NBM core inventories contain multiple TMP/2m products, notably the
+    # ordinary temperature forecast AND its ensemble standard deviation.
+    # The former is usable as Kelvin guidance; the latter is a spread in
+    # Kelvin and MUST NOT be treated as air temperature. Require the normal
+    # forecast field to end after the lead-time token (trailing colon optional).
+    # This also rejects percentile/probability variants and keeps a strict
+    # ambiguity failure if NOAA ever publishes two ordinary candidates.
     matching = [
         item for item in messages
-        if re.search(r":TMP:2 m above ground:", item.description, flags=re.IGNORECASE)
+        if re.search(
+            r":TMP:2 m above ground:[^:]+:?\\s*$",
+            item.description,
+            flags=re.IGNORECASE,
+        )
     ]
     if len(matching) != 1:
-        raise ValueError("missing or ambiguous NOAA 2 m temperature field")
+        raise ValueError("missing or ambiguous ordinary NOAA 2 m temperature field")
     return matching[0]
 
 
