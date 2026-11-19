@@ -6,8 +6,10 @@ must not be confused with independently verified settlement measurements.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -30,6 +32,40 @@ def weather_database_path(bootstrap_root: Path) -> Path:
     return Path(bootstrap_root).parent / "weather" / "weatheredge.sqlite3"
 
 
+def read_collector_health(bootstrap_root: Path, *, preview: bool = False) -> dict:
+    """Read supervisor's atomic local status; never consult credentials/network."""
+    if preview:
+        return {"state": "PREVIEW", "feeds": {}}
+    path = weather_database_path(bootstrap_root).parent / "collector-status.json"
+    if not path.is_file():
+        return {"state": "NOT_STARTED", "feeds": {}}
+    try:
+        if path.stat().st_size > 64_000:
+            return {"state": "INVALID", "feeds": {}}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("mode") != "DATA_ONLY":
+            raise ValueError("bad weather collector health metadata")
+        timestamp = datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
+        if timestamp.utcoffset() is None:
+            raise ValueError("collector health timestamp missing timezone")
+        age = datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)
+        feeds = data.get("feeds")
+        if not isinstance(feeds, dict):
+            raise ValueError("invalid collector source states")
+        return {
+            "state": "STALE" if age > timedelta(minutes=15) or age < -timedelta(minutes=2)
+                     else "ACTIVE",
+            "updated_at": timestamp.isoformat(),
+            "decoder": data.get("decoder", {}),
+            "feeds": {
+                source: value for source, value in feeds.items()
+                if source in ("METAR", "HRRR", "NBM") and isinstance(value, dict)
+            },
+        }
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return {"state": "INVALID", "feeds": {}}
+
+
 def read_weather_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
     """Read aggregated station/source receipts; never imply a prediction exists.
 
@@ -37,10 +73,12 @@ def read_weather_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
     input or query parameter can influence the filesystem location.
     """
     if preview:
-        return _empty_status("PREVIEW")
+        return {**_empty_status("PREVIEW"),
+                "collector": read_collector_health(bootstrap_root, preview=True)}
+    collector = read_collector_health(bootstrap_root)
     path = weather_database_path(bootstrap_root)
     if not path.is_file():
-        return _empty_status("NOT_FOUND")
+        return {**_empty_status("NOT_FOUND"), "collector": collector}
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, timeout=0.5)) as conn:
@@ -51,7 +89,7 @@ def read_weather_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
                 "GROUP BY station, UPPER(source) ORDER BY station, UPPER(source)"
             ).fetchall()
     except (sqlite3.Error, OSError, ValueError):
-        return _empty_status("ERROR")
+        return {**_empty_status("ERROR"), "collector": collector}
     stations: dict[str, dict] = {}
     sample_count = 0
     last_received: str | None = None
@@ -71,5 +109,6 @@ def read_weather_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
         "station_count": len(stations),
         "last_received_at": last_received,
         "stations": list(stations.values())[:50],
+        "collector": collector,
     })
     return result
