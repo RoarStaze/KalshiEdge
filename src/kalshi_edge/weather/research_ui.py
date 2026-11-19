@@ -100,7 +100,7 @@ _FORECAST = """
   remain independently unverified. No orders can be placed here.</div>
   <div class="wx-stats">
    <div class="wx-stat"><span>Predicted daily maximum</span><strong id="wx-forecast-mean">—</strong></div>
-   <div class="wx-stat"><span>90% modeled interval</span><strong id="wx-forecast-interval">—</strong></div>
+   <div class="wx-stat"><span>90% modeled interval (not validated)</span><strong id="wx-forecast-interval">—</strong></div>
    <div class="wx-stat"><span>Observed airport high so far</span><strong id="wx-forecast-observed">—</strong></div>
    <div class="wx-stat"><span>Model / confidence</span><strong id="wx-forecast-model">NOT READY</strong></div>
   </div>
@@ -183,7 +183,49 @@ _DATA = """
  </article></div>
 """
 
-WEATHER_CONTENT = {"forecast": _FORECAST, "train": _TRAIN, "history": _HISTORY, "data": _DATA}
+_CALIBRATION_PANEL = """
+<section class="wx-panel" aria-label="Weather probability calibration evidence">
+ <div class="wx-prediction-heading"><h2>Prospective probability calibration</h2>
+ <label class="wx-picker-label" for="wx-calibration-station">Airport
+ <select id="wx-calibration-station">
+ <option value="KORD">Chicago O'Hare</option><option value="KDEN">Denver</option>
+ <option value="KATL">Atlanta</option><option value="KLAX">Los Angeles</option>
+ </select></label></div>
+ <div class="wx-notice">NO INDEPENDENT CALIBRATION CERTIFICATION. The 90% interval
+ is a Gaussian modeling assumption until actual independent daily outcomes
+ demonstrate coverage. One frozen noon forecast per airport/day is scored;
+ forecast snapshots are captured automatically by <code>kalshiedge start</code>.
+ Publisher captures are individually reviewed but not automatically authenticated.</div>
+ <div class="wx-stats">
+  <div class="wx-stat"><span>Recorded noon forecasts (all stations)</span>
+   <strong id="wx-calibration-noon-days">—</strong></div>
+  <div class="wx-stat"><span>Matched independent airport days</span>
+   <strong id="wx-calibration-days">0</strong></div>
+  <div class="wx-stat"><span>Observed 90% interval coverage</span>
+   <strong id="wx-calibration-coverage">NOT MEASURED</strong></div>
+  <div class="wx-stat"><span>Multiclass Brier score</span>
+   <strong id="wx-calibration-brier">—</strong></div>
+ </div>
+ <div class="wx-rows">
+  <div class="wx-row"><span>Audit status</span><strong id="wx-calibration-state">AWAITING EVIDENCE</strong></div>
+  <div class="wx-row"><span>95% coverage uncertainty interval</span>
+   <strong id="wx-calibration-coverage-ci">—</strong></div>
+  <div class="wx-row"><span>Model log loss</span><strong id="wx-calibration-logloss">—</strong></div>
+  <div class="wx-row"><span>NBM baseline Brier</span><strong id="wx-calibration-nbm-brier">—</strong></div>
+  <div class="wx-row"><span>Independently certified</span><strong>NOT CERTIFIED</strong></div>
+  <div class="wx-row"><span>Automatically promoted</span><strong>NEVER</strong></div>
+ </div>
+ <p id="wx-calibration-note">Waiting for recorded forecasts and original publisher settlement evidence.
+ No score is inferred from assumed uncertainty.</p>
+</section>
+"""
+
+WEATHER_CONTENT = {
+    "forecast": _FORECAST + _CALIBRATION_PANEL,
+    "train": _TRAIN + _CALIBRATION_PANEL,
+    "history": _HISTORY + _CALIBRATION_PANEL,
+    "data": _DATA,
+}
 
 WEATHER_STATUS_SCRIPT = r"""<script>
 (function(){
@@ -353,6 +395,62 @@ WEATHER_FORECAST_SCRIPT = r"""<script>
 </script>"""
 
 
+WEATHER_CALIBRATION_SCRIPT = r"""<script>
+(function(){
+ "use strict";
+ const node=id=>document.getElementById(id);
+ const picker=node("wx-calibration-station");
+ if(!picker)return;
+ const put=(id,value)=>{const el=node(id);if(el)el.textContent=String(value);};
+ let latest=null;
+ function render(){
+   if(!latest)return;
+   const forecastPicker=node("wx-forecast-station");
+   const station=forecastPicker?forecastPicker.value:picker.value;
+   picker.value=station;
+   const row=(latest.stations||[]).find(s=>s.station===station);
+   put("wx-calibration-state",row?row.status:latest.status);
+   put("wx-calibration-noon-days",latest.journal?.recorded_noon_snapshots??0);
+   put("wx-calibration-days",row?.matched_days??0);
+   const coverage=row?.["90_interval"];
+   put("wx-calibration-coverage",coverage?
+       (coverage.empirical_coverage*100).toFixed(1)+"%":"NOT MEASURED");
+   put("wx-calibration-coverage-ci",coverage?
+       coverage.wilson_95_ci.map(x=>(x*100).toFixed(1)+"%").join(" to "):"—");
+   put("wx-calibration-brier",Number.isFinite(row?.multiclass_brier)?
+       row.multiclass_brier.toFixed(4):"—");
+   put("wx-calibration-logloss",Number.isFinite(row?.log_loss)?
+       row.log_loss.toFixed(4):"—");
+   put("wx-calibration-nbm-brier",Number.isFinite(row?.nbm_baseline?.multiclass_brier)?
+       row.nbm_baseline.multiclass_brier.toFixed(4):"—");
+   const explicit = latest.calibration_certified===true?"SOURCE REVIEW REQUIRED":
+       "NO INDEPENDENT CERTIFICATION";
+   put("wx-calibration-note",
+       explicit+" · Evidence matched: "+(row?.matched_days??0)+
+       " independent days · Rejected evidence records: "+(latest.rejected_evidence_count??0)+
+       " · No profitability or live-trading claims.");
+ }
+ async function refresh(){
+   try {
+     const response=await fetch("/api/weather/calibration",{cache:"no-store"});
+     if(!response.ok)throw new Error("calibration API unavailable");
+     latest=await response.json();
+     render();
+   }catch(_error){
+     latest=null;
+     put("wx-calibration-state","EVIDENCE API UNAVAILABLE");
+     put("wx-calibration-coverage","NOT MEASURED");
+     put("wx-calibration-note","Read-only calibration report is unavailable.");
+   }
+ }
+ picker.addEventListener("change",render);
+ const forecast=node("wx-forecast-station");
+ if(forecast)forecast.addEventListener("change",render);
+ refresh();setInterval(refresh,30000);
+})();
+</script>"""
+
+
 def render_weather_page(section: str) -> str:
     """Render isolated read-only WeatherEdge workspace, no Bitcoin page scripts."""
     if section not in WEATHER_SECTIONS:
@@ -389,4 +487,4 @@ def render_weather_page(section: str) -> str:
 </main>
 <footer class="wx-footer">WeatherEdge AI · station research and paper-only data.
 Weather observations are not necessarily Kalshi's official settlement measurements.</footer>
-</div>{WEATHER_STATUS_SCRIPT}{WEATHER_FORECAST_SCRIPT}{MOTION_SCRIPT}</body></html>"""
+</div>{WEATHER_STATUS_SCRIPT}{WEATHER_FORECAST_SCRIPT}{WEATHER_CALIBRATION_SCRIPT}{MOTION_SCRIPT}</body></html>"""
