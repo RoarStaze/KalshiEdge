@@ -235,3 +235,25 @@ def test_weather_dashboard_shows_per_station_settlement_failure_reason():
     assert "outcome.details" in html
     assert "UNVERIFIED" in html
     assert "/api/manual-trade" not in html
+
+
+
+def test_final_label_is_suspended_if_publisher_withdraws_final_status(tmp_path):
+    root=tmp_path/"weather"
+    status={"value":"Final"}
+    def mock(request):
+        if request.url.host=="weather.com":
+            return httpx.Response(200,content=publisher(status=status["value"]))
+        return httpx.Response(200,json={"markets":markets(),"cursor":""})
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(mock)) as client:
+            first=await collect_station_day(root,"KMDW",DAY,client=client,
+                clock=lambda:datetime(2026,11,20,12,tzinfo=timezone.utc))
+            status["value"]="Preliminary"
+            second=await collect_station_day(root,"KMDW",DAY,client=client,
+                clock=lambda:datetime(2026,11,20,16,tzinfo=timezone.utc))
+            return first,second
+    first,second=asyncio.run(run())
+    assert first["state"]=="CROSSCHECKED_UNCERTIFIED"
+    assert second["state"]=="UNVERIFIED"
+    assert audit_settlement_evidence(root)[0]==[]
