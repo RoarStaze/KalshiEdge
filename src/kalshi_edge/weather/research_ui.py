@@ -116,6 +116,7 @@ _FORECAST = """
   <p id="wx-forecast-asof">Waiting for NOAA receipt timestamps…</p>
   <p id="wx-forecast-freshness">Actual observation and forecast receipt times unavailable.</p>
   <p id="wx-forecast-diagnostic" role="status" aria-live="polite">Waiting for source diagnostics.</p>
+  <div id="wx-collector-health" class="wx-notice" role="status">Checking automatic NOAA collectors…</div>
  </article>
  <article class="wx-panel">
   <h2>Fine-grained temperature distribution</h2>
@@ -177,6 +178,7 @@ _DATA = """
  <code>data/weather/weatheredge.sqlite3</code>. NOAA GRIB decoding requires
  the optional Python weather dependencies.</p>
  <p id="wx-updated">Waiting for collector status…</p>
+ <div id="wx-collector-health" class="wx-notice">Checking automatic NOAA collectors…</div>
  </article></div>
 """
 
@@ -191,6 +193,22 @@ WEATHER_STATUS_SCRIPT = r"""<script>
    if(!iso)return "No records received";
    const date=new Date(iso);
    return Number.isNaN(date.getTime())?"Receipt timestamp unavailable":"Latest receipt: "+date.toLocaleString();
+ }
+ function showCollector(collector){
+   const el=node("wx-collector-health");if(!el)return;
+   if(!collector||collector.state==="NOT_STARTED"){
+     el.textContent="Weather collectors have not started. Launch the app with kalshiedge start.";return;
+   }
+   if(collector.state==="PREVIEW"){el.textContent="Preview mode: NOAA collectors are intentionally disabled.";return;}
+   const parts=["Automatic collector: "+(collector.state||"UNKNOWN")];
+   const decoder=collector.decoder||{};
+   if(decoder.state&&decoder.state!=="AVAILABLE"&&decoder.state!=="NOT_CHECKED")
+      parts.push("GRIB decoder: "+decoder.state+(decoder.reason?" ("+decoder.reason+")":""));
+   for(const source of ["METAR","HRRR","NBM"]){
+     const value=collector.feeds?.[source]||{};
+     parts.push(source+": "+(value.state||"UNKNOWN")+(value.reason?" — "+value.reason:""));
+   }
+   el.textContent=parts.join(" · ");
  }
  function showStations(stations){
    const el=node("wx-stations");if(!el)return;
@@ -222,9 +240,11 @@ WEATHER_STATUS_SCRIPT = r"""<script>
      put("wx-samples",state.sample_count??0);
      put("wx-station-count",state.station_count??0);
      put("wx-updated",stamp(state.last_received_at));
+     showCollector(state.collector);
      showStations(Array.isArray(state.stations)?state.stations:[]);
    }catch(_error){
      put("wx-db","UNAVAILABLE");put("wx-updated","Collector status unavailable");
+     showCollector({state:"UNAVAILABLE",feeds:{}});
      showStations([]);
    }
  }
