@@ -156,7 +156,7 @@ def verify_kalshi_markets(markets: list, station: str, climate_day: date,
         (yes if reported else no).append(ticker)
     if not yes or not no:
         raise ValueError("INSUFFICIENT_OUTCOME_CROSSCHECK")
-    return sorted(yes)[0]
+    return yes[0]
 
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
@@ -190,7 +190,6 @@ def _atomic_manifest(path: Path, record: dict) -> None:
     entries.append(record)
     entries.sort(key=lambda r:(r["climate_day"],r["station"]))
     encoded=("\n".join(json.dumps(r,sort_keys=True,allow_nan=False) for r in entries)+"\n").encode()
-    _atomic_bytes(path.parent/".manifest-checkpoint.tmp.keep", b"") if False else None
     temporary=None
     try:
         with tempfile.NamedTemporaryFile(dir=path.parent,prefix=".auto-labels-",
