@@ -98,6 +98,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     weather_forecast.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"))
     weather_forecast.add_argument("--asof", help="timezone-aware historical as-of timestamp for point-in-time audit")
+    weather_export = sub.add_parser(
+        "weather-export-training", help="join original weather snapshots to documented first-party publisher labels"
+    )
+    weather_export.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"), required=True)
+    weather_export.add_argument("--evidence-jsonl", type=Path, required=True)
+    weather_export.add_argument("--out-jsonl", type=Path, required=True)
+    weather_export.add_argument("--db", type=Path, default=None)
     weather_train = sub.add_parser(
         "weather-train", help="fit research-only station model from labeled daily JSONL with chronological holdout"
     )
@@ -361,6 +368,20 @@ def main(argv: list[str] | None = None) -> int:
         result = read_weather_forecasts(root, asof=asof)
         print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
         return 0 if any(x["status"] == "READY_RESEARCH" for x in result["forecasts"]) else 2
+    if args.command == "weather-export-training":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.dataset import export_labeled_days
+        from .weather.status import weather_database_path
+
+        db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
+        try:
+            report = export_labeled_days(
+                db, args.evidence_jsonl, args.out_jsonl, args.station
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            parser.error(f"weather historical export rejected: {exc}")
+        print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+        return 0 if report["exported"] else 2
     if args.command == "weather-train":
         from .bootstrap.config import BootstrapSettings
         from .weather.training import train_model_file
