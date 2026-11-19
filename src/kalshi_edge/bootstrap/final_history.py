@@ -29,6 +29,8 @@ from .site_pages import render_site_page
 from .strat_ui import render_strat_page
 from kalshi_edge.gold.research_ui import render_gold_page
 from kalshi_edge.gold.experiment import gold_experiment_status
+from kalshi_edge.weather.research_ui import render_weather_page
+from kalshi_edge.weather.status import read_weather_status
 from .api_credentials_ui import integrate_api_credentials
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
@@ -385,6 +387,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
     # Separate static gold research routes never instantiate BTC trading widgets.
     gold_pages = {name: render_gold_page(name).encode("utf-8")
                   for name in ("trade", "train", "history", "data")}
+    # Independent WeatherEdge pages contain no BTC account or order controls.
+    weather_pages = {name: render_weather_page(name).encode("utf-8")
+                     for name in ("forecast", "train", "history", "data")}
 
     class HistoryHandler(BaseHTTPRequestHandler):
         def _json(self, status: int, data: dict) -> None:
@@ -800,6 +805,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 section = "trade" if path == "/gold" else path.split("/")[-1]
                 content = gold_pages[section]
                 kind = "text/html; charset=utf-8"
+            elif path in ("/weather", "/weather/train", "/weather/history", "/weather/data"):
+                section = "forecast" if path == "/weather" else path.split("/")[-1]
+                content = weather_pages[section]
+                kind = "text/html; charset=utf-8"
             elif path == "/assets/kalshiedge-neon-city.webp":
                 # A single allowlisted, optional local image: never expose the
                 # data directory or permit user-specified filesystem paths.
@@ -834,6 +843,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 kind = "application/json; charset=utf-8"
             elif self.path == "/api/gold/status":
                 content = json.dumps(gold_experiment_status(), separators=(",", ":"),
+                                     allow_nan=False).encode("utf-8")
+                kind = "application/json; charset=utf-8"
+            elif path == "/api/weather/status":
+                content = json.dumps(read_weather_status(root), separators=(",", ":"),
                                      allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
             elif self.path == "/api/health":
