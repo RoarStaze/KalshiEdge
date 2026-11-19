@@ -112,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
     weather_metars.add_argument("--db", type=Path, default=None)
     weather_metars.add_argument("--watch", action="store_true", help="poll in foreground every five minutes")
     weather_metars.add_argument("--interval-seconds", type=int, default=300)
+    weather_nwp = sub.add_parser(
+        "weather-collect-nwp", help="collect NOAA HRRR and NBM GRIB2 station guidance"
+    )
+    weather_nwp.add_argument("--db", type=Path, default=None)
+    weather_nwp.add_argument("--models", default="HRRR,NBM")
+    weather_nwp.add_argument("--forecast-hours", default="1,2,3,4,5,6,7,8,9,10,11,12")
+    weather_nwp.add_argument("--lookback-hours", type=int, default=5)
+    weather_nwp.add_argument("--watch", action="store_true")
+    weather_nwp.add_argument("--interval-seconds", type=int, default=3600)
     sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
     history = sub.add_parser("final-history", help="show local final-forecast history and sync official Kalshi settlements")
     history.add_argument("--once", action="store_true", help="sync available official settlements once and exit")
@@ -390,6 +399,41 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 result = asyncio.run(collect_metars_once(db, stations=stations))
                 print(json.dumps(result, indent=2, sort_keys=True))
+        except KeyboardInterrupt:
+            return 130
+        return 0
+    if args.command == "weather-collect-nwp":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.nwp_collection import collect_recent, watch_nwp
+        from .weather.status import weather_database_path
+
+        models = tuple(x.strip().upper() for x in args.models.split(","))
+        try:
+            hours = [int(x.strip()) for x in args.forecast_hours.split(",")]
+        except ValueError:
+            parser.error("--forecast-hours must be comma-separated integers")
+        if not models or any(m not in ("HRRR","NBM") for m in models):
+            parser.error("--models must be HRRR and/or NBM")
+        if not hours or len(set(hours)) != len(hours) or any(not 1 <= h <= 48 for h in hours):
+            parser.error("--forecast-hours must be unique integers between 1 and 48")
+        if not 1 <= args.lookback_hours <= 24:
+            parser.error("--lookback-hours must be 1..24")
+        if args.watch and args.interval_seconds < 900:
+            parser.error("--interval-seconds must be at least 900")
+        db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
+        try:
+            if args.watch:
+                asyncio.run(watch_nwp(db, interval_seconds=args.interval_seconds))
+            else:
+                report = asyncio.run(collect_recent(
+                    db, models=models, forecast_hours=hours,
+                    lookback_hours=args.lookback_hours,
+                ))
+                print(json.dumps(report, indent=2, sort_keys=True))
+                return 0 if all(x.get("mode") == "DATA_ONLY" for x in report.values()) else 2
+        except (ImportError, OSError) as exc:
+            parser.error("NOAA GRIB decoding requires optional weather dependencies: "
+                         f"{exc}. Install with pip install -e '.[weather]'")
         except KeyboardInterrupt:
             return 130
         return 0
