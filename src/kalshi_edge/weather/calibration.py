@@ -105,6 +105,9 @@ def _evidence_item(raw: dict, root: Path) -> dict:
     ticker = raw["market_ticker"]
     if not isinstance(ticker, str) or not _VALID_TICKER.fullmatch(ticker):
         raise ValueError("missing or invalid market ticker")
+    expected_series = STATIONS[station].kalshi_series
+    if expected_series is None or not ticker.startswith(expected_series + "-"):
+        raise ValueError("station and ticker mismatch: verify market-specific settlement airport")
     digest = raw["sha256"]
     if not isinstance(digest,str) or not _HEX256.fullmatch(digest):
         raise ValueError("missing or invalid capture SHA-256")
