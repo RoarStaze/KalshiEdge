@@ -85,7 +85,7 @@ def select_2m_temperature(messages: list[InventoryMessage]) -> InventoryMessage:
     matching = [
         item for item in messages
         if re.search(
-            r":TMP:2 m above ground:[^:]+:?\\s*$",
+            r":TMP:2 m above ground:[^:]+:?\s*$",
             item.description,
             flags=re.IGNORECASE,
         )
