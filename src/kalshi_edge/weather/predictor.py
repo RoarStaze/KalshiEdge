@@ -42,6 +42,28 @@ STATIONS: dict[str, Station] = {
                      kalshi_series="KXHIGHLAX", settlement_station="CLILAX"),
 }
 
+def ticker_matches_station_day(station: str, ticker: str, climate_day: date) -> bool:
+    """Reject outcomes for a different airport, series or settlement date.
+
+    NOAA and Kalshi daily-high series must be linked by actual contract
+    metadata, never by a friendly city name or neighboring airport.
+    """
+    spec = STATIONS.get(station)
+    if (spec is None or spec.kalshi_series is None or
+        not isinstance(ticker, str) or not isinstance(climate_day, date)):
+        return False
+    prefix = spec.kalshi_series + "-"
+    if not ticker.startswith(prefix):
+        return False
+    tail = ticker[len(prefix):].split("-", 1)
+    if len(tail) != 2 or len(tail[0]) != 7:
+        return False
+    try:
+        return datetime.strptime(tail[0], "%y%b%d").date() == climate_day
+    except ValueError:
+        return False
+
+
 NWP_MAX_AGE = timedelta(hours=5)
 METAR_MAX_AGE = timedelta(minutes=90)
 DEFAULT_SIGMA_F = 3.0  # HEURISTIC: not calibrated until labels/holdout exist
