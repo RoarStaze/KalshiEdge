@@ -150,3 +150,28 @@ def test_auto_collector_ignores_research_only_ohare(tmp_path):
     result=asyncio.run(collect_station_day(root,"KORD",DAY))
     assert result["state"]=="UNSUPPORTED_STATION"
     assert not root.exists()
+
+
+
+def test_revised_final_publisher_value_revokes_prior_unconfirmed_auto_label(tmp_path):
+    root=tmp_path/"weather"
+    state={"temp":62}
+    def transport(request):
+        if request.url.host=="weather.com":
+            return httpx.Response(200,content=publisher(value=state["temp"],status="Revised"))
+        return httpx.Response(200,json={"markets":markets(),"cursor":""})
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            one=await collect_station_day(root,"KMDW",DAY,client=client,
+                clock=lambda:datetime(2026,11,20,12,tzinfo=timezone.utc))
+            state["temp"]=70
+            two=await collect_station_day(root,"KMDW",DAY,client=client,
+                clock=lambda:datetime(2026,11,20,16,tzinfo=timezone.utc))
+            return one,two
+    one,two=asyncio.run(check())
+    assert one["state"]=="CROSSCHECKED_UNCERTIFIED"
+    assert two["state"]=="UNVERIFIED"
+    # A revision that contradicts settled markets cannot retain its old label
+    # in forward calibration as if it were still corroborated.
+    assert audit_settlement_evidence(root)[0]==[]
+    assert len(list((root/"evidence").glob("*twc*")))>=1
