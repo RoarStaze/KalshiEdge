@@ -24,13 +24,22 @@ class Station:
     name: str
     standard_offset_hours: int
     expected_peak_hour_standard: int = 15
+    # Only market series explicitly evidenced for this airport. A forecast
+    # against KORD must NEVER be labeled as Chicago KXHIGHCHI (CLIMDW).
+    kalshi_series: str | None = None
+    settlement_station: str | None = None
 
 
 STATIONS: dict[str, Station] = {
-    "KORD": Station("KORD", "Chicago O'Hare", -6),
-    "KDEN": Station("KDEN", "Denver International", -7),
-    "KATL": Station("KATL", "Atlanta Hartsfield-Jackson", -5),
-    "KLAX": Station("KLAX", "Los Angeles International", -8),
+    "KMDW": Station("KMDW", "Chicago Midway · Kalshi Chicago", -6,
+                     kalshi_series="KXHIGHCHI", settlement_station="CLIMDW"),
+    "KORD": Station("KORD", "Chicago O'Hare · separate research", -6),
+    "KDEN": Station("KDEN", "Denver International", -7,
+                     kalshi_series="KXHIGHDEN", settlement_station="CLIDEN"),
+    "KATL": Station("KATL", "Atlanta Hartsfield-Jackson", -5,
+                     kalshi_series="KXHIGHTATL", settlement_station="CLIATL"),
+    "KLAX": Station("KLAX", "Los Angeles International", -8,
+                     kalshi_series="KXHIGHLAX", settlement_station="CLILAX"),
 }
 
 NWP_MAX_AGE = timedelta(hours=5)
