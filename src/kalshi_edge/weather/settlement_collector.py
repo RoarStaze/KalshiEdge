@@ -349,7 +349,10 @@ async def poll_settlements(db_path: Path, *,
         raise ValueError("SETTLEMENT_LOOKBACK_INVALID")
     root=Path(db_path).parent
     now=_utc((clock or (lambda:datetime.now(timezone.utc)))())
-    rows=read_station_snapshots(db_path,limit=800)
+    # Journal reads sort from oldest forward. Read the full bounded archive
+    # before selecting recent days, or collection would silently stop once
+    # the first 800 historical snapshots had accumulated.
+    rows=read_station_snapshots(db_path,limit=100_000)
     days=sorted({
         (r["station"],date.fromisoformat(r["climate_day"]))
         for r in rows
