@@ -242,7 +242,8 @@ def test_weather_dashboard_explains_missing_model_status_instead_of_blanks():
     assert 'id="wx-forecast-source-hrrr"' in page
     assert 'id="wx-forecast-source-nbm"' in page
     assert 'id="wx-forecast-diagnostic"' in page
-    assert "weather-collect-nwp" in page
-    assert "weather-collect-metars" in page
+    assert "kalshiedge start" in page
+    assert "Automatic collection" in page
+    assert "wx-collector-health" in page
     assert "source_statuses" in page
     assert "/api/manual-trade/" not in page
