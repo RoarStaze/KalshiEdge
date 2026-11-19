@@ -57,8 +57,10 @@ def _data(tmp_path, *, late=False, incomplete=False, stale=False):
 
 
 def test_station_specs_restrict_to_configured_airports():
-    assert set(STATIONS)=={"KORD","KDEN","KATL","KLAX"}
+    assert set(STATIONS)=={"KORD","KMDW","KDEN","KATL","KLAX"}
     assert STATIONS["KORD"].standard_offset_hours==-6
+    assert STATIONS["KMDW"].kalshi_series=="KXHIGHCHI"
+    assert STATIONS["KORD"].kalshi_series is None
 
 
 def test_point_in_time_weather_forecast_excludes_late_metar(tmp_path):
@@ -184,7 +186,7 @@ def test_weather_forecast_endpoint_is_read_only(tmp_path):
             data=response.json()
             assert data["mode"]=="PAPER_ONLY"
             assert data["real_orders_enabled"] is False
-            assert len(data["forecasts"])==4
+            assert len(data["forecasts"])==5
             assert all(x["mean_f"] is None for x in data["forecasts"])
             assert client.post(base+"/api/weather/forecast",json={}).status_code in (403,404)
     finally:
