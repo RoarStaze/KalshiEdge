@@ -74,17 +74,17 @@ def test_repeated_forecasts_for_same_day_do_not_cherry_pick_the_best():
 def test_invalid_settlement_capture_is_rejected_and_never_scored(tmp_path):
     root=tmp_path/"weather"
     (root/"evidence").mkdir(parents=True)
-    original=(root/"evidence"/"KORD-20261119.txt")
+    original=(root/"evidence"/"KMDW-20261119.txt")
     original.write_bytes(b"first-party-capture-needs-review")
     t=datetime(2026,11,20,12,tzinfo=timezone.utc).isoformat()
     record={
-       "station":"KORD","climate_day":"2026-11-19",
+       "station":"KMDW","climate_day":"2026-11-19",
        "actual_max_f":65,
        "market_ticker":"KXHIGHCHI-TEST",
        "market_rules_source":"THE_WEATHER_COMPANY",
        "official_source":"THE_WEATHER_COMPANY",
        "source_url":"https://weather.com/kalshi",
-       "capture_file":"KORD-20261119.txt",
+       "capture_file":"KMDW-20261119.txt",
        "sha256":hashlib.sha256(original.read_bytes()).hexdigest(),
        "reviewed_at":t,
     }
@@ -191,3 +191,26 @@ def test_training_multiclass_brier_uses_same_fixed_outcome_categories():
     report=_score([row],0.,3.)
     assert report["multiclass_brier"]==round(expected["multiclass_brier"],8)
     assert report["log_loss"]==round(expected["log_loss"],8)
+
+
+
+def test_chicago_midway_contract_cannot_be_scored_against_ohare(tmp_path):
+    root=tmp_path/"weather"
+    (root/"evidence").mkdir(parents=True)
+    captured=root/"evidence"/"chicago.txt"
+    captured.write_bytes(b"unverified first party source capture")
+    claim={
+        "station":"KORD","climate_day":"2026-11-19","actual_max_f":61,
+        "market_ticker":"KXHIGHCHI-26NOV19-T62",
+        "official_source":"THE_WEATHER_COMPANY",
+        "market_rules_source":"THE_WEATHER_COMPANY",
+        "source_url":"https://weather.com/kalshi",
+        "capture_file":"chicago.txt",
+        "sha256":hashlib.sha256(captured.read_bytes()).hexdigest(),
+        "reviewed_at":"2026-11-20T12:00:00+00:00",
+    }
+    (root/"settlement_evidence.jsonl").write_text(json.dumps(claim)+"\n")
+    matches,rejected=audit_settlement_evidence(root)
+    assert not matches
+    assert len(rejected)==1
+    assert "station" in rejected[0]["reason"].lower() or "ticker" in rejected[0]["reason"].lower()
