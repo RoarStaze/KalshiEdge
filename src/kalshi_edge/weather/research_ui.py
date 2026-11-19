@@ -256,6 +256,13 @@ WEATHER_STATUS_SCRIPT = r"""<script>
    parts.push("Settlement evidence: "+(outcome.state||"NOT STARTED")+
       " · crosschecked: "+(outcome.crosschecked??0)+
       (outcome.reason?" — "+outcome.reason:""));
+   if(Array.isArray(outcome.details)){
+     const bad=outcome.details.filter(x=>x.state==="UNVERIFIED").slice(0,2);
+     for(const item of bad){
+       parts.push((item.station||"Station")+": "+
+           (item.reason||"Official source or market outcome unavailable"));
+     }
+   }
    for(const source of ["METAR","HRRR","NBM"]){
      const value=collector.feeds?.[source]||{};
      parts.push(source+": "+(value.state||"UNKNOWN")+(value.reason?" — "+value.reason:""));
