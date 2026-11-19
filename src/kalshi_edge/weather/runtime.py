@@ -42,13 +42,20 @@ def _missing_decoder_modules() -> list[str]:
 
 
 def ensure_weather_decoder(root: Path) -> dict:
-    """Best-effort one-time weather wheel bootstrap in the existing venv.
+    """Set up optional binary decoder wheels in a private weather directory.
 
-    The user may opt out of automatic installation with
-    KALSHIEDGE_WEATHER_AUTOINSTALL=0. Startup continues in observation-only
-    mode if no compatible wheel is available. Never use a shell or execute
-    installation text obtained from remote weather responses.
+    Weather dependencies never install into the existing BTC/training virtual
+    environment. The isolated wheel directory is added only to this weather
+    worker process, and is reused on subsequent starts for the same Python
+    major/minor. KALSHIEDGE_WEATHER_AUTOINSTALL=0 disables fresh installs.
     """
+    root = Path(root).resolve()
+    target = root / "data" / "weather" / (
+        f"decoder-py{sys.version_info.major}{sys.version_info.minor}"
+    )
+    if target.is_dir() and str(target) not in sys.path:
+        sys.path.insert(0, str(target))
+        importlib.invalidate_caches()
     missing = _missing_decoder_modules()
     if not missing:
         return {"state": "AVAILABLE"}
@@ -56,15 +63,16 @@ def ensure_weather_decoder(root: Path) -> dict:
         "0", "false", "no", "off",
     ):
         return {"state": "DISABLED", "reason": "Automatic GRIB wheel installation disabled"}
+    target.mkdir(parents=True, exist_ok=True)
     print(
-        "WeatherEdge: Installing optional NOAA GRIB decoder wheels "
-        "in the KalshiEdge Python environment. BTC services remain available.",
+        f"WeatherEdge: Installing optional NOAA GRIB decoder wheels into "
+        f"isolated weather directory {target}. BTC environment is unchanged.",
         flush=True,
     )
     cmd = [
         sys.executable, "-m", "pip", "install",
         "--disable-pip-version-check", "--no-input", "--only-binary=:all:",
-        *WEATHER_WHEELS,
+        "--target", str(target), "--upgrade", *WEATHER_WHEELS,
     ]
     try:
         result = subprocess.run(
@@ -83,6 +91,8 @@ def ensure_weather_decoder(root: Path) -> dict:
             "reason": f"Weather decoder wheel installation exited {result.returncode}; "
                       "inspect the weather supervisor log",
         }
+    if str(target) not in sys.path:
+        sys.path.insert(0, str(target))
     importlib.invalidate_caches()
     remains = _missing_decoder_modules()
     if remains:
