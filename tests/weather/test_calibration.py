@@ -175,3 +175,19 @@ def test_corrupt_weather_database_calibration_endpoint_fails_closed(tmp_path):
     assert report["matched_days"]==0
     assert report["calibration_certified"] is False
     assert all(x["multiclass_brier"] is None for x in report["stations"])
+
+
+
+def test_training_multiclass_brier_uses_same_fixed_outcome_categories():
+    from kalshi_edge.weather.training import _score
+    from kalshi_edge.weather.predictor import baseline_mean
+    row={
+        "hrrr_max_f":65.,"nbm_max_f":65.,"observed_max_f":55.,
+        "trend_f_per_hour":0.,"hours_to_peak":2.,
+        "actual_max_f":85.,
+    }
+    mean=baseline_mean(65.,65.,55.,0.,2.)
+    expected=score_gaussian_degree(mean,3.,85.)
+    report=_score([row],0.,3.)
+    assert report["multiclass_brier"]==round(expected["multiclass_brier"],8)
+    assert report["log_loss"]==round(expected["log_loss"],8)
