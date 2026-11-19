@@ -81,9 +81,15 @@ def extract_twc_high(body: bytes, climate_day: date, station: str) -> int:
         status=row.get("status",row.get("reportStatus"))
         if not isinstance(status,str) or status.lower() not in ("final","official","revised"):
             raise ValueError("PUBLISHER_VALUE_NOT_FINAL")
-        unit=row.get("temperatureUnit",row.get("unit","F"))
+        # Never infer units from a domestic station code alone. A mistaken
+        # Celsius/Fahrenheit conversion would invalidate every probability
+        # score and might even agree with an unrelated market by chance.
+        unit=row.get("temperatureUnit",row.get("unit"))
         if not isinstance(unit,str) or unit.upper() not in ("F","FAHRENHEIT"):
-            raise ValueError("PUBLISHER_UNITS_NOT_F")
+            raise ValueError("PUBLISHER_UNITS_NOT_EXPLICIT_F")
+        if ("temperatureUnit" in row and "unit" in row and
+            row["unit"]!=row["temperatureUnit"]):
+            raise ValueError("PUBLISHER_UNIT_FIELDS_CONFLICT")
         high=row.get("highF",row.get("maxTemp"))
         if isinstance(high,bool) or not isinstance(high,(int,float)) or not math.isfinite(high):
             raise ValueError("PUBLISHER_HIGH_MISSING")
