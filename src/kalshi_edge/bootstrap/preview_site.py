@@ -22,6 +22,8 @@ from .api_credentials_ui import integrate_api_credentials
 from .site_pages import render_site_page
 from kalshi_edge.gold.research_ui import render_gold_page
 from kalshi_edge.gold.experiment import gold_experiment_status
+from kalshi_edge.weather.research_ui import render_weather_page
+from kalshi_edge.weather.status import read_weather_status
 
 PREVIEW_PORT = 8900
 _RESERVED_PORTS = frozenset((8898, 8899))
@@ -93,6 +95,21 @@ def _pages() -> dict[str, bytes]:
         )
         page = page.replace("</head>", _PREVIEW_STYLE + "\n</head>", 1)
         result["gold/" + section] = page.encode("utf-8")
+    for section in ("forecast", "train", "history", "data"):
+        page = render_weather_page(section)
+        tag = '<body data-page="weather" data-market="weather">'
+        if page.count(tag) != 1:
+            raise ValueError("Unexpected WeatherEdge preview layout")
+        page = page.replace(
+            tag,
+            '<body data-page="weather" data-market="weather" data-preview="true">'
+            '<div class="preview-ribbon" role="status">'
+            'TEST PREVIEW · weather paper-only data · no orders or training'
+            '</div>',
+            1,
+        )
+        page = page.replace("</head>", _PREVIEW_STYLE + "\n</head>", 1)
+        result["weather/" + section] = page.encode("utf-8")
     return result
 
 
@@ -229,6 +246,10 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
                 section = "trade" if path == "/gold" else path.split("/")[-1]
                 self._reply(200, pages["gold/" + section], "text/html; charset=utf-8")
                 return
+            if path in ("/weather", "/weather/train", "/weather/history", "/weather/data"):
+                section = "forecast" if path == "/weather" else path.split("/")[-1]
+                self._reply(200, pages["weather/" + section], "text/html; charset=utf-8")
+                return
             if path == _ASSET_ROUTE:
                 if background is None:
                     self._json(404, {"error": "Preview background image unavailable"})
@@ -248,6 +269,9 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
                 return
             if path == "/api/gold/status":
                 self._json(200, gold_experiment_status())
+                return
+            if path == "/api/weather/status":
+                self._json(200, read_weather_status(Path("."), preview=True))
                 return
             if path in ("/api/training", "/api/training/progress"):
                 data = _training()

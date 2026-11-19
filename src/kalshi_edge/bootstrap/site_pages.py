@@ -367,12 +367,17 @@ body[data-market="gold"] .market-picker-menu a[aria-current="true"]{
 
 def render_market_selector(market: str) -> str:
     """Native keyboard-accessible switcher; routes, never mutates trading state."""
-    if market not in ("bitcoin", "gold"):
+    market_labels = {
+        "bitcoin": ("Bitcoin", "₿"),
+        "gold": ("Gold", "Au"),
+        "weather": ("Weather", "☁"),
+    }
+    if market not in market_labels:
         raise ValueError("Unrecognized KalshiEdge market")
-    title = "Bitcoin" if market == "bitcoin" else "Gold"
-    mark = "₿" if market == "bitcoin" else "Au"
+    title, mark = market_labels[market]
     bitcoin_active = ' aria-current="true"' if market == "bitcoin" else ""
     gold_active = ' aria-current="true"' if market == "gold" else ""
+    weather_active = ' aria-current="true"' if market == "weather" else ""
     return (
         f'<details class="market-picker" data-market-selected="{market}">'
         f'<summary aria-label="Market selector, currently {title}">'
@@ -383,6 +388,7 @@ def render_market_selector(market: str) -> str:
         '<div class="market-picker-menu" role="group" aria-label="Available markets">'
         f'<a href="/trade"{bitcoin_active}>Bitcoin</a>'
         f'<a href="/gold"{gold_active}>Gold</a>'
+        f'<a href="/weather"{weather_active}>Weather</a>'
         '</div></details>'
     )
 
