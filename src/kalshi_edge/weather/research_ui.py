@@ -173,10 +173,11 @@ _DATA = """
  <div class="wx-row"><span>Database</span><strong id="wx-db">CHECKING</strong></div>
  <div class="wx-row"><span>Kalshi settlement audit</span><strong>REVIEW REQUIRED</strong></div>
  <div class="wx-row"><span>Live order submission</span><strong>DISABLED</strong></div>
- </div><p>Use built-in commands <code>kalshi-edge weather-collect-metars --watch</code>
- and <code>kalshi-edge weather-collect-nwp --watch</code> to populate
- <code>data/weather/weatheredge.sqlite3</code>. NOAA GRIB decoding requires
- the optional Python weather dependencies.</p>
+ </div><p>Weather collection starts automatically with
+ <code>kalshiedge start</code>. METAR updates every five minutes and
+ HRRR/NBM guidance is checked every thirty minutes. Optional NOAA GRIB
+ decoding packages are installed on first use, if missing.
+ Collection errors are shown below; the dashboard remains paper-only.</p>
  <p id="wx-updated">Waiting for collector status…</p>
  <div id="wx-collector-health" class="wx-notice">Checking automatic NOAA collectors…</div>
  </article></div>
@@ -300,13 +301,13 @@ WEATHER_FORECAST_SCRIPT = r"""<script>
    const advice = status==="READY_RESEARCH"?
       "Forecasting with both model feeds. Experimental probabilities are not validated Kalshi odds.":
       status.includes("NBM")?
-      "NBM model input is missing or incomplete. Run: kalshi-edge weather-collect-nwp (inspect the reported NBM error). HRRR and METAR remain visible independently.":
+      "NBM forecast is missing or incomplete. Automatic collection will retry; see the collector health panel for NOAA or decoder errors. HRRR and METAR remain visible.":
       status.includes("HRRR")?
-      "HRRR model input is missing or incomplete. Run: kalshi-edge weather-collect-nwp (inspect the reported HRRR error).":
+      "HRRR forecast is missing or incomplete. Automatic collection will retry; see the collector health panel for the NOAA error.":
       status.includes("METAR")?
-      "Airport observations unavailable. Run: kalshi-edge weather-collect-metars (check AWC connectivity and timestamps).":
+      "Airport observations are unavailable. The automatic METAR collector retries every five minutes; see the collector health panel.":
       status==="MISSING_DATABASE"?
-      "No weather database found. Run the HRRR/NBM and METAR collectors in separate terminals.":
+      "No weather database yet. Automatic collectors are starting; check collector health for progress and errors.":
       "Check the weather collector output for the exact source error. No unsupported probabilities will be shown.";
    put("wx-forecast-diagnostic",advice);
    put("wx-forecast-day",station.climate_day||"—");
