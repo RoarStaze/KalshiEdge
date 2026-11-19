@@ -57,6 +57,9 @@ def read_collector_health(bootstrap_root: Path, *, preview: bool = False) -> dic
                      else "ACTIVE",
             "updated_at": timestamp.isoformat(),
             "decoder": data.get("decoder", {}),
+            "settlement": (data.get("settlement", {"state":"NOT_STARTED"})
+                           if isinstance(data.get("settlement"),dict)
+                           else {"state":"INVALID"}),
             "feeds": {
                 source: value for source, value in feeds.items()
                 if source in ("METAR", "HRRR", "NBM") and isinstance(value, dict)
