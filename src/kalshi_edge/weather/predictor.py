@@ -141,7 +141,7 @@ def _rows(conn: sqlite3.Connection, station: str, source: str,
     return results
 
 
-def _metars(rows: list[tuple[datetime, datetime, dict]], asof: datetime) -> tuple[float, float, float]:
+def _metars(rows: list[tuple[datetime, datetime, dict]], asof: datetime) -> tuple[float, float, float, datetime, datetime]:
     by_event = {}
     for event, received, payload in rows:
         try:
@@ -164,13 +164,14 @@ def _metars(rows: list[tuple[datetime, datetime, dict]], asof: datetime) -> tupl
         trend = (latest - prior[1]) / hours if hours > 0 else 0.
     else:
         trend = 0.
-    return max(x[1][1] for x in ordered), latest, trend
+    return (max(x[1][1] for x in ordered), latest, trend,
+            most_recent_event, ordered[-1][1][0])
 
 
 def _model_day_max(
     source: str, rows: list[tuple[datetime, datetime, dict]],
     day_start: datetime, day_end: datetime, peak: datetime, asof: datetime,
-) -> tuple[float, str]:
+) -> tuple[float, str, str]:
     cycles: dict[datetime, dict[datetime, tuple[datetime, float]]] = {}
     for event, received, payload in rows:
         try:
@@ -195,7 +196,8 @@ def _model_day_max(
         if len(points) < 3 or not any(abs(v - peak) <= timedelta(hours=1) for v in points):
             continue
         value = max(point[1] for point in points.values())
-        return ((value - 273.15) * 9 / 5 + 32, cycle.isoformat())
+        return ((value - 273.15) * 9 / 5 + 32, cycle.isoformat(),
+                max(point[0] for point in points.values()).isoformat())
     if cycles and any(asof - x > NWP_MAX_AGE for x in cycles):
         raise LookupError("STALE_" + source)
     raise LookupError("INCOMPLETE_" + source)
@@ -245,6 +247,8 @@ def read_station_forecast(
         "hrrr_max_f": None, "nbm_max_f": None, "observed_max_f": None,
         "current_f": None, "hours_to_peak": None, "trend_f_per_hour": None,
         "interval_90_f": None, "buckets": [], "n_training_days": 0,
+        "metar_event_at": None, "metar_received_at": None,
+        "nwp_receipts_utc": {},
     }
     if not Path(db_path).is_file():
         return result
@@ -253,13 +257,13 @@ def read_station_forecast(
         with closing(sqlite3.connect(uri, uri=True, timeout=.5)) as conn:
             conn.execute("PRAGMA query_only=ON")
             metars = _rows(conn, station, "METAR", start, asof)
-            observed, current, trend = _metars(metars, asof)
+            observed, current, trend, metar_event, metar_receipt = _metars(metars, asof)
             result["observed_max_f"] = round(observed, 3)
             result["current_f"] = round(current, 3)
-            hrrr, hr_run = _model_day_max("HRRR",
+            hrrr, hr_run, hr_receipt = _model_day_max("HRRR",
                 _rows(conn, station, "HRRR", asof - NWP_MAX_AGE, asof),
                 start, end, peak, asof)
-            nbm, nb_run = _model_day_max("NBM",
+            nbm, nb_run, nb_receipt = _model_day_max("NBM",
                 _rows(conn, station, "NBM", asof - NWP_MAX_AGE, asof),
                 start, end, peak, asof)
         hours = max(0., (peak - asof).total_seconds() / 3600)
@@ -273,6 +277,9 @@ def read_station_forecast(
             "hrrr_max_f": round(hrrr, 3), "nbm_max_f": round(nbm, 3),
             "hours_to_peak": round(hours, 3), "trend_f_per_hour": round(trend, 3),
             "nwp_cycles_utc": {"HRRR": hr_run, "NBM": nb_run},
+            "nwp_receipts_utc": {"HRRR": hr_receipt, "NBM": nb_receipt},
+            "metar_event_at": metar_event.isoformat(),
+            "metar_received_at": metar_receipt.isoformat(),
             "mean_f": round(mean, 3), "sigma_f": round(sigma, 3),
             "interval_90_f": [round(mean-1.64485362695*sigma, 2),
                               round(mean+1.64485362695*sigma, 2)],
