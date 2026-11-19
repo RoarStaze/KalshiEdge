@@ -30,7 +30,7 @@ _SETTLEMENT_SOURCE_URL = {
     "THE_WEATHER_COMPANY": "https://weather.com/kalshi",
     "NWS_CLI": "https://api.weather.gov/products/",
 }
-_VALID_TICKER = re.compile(r"^[A-Z0-9][A-Z0-9-]{3,99}$")
+_VALID_TICKER = re.compile(r"^[A-Z0-9][A-Z0-9.-]{3,99}$")
 _HEX256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
