@@ -305,3 +305,70 @@ and guidance after the next `kalshiedge start`. Existing historical
 KORD rows are preserved but never relabeled. First-party settlement
 labels must match both the named station and the market series.
 
+
+## Automatic first-party settlement reconciliation (next milestone)
+
+**Only command needed to run:** `kalshiedge start`.
+
+The existing WeatherSupervisor now attempts settlement checks every six hours
+for the last seven days that have actual frozen prospective weather forecasts
+and are at least eight hours beyond the station-local climate-day end.
+It does not backfill fictitious forecasts from later NOAA downloads.
+
+Two independent HTTPS sources are required:
+1. The Weather Company's public `weather.com/kalshi` daily climate report.
+   The collector probes `https://weather.com/kalshi/api/climate/primary?date=YYYY-MM-DD`
+   (public web endpoint, **not a guaranteed stable first-party API contract**).
+2. Kalshi's documented public
+   `https://external-api.kalshi.com/trade-api/v2/markets?event_ticker=...`
+   and its actual `rules_primary`, source station, event date, settlement
+   timestamp, and per-bracket final `result`. No trading/authentication calls.
+
+A candidate numeric daily high is accepted **only** if the publisher
+response clearly identifies the **same climate day and station**, declares
+degrees Fahrenheit and Final/Official/Revised status, and every retrieved
+Kalshi bracket that can be checked is settled and agrees with the published
+temperature. Unavailable, preliminary, unsupported provider schemas,
+mismatched publisher names, unresolved brackets, unrecognized tickers,
+wrong airport, wrong day, or disagreement means **UNVERIFIED**; the model
+does not score that day. If a later final publisher revision contradicts
+Kalshi's resolved brackets, the old automatically accepted label is
+suspended rather than quietly retained.
+
+The source JSON responses are written to
+`data/weather/evidence/<station>_<day>_<publisher>_<SHA>.json` and
+`data/weather/settlement_auto.jsonl` contains their exact SHA-256 digests
+and receipt time. The calibration reader **re-parses both original
+captures** and independently verifies the recorded high and all market
+results before any label enters the Brier or coverage calculation.
+
+**Evidence status** is `AUTO_CORROBORATED_UNCERTIFIED`: publicly retrieved,
+cross-checked first-party sources, but unsigned HTTP response bytes.
+Source URL and hash prove neither authenticity nor finality after possible
+later publisher revisions. Consequently, `calibration_certified` and
+`live_orders_enabled` stay `false`.
+
+The Weather dashboard exposes the settlement collector's real health,
+including source/schema errors, and the count of accepted automated
+reconciliations. Missing evidence leaves the numeric calibration fields
+**NOT MEASURED** rather than displaying fake 90% coverage.
+
+### Source compatibility limitation
+
+As of November 19, 2026, public documentation establishes the Weather
+Company climate page but does not document a stable API response schema
+for its `api/climate/primary` endpoint. The strict adapter handles only
+explicit station/date/high/status rows. If the live site returns a different
+JSON structure or blocks access, the worker reports
+`UNSUPPORTED_PUBLISHER_SCHEMA` or an HTTP error, and **cannot** certify
+or score that day. This is an intentional fail-closed behavior, not an
+accuracy failure; the source adapter requires confirmation against real
+publisher responses on the running machine. No third-party scraped value
+is silently substituted.
+
+First-party documentation:
+- https://docs.kalshi.com/api-reference/market/get-markets
+- https://docs.kalshi.com/api-reference/market/get-market
+- https://weather.com/kalshi
+- https://kalshi.com/markets/kxhighchi/highest-temperature-in-chicago/kxhighchi-26nov19
+
