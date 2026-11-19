@@ -21,92 +21,65 @@ climate-day rules and revision windows must be checked **per ticker** before
 using any estimate for trading. In particular, NOAA METAR or HRRR is not an
 automatic substitute for The Weather Company when it is named in market rules.
 
-## Installation (Windows PowerShell, project root)
+## One-command startup (Windows PowerShell)
+
+After updating the local repository **once**, weather collection starts
+automatically with the normal KalshiEdge launcher:
 
 ```powershell
 cd "$HOME\Desktop\KalshiEdge"
 git pull --ff-only origin main
-
-# Install optional NOAA GRIB2 decoder into the existing KalshiEdge environment.
-& .\.venv\Scripts\python.exe -m pip install -e ".[weather]"
-& .\.venv\Scripts\python.exe -m pytest -q tests/weather
+kalshiedge start
 ```
 
-Optional GRIB dependencies: xarray, cfgrib, ecCodes, numpy. Standard KalshiEdge
-startup does not require those packages. If ecCodes fails to install on Windows,
-inspect the optional dependency error before retrying; do not modify a running
-training environment blindly.
+No second terminal, manual `weather-collect-metars` or
+`weather-collect-nwp` command, or separate WeatherEdge installation is
+necessary. The single launcher supervises the existing BTC dashboard and
+predictor plus a **weather-only background worker**. It owns and shuts down
+the weather worker on normal Ctrl+C or application exit; `kalshiedge test`
+never starts collectors.
 
-## Troubleshoot `INCOMPLETE_NBM` or empty probability panels
+The weather worker immediately attempts current AWC METAR observations,
+checking again every **five minutes**. Separately, it requests recent
+NOAA HRRR/NBM GRIB forecast cycles, checking again every **30 minutes**.
+Both write timestamp-correct records to `data/weather/weatheredge.sqlite3`.
+The Weather forecast and Data pages display feed health from
+`data/weather/collector-status.json` and read-only source counts.
+The startup terminal stores detailed weather logs under
+`data/bootstrap/diagnostics/app-weather-*.log`.
 
-The Weather page displays independent `METAR`, `HRRR` and `NBM` readiness
-fields. If NBM is missing, already-received METAR and HRRR observations will
-remain visible, but **no mixed-source probability distribution is invented**.
+### Optional decoder setup on the first start
 
-The NBM core index publishes both the ordinary `TMP:2 m above ground`
-temperature and `TMP:2 m above ground:...:ens std dev`. Earlier versions
-erroneously matched both; the current parser selects only the ordinary
-temperature field and rejects ambiguous or spread-only inventories. NOAA's
-ordinary and ensemble-spread products are different physical quantities and
-must never be silently interchanged.
+If `numpy`, `xarray`, `cfgrib` or `eccodes` is missing, the weather
+worker attempts a **one-time background installation** of the declared
+binary wheel dependencies into a private `data/weather/decoder-pyXY`
+directory, with no shell or manual intervention. This may require access
+to PyPI and compatible Windows wheels. The BTC/training Python environment
+is not modified. To disable automatic weather package installation, set
+`KALSHIEDGE_WEATHER_AUTOINSTALL=0` before starting the app.
 
-To diagnose or re-fetch NBM from the correct official archive, run this
-one-shot command in your KalshiEdge PowerShell virtual environment:
+If installation fails, METAR continues independently; HRRR/NBM show
+`DEPENDENCIES_UNAVAILABLE`, with a reason in the Weather page and weather
+log. Weather collection failures never stop the BTC dashboard or trigger
+live orders. No future forecast data or fake values are synthesized.
 
-```powershell
-cd "$HOME\Desktop\KalshiEdge"
-& .\.venv\Scripts\python.exe -m kalshi_edge.cli weather-collect-nwp `
-  --models NBM --forecast-hours 1,2,3,4,5,6,7,8,9,10,11,12
-```
+### NOAA feed troubleshooting
 
-Check the JSON output:
-- If `NBM.mode` is `DATA_ONLY` and `points` is positive, fresh
-  NBM guidance was recorded. Keep both collectors running and refresh the
-  Weather Forecast page.
-- If `NBM.status` is `UNAVAILABLE`, read `reason` for the exact failure.
-  Common possibilities are a model-publishing delay, network timeout,
-  GRIB decoder import failure, or a missing ordinary 2-meter temperature
-  field. Do not infer which one occurred from `INCOMPLETE_NBM` alone.
-- If NBM was downloaded but the page remains incomplete, check its
-  `NBM` readiness line; the stored cycle may not include forecast-valid
-  points near the target afternoon high or may be too old.
+The Weather page displays separate `METAR`, `HRRR`, and `NBM`
+readiness indicators and the managed collector state. If NBM is missing,
+valid METAR/HRRR values remain displayed, but no blend is published.
 
-Also run `kalshi-edge weather-forecast --station KORD` to see
-per-source readiness, selected model-cycle times and last receipt timestamps.
-Forecasts remain **research-only**; none are exchange settlement odds.
+NOAA NBM core may include both ordinary
+`TMP:2 m above ground` and ensemble-spread `TMP:2 m above ground`;
+these are **not interchangeable**. The collector selects the deterministic
+temperature field, verifies HTTP byte ranges and rejects ambiguous
+inventories. A network failure, missing cycle, GRIB decoder issue or stale
+forecast remains visible as a feed error.
 
-## Start collectors in two separate foreground terminals
-
-METAR observation collection (every five minutes):
-
-```powershell
-cd "$HOME\Desktop\KalshiEdge"
-& .\.venv\Scripts\python.exe -m kalshi_edge.cli weather-collect-metars --watch
-```
-
-NOAA HRRR/NBM model forecasts (once per hour):
-
-```powershell
-cd "$HOME\Desktop\KalshiEdge"
-& .\.venv\Scripts\python.exe -m kalshi_edge.cli weather-collect-nwp --watch
-```
-
-Both write append-only records under `data/weather/weatheredge.sqlite3`.
-The weather dashboard reads the database; it does NOT automatically launch
-the collectors. These are foreground processes stopped with Ctrl+C.
-
-The NWP collector requests 2-meter temperature fields through exact NOAA
-GRIB2 byte ranges using the official HRRR and NBM S3 archives:
+Sources:
 - https://registry.opendata.aws/noaa-hrrr-pds/
 - https://vlab.noaa.gov/web/mdl/nbm-download
-
-METAR observations come from:
 - https://aviationweather.gov/data/api/
-
-NWP cycles may be unavailable during publication delays. A failed or
-incomplete cycle causes an explicit source failure, never invented data.
-As-of queries use both source event time and actual reception time.
-A recent incomplete NWP cycle cannot be combined with a prior cycle.
 
 ## Inspect forecast status / point-in-time snapshot
 

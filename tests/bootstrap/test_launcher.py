@@ -76,10 +76,15 @@ def test_one_terminal_launcher_starts_both_services_and_stops_children(tmp_path,
     spawned = []
     fake_history = FakeProcess(100)
     fake_predictor = FakeProcess(101)
+    fake_weather = FakeProcess(102)
 
     def spawn(args, root, log):
         spawned.append(args)
-        return fake_history if len(spawned) == 1 else fake_predictor
+        return {
+            "final-history": fake_history,
+            "predict-live": fake_predictor,
+            "weather-watch": fake_weather,
+        }[args[0]]
 
     monkeypatch.setattr(launcher, "_spawn_service", spawn)
     monkeypatch.setattr(launcher, "_dashboard_healthy", lambda port: len(spawned) >= 1)
@@ -92,10 +97,13 @@ def test_one_terminal_launcher_starts_both_services_and_stops_children(tmp_path,
 
     monkeypatch.setattr(launcher.time, "sleep", short_sleep)
     assert launcher.start() == 0
-    assert spawned == [["final-history", "--port", "8899"], ["predict-live"]]
+    assert spawned == [
+        ["final-history", "--port", "8899"], ["predict-live"], ["weather-watch"],
+    ]
     assert opened == ["http://127.0.0.1:8899/"]
     assert fake_history.stopped
     assert fake_predictor.stopped
+    assert fake_weather.stopped
 
 
 def test_port_conflict_refuses_start_without_launching_services(tmp_path, monkeypatch):
@@ -132,7 +140,7 @@ def test_launcher_reuses_existing_unified_history_server(tmp_path, monkeypatch):
 
     monkeypatch.setattr(launcher.time, "sleep", short_sleep)
     assert launcher.start(open_browser=False) == 0
-    assert spawned == [["predict-live"]]
+    assert spawned == [["predict-live"], ["weather-watch"]]
     assert fake_predictor.stopped
 
 

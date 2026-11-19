@@ -267,8 +267,10 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     history_log = log_dir / f"app-history-{timestamp}.log"
     predictor_log = log_dir / f"app-predictor-{timestamp}.log"
+    weather_log = log_dir / f"app-weather-{timestamp}.log"
     history: subprocess.Popen | None = None
     predictor: subprocess.Popen | None = None
+    weather: subprocess.Popen | None = None
 
     try:
         with SingleStarter(log_dir / "app-start.lock"), ExitStack() as logs:
@@ -306,8 +308,31 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
                 print(_tail_log(predictor_log), file=sys.stderr)
                 return 2
 
+            # Keep weather independent of BTC model and market trading.
+            # One child manages both NOAA collectors and is stopped when
+            # this launcher exits. A weather-only failure must not stop BTC.
+            try:
+                weather = _spawn_service(
+                    ["weather-watch"], root,
+                    logs.enter_context(weather_log.open("ab")),
+                )
+            except (OSError, RuntimeError) as exc:
+                print(f"Weather collector could not start: {exc}. "
+                      f"See {weather_log}", file=sys.stderr)
+            else:
+                time.sleep(0.25)
+                if weather.poll() is not None:
+                    print(f"Weather collector exited (status {weather.returncode}). "
+                          f"See {weather_log}", file=sys.stderr)
+                    print(_tail_log(weather_log), file=sys.stderr)
+                    weather = None
+                else:
+                    print(f"Weather collector PID: {weather.pid} "
+                          "(automatic METAR + HRRR/NBM)", flush=True)
+
             print(f"Live predictor PID: {predictor.pid}", flush=True)
             print("Dashboard:", dashboard_url, flush=True)
+            print("Weather log:", weather_log, flush=True)
             print("Predictor log:", predictor_log, flush=True)
             print("Settlement/history log:", history_log if history is not None else "(existing server)", flush=True)
             print("Keep this terminal open. Press Ctrl+C to stop.", flush=True)
@@ -321,6 +346,11 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
                     print(f"Browser could not open automatically: {exc}", flush=True)
 
             while True:
+                if weather is not None and weather.poll() is not None:
+                    print(f"Weather collector stopped (exit {weather.returncode}). "
+                          f"See {weather_log}", file=sys.stderr)
+                    print(_tail_log(weather_log), file=sys.stderr)
+                    weather = None
                 if predictor.poll() is not None:
                     print(f"Live predictor stopped (exit {predictor.returncode}). Log: {predictor_log}", file=sys.stderr)
                     print(_tail_log(predictor_log), file=sys.stderr)
@@ -346,6 +376,7 @@ def start(*, port: int = DASHBOARD_PORT, open_browser: bool = True) -> int:
         preserve_training_worker = bool(
             _request_training_shutdown(data_root)
         ) if history is not None else False
+        _stop(weather)
         _stop(predictor)
         _stop(history, preserve_children=preserve_training_worker)
 

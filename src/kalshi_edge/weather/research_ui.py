@@ -116,6 +116,7 @@ _FORECAST = """
   <p id="wx-forecast-asof">Waiting for NOAA receipt timestamps…</p>
   <p id="wx-forecast-freshness">Actual observation and forecast receipt times unavailable.</p>
   <p id="wx-forecast-diagnostic" role="status" aria-live="polite">Waiting for source diagnostics.</p>
+  <div id="wx-collector-health" class="wx-notice" role="status">Checking automatic NOAA collectors…</div>
  </article>
  <article class="wx-panel">
   <h2>Fine-grained temperature distribution</h2>
@@ -172,11 +173,13 @@ _DATA = """
  <div class="wx-row"><span>Database</span><strong id="wx-db">CHECKING</strong></div>
  <div class="wx-row"><span>Kalshi settlement audit</span><strong>REVIEW REQUIRED</strong></div>
  <div class="wx-row"><span>Live order submission</span><strong>DISABLED</strong></div>
- </div><p>Use built-in commands <code>kalshi-edge weather-collect-metars --watch</code>
- and <code>kalshi-edge weather-collect-nwp --watch</code> to populate
- <code>data/weather/weatheredge.sqlite3</code>. NOAA GRIB decoding requires
- the optional Python weather dependencies.</p>
+ </div><p>Weather collection starts automatically with
+ <code>kalshiedge start</code>. METAR updates every five minutes and
+ HRRR/NBM guidance is checked every thirty minutes. Optional NOAA GRIB
+ decoding packages are installed on first use, if missing.
+ Collection errors are shown below; the dashboard remains paper-only.</p>
  <p id="wx-updated">Waiting for collector status…</p>
+ <div id="wx-collector-health" class="wx-notice">Checking automatic NOAA collectors…</div>
  </article></div>
 """
 
@@ -191,6 +194,22 @@ WEATHER_STATUS_SCRIPT = r"""<script>
    if(!iso)return "No records received";
    const date=new Date(iso);
    return Number.isNaN(date.getTime())?"Receipt timestamp unavailable":"Latest receipt: "+date.toLocaleString();
+ }
+ function showCollector(collector){
+   const el=node("wx-collector-health");if(!el)return;
+   if(!collector||collector.state==="NOT_STARTED"){
+     el.textContent="Weather collectors have not started. Launch the app with kalshiedge start.";return;
+   }
+   if(collector.state==="PREVIEW"){el.textContent="Preview mode: NOAA collectors are intentionally disabled.";return;}
+   const parts=["Automatic collector: "+(collector.state||"UNKNOWN")];
+   const decoder=collector.decoder||{};
+   if(decoder.state&&decoder.state!=="AVAILABLE"&&decoder.state!=="NOT_CHECKED")
+      parts.push("GRIB decoder: "+decoder.state+(decoder.reason?" ("+decoder.reason+")":""));
+   for(const source of ["METAR","HRRR","NBM"]){
+     const value=collector.feeds?.[source]||{};
+     parts.push(source+": "+(value.state||"UNKNOWN")+(value.reason?" — "+value.reason:""));
+   }
+   el.textContent=parts.join(" · ");
  }
  function showStations(stations){
    const el=node("wx-stations");if(!el)return;
@@ -222,9 +241,11 @@ WEATHER_STATUS_SCRIPT = r"""<script>
      put("wx-samples",state.sample_count??0);
      put("wx-station-count",state.station_count??0);
      put("wx-updated",stamp(state.last_received_at));
+     showCollector(state.collector);
      showStations(Array.isArray(state.stations)?state.stations:[]);
    }catch(_error){
      put("wx-db","UNAVAILABLE");put("wx-updated","Collector status unavailable");
+     showCollector({state:"UNAVAILABLE",feeds:{}});
      showStations([]);
    }
  }
@@ -280,13 +301,13 @@ WEATHER_FORECAST_SCRIPT = r"""<script>
    const advice = status==="READY_RESEARCH"?
       "Forecasting with both model feeds. Experimental probabilities are not validated Kalshi odds.":
       status.includes("NBM")?
-      "NBM model input is missing or incomplete. Run: kalshi-edge weather-collect-nwp (inspect the reported NBM error). HRRR and METAR remain visible independently.":
+      "NBM forecast is missing or incomplete. Automatic collection will retry; see the collector health panel for NOAA or decoder errors. HRRR and METAR remain visible.":
       status.includes("HRRR")?
-      "HRRR model input is missing or incomplete. Run: kalshi-edge weather-collect-nwp (inspect the reported HRRR error).":
+      "HRRR forecast is missing or incomplete. Automatic collection will retry; see the collector health panel for the NOAA error.":
       status.includes("METAR")?
-      "Airport observations unavailable. Run: kalshi-edge weather-collect-metars (check AWC connectivity and timestamps).":
+      "Airport observations are unavailable. The automatic METAR collector retries every five minutes; see the collector health panel.":
       status==="MISSING_DATABASE"?
-      "No weather database found. Run the HRRR/NBM and METAR collectors in separate terminals.":
+      "No weather database yet. Automatic collectors are starting; check collector health for progress and errors.":
       "Check the weather collector output for the exact source error. No unsupported probabilities will be shown.";
    put("wx-forecast-diagnostic",advice);
    put("wx-forecast-day",station.climate_day||"—");
