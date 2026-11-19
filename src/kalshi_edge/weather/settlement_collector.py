@@ -217,8 +217,8 @@ def _revoke_auto_record(path: Path, station: str, climate_day: date) -> None:
             (station,climate_day.isoformat())]
     if len(remain)==len(entries):
         return
-    encoded=("\\n".join(json.dumps(r,sort_keys=True,allow_nan=False)
-                        for r in remain)+("\\n" if remain else "")).encode("utf-8")
+    encoded=("\n".join(json.dumps(r,sort_keys=True,allow_nan=False)
+                        for r in remain)+("\n" if remain else "")).encode("utf-8")
     temporary=None
     try:
         with tempfile.NamedTemporaryFile(dir=path.parent,prefix=".suspended-label-",
