@@ -47,6 +47,9 @@ def _validate_manifest_row(raw: dict, station: str) -> dict | None:
         raise ValueError("publisher evidence SHA-256 missing or invalid")
     if not isinstance(ticker, str) or not _TICKER.fullmatch(ticker):
         raise ValueError("market ticker evidence missing or invalid")
+    expected_series = STATIONS[station].kalshi_series
+    if expected_series is None or not ticker.startswith(expected_series + "-"):
+        raise ValueError("settlement ticker does not match official station")
     return {
         "station": station, "settlement_day": day.isoformat(),
         "asof": asof.isoformat(), "actual_max_f": actual,
