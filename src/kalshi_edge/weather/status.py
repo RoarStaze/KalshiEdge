@@ -7,6 +7,7 @@ must not be confused with independently verified settlement measurements.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 
@@ -42,7 +43,7 @@ def read_weather_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
         return _empty_status("NOT_FOUND")
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
-        with sqlite3.connect(uri, uri=True, timeout=0.5) as conn:
+        with closing(sqlite3.connect(uri, uri=True, timeout=0.5)) as conn:
             conn.execute("PRAGMA query_only=ON")
             rows = conn.execute(
                 "SELECT station, UPPER(source), COUNT(*), MAX(received_at) "
