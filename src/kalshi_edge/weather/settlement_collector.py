@@ -32,6 +32,7 @@ from .prospective import read_station_snapshots
 
 TWC_ENDPOINT = "https://weather.com/kalshi/api/climate/primary"
 KALSHI_MARKETS_ENDPOINT = "https://external-api.kalshi.com/trade-api/v2/markets"
+KALSHI_HISTORICAL_ENDPOINT = "https://external-api.kalshi.com/trade-api/v2/historical/markets"
 MAX_BYTES = 2_000_000
 # Do not overload a publisher site; public visitors are not offered a guaranteed SLA.
 PUBLISHER_REQUEST_INTERVAL_SECONDS = 10
@@ -271,6 +272,22 @@ async def collect_station_day(root: Path, station: str, climate_day: date,
             payload=json.loads(kalshi_body)
             if not isinstance(payload,dict) or payload.get("cursor"):
                 raise ValueError("MARKET_RESULTS_INCOMPLETE")
+            market_url=KALSHI_MARKETS_ENDPOINT
+            if payload.get("markets")==[]:
+                # Kalshi moves older settled events into its separately
+                # documented historical market API. A partial live result
+                # is NEVER supplemented with historical brackets.
+                archive=await client.get(
+                    KALSHI_HISTORICAL_ENDPOINT,
+                    params={"event_ticker":event,"limit":1000})
+                archive.raise_for_status()
+                kalshi_body=archive.content
+                if len(kalshi_body)>MAX_BYTES:
+                    raise ValueError("HISTORICAL_MARKET_RESPONSE_TOO_LARGE")
+                payload=json.loads(kalshi_body)
+                market_url=KALSHI_HISTORICAL_ENDPOINT
+                if not isinstance(payload,dict) or payload.get("cursor"):
+                    raise ValueError("HISTORICAL_MARKET_RESULTS_INCOMPLETE")
             match=verify_kalshi_markets(payload.get("markets"),station,
                                         climate_day,high)
         except (httpx.HTTPError,ValueError,TypeError,OverflowError,
@@ -305,7 +322,7 @@ async def collect_station_day(root: Path, station: str, climate_day: date,
             "market_rules_source":"THE_WEATHER_COMPANY",
             "source_url":TWC_ENDPOINT+"?date="+climate_day.isoformat(),
             "source_capture_file":twc_name,"source_sha256":twc_sha,
-            "kalshi_url":KALSHI_MARKETS_ENDPOINT+"?event_ticker="+event,
+            "kalshi_url":market_url+"?event_ticker="+event,
             "kalshi_capture_file":kalshi_name,"kalshi_sha256":kalshi_sha,
             "retrieved_at":now.isoformat(),
             "evidence_state":"AUTO_CORROBORATED_UNCERTIFIED",
