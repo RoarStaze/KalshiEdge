@@ -119,3 +119,46 @@ def test_no_outcomes_means_no_fake_scores_or_90_coverage(tmp_path):
 def test_wilson_interval_contains_observed_rate():
     a,b=wilson_interval(9,10)
     assert a < .9 < b and b <= 1
+
+
+
+def test_weather_calibration_pages_show_missing_evidence_not_guaranteed_90_percent():
+    from kalshi_edge.weather.research_ui import render_weather_page
+    for page in ("forecast","train","history"):
+        html=render_weather_page(page)
+        assert "/api/weather/calibration" in html
+        assert 'id="wx-calibration-state"' in html
+        assert 'id="wx-calibration-noon-days"' in html
+        assert 'id="wx-calibration-coverage"' in html
+        assert "Not certified" in html or "NOT CERTIFIED" in html
+        assert "calibration_certified" in html
+        assert "/api/manual-trade/" not in html
+    assert "90% modeled interval (not validated)" in render_weather_page("forecast")
+
+
+def test_calibration_endpoint_live_and_preview_do_not_submit_orders(tmp_path):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from types import SimpleNamespace
+    import httpx
+    from kalshi_edge.bootstrap.final_history import _make_handler
+    from kalshi_edge.bootstrap.preview_site import make_preview_handler
+    for preview in (False,True):
+        handler=(make_preview_handler() if preview else
+                 _make_handler(tmp_path/"bootstrap",credential_vault=SimpleNamespace(exists=lambda:True)))
+        server=ThreadingHTTPServer(("127.0.0.1",0),handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True)
+        worker.start()
+        try:
+            url=f"http://127.0.0.1:{server.server_port}/api/weather/calibration"
+            with httpx.Client(timeout=5,trust_env=False) as client:
+                response=client.get(url)
+                assert response.status_code==200
+                data=response.json()
+                assert data["mode"]=="PAPER_ONLY"
+                assert data["calibration_certified"] is False
+                assert data["matched_days"]==0
+                assert all(row["90_interval"] is None for row in data["stations"])
+                assert client.post(url,json={}).status_code in (403,404)
+        finally:
+            server.shutdown();server.server_close();worker.join(timeout=3)
