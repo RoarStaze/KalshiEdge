@@ -53,12 +53,12 @@ def test_atomic_nwp_cycle_writes_station_points_and_true_receipt(tmp_path):
                 decode=lambda blob, stations: {s:288.15 for s in stations},
             )
     result=asyncio.run(run_collection())
-    assert result["points"]==12
+    assert result["points"]==len(STATIONS)*3
     with sqlite3.connect(tmp_path/"w.sqlite3") as conn:
         rows=conn.execute(
             "SELECT station,source,event_time,received_at,payload FROM samples"
         ).fetchall()
-    assert len(rows)==12
+    assert len(rows)==len(STATIONS)*3
     assert all(row[1]=="HRRR" for row in rows)
     assert all(row[2]==run.isoformat() for row in rows)
     assert all(row[3]==received.isoformat() for row in rows)
