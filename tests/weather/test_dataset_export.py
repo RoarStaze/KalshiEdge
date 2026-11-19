@@ -29,7 +29,7 @@ def test_export_uses_only_available_weather_inputs_and_documents_publisher(tmp_p
         "station":"KMDW","settlement_day":"2026-11-19",
         "asof":T.isoformat(),"actual_max_f":65.0,
         "source_uri":"https://weather.com/kalshi","source_sha256":"a"*64,
-        "source_market_ticker":"KXHIGHCHI-26NOV19-T65",
+        "source_market_ticker":"KXHIGHCHI-26NOV19-B65.5",
     })+"\n")
     out=tmp_path/"rows.jsonl"
     status=export_labeled_days(db,manifest,out,"KMDW")
