@@ -225,3 +225,13 @@ def test_settlement_poll_never_limits_journal_to_oldest_800(monkeypatch,tmp_path
     result=asyncio.run(module.poll_settlements(tmp_path/"unused.sqlite3"))
     assert result["state"]=="NO_ELIGIBLE_FORECAST_DAYS"
     assert limits and limits[0]>=100_000
+
+
+
+def test_weather_dashboard_shows_per_station_settlement_failure_reason():
+    from kalshi_edge.weather.research_ui import render_weather_page
+    html=render_weather_page("forecast")
+    assert "collector.settlement" in html
+    assert "outcome.details" in html
+    assert "UNVERIFIED" in html
+    assert "/api/manual-trade" not in html
