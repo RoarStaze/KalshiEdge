@@ -110,7 +110,8 @@ _FORECAST = """
    <div class="wx-row"><span>NBM model peak</span><strong id="wx-forecast-nbm">—</strong></div>
    <div class="wx-row"><span>Target climate day (standard time)</span><strong id="wx-forecast-day">—</strong></div>
   </div>
-  <p id="wx-forecast-asof">Waiting for verified receipt timestamps…</p>
+  <p id="wx-forecast-asof">Waiting for NOAA receipt timestamps…</p>
+  <p id="wx-forecast-freshness">Actual observation and forecast receipt times unavailable.</p>
  </article>
  <article class="wx-panel">
   <h2>Fine-grained temperature distribution</h2>
@@ -128,12 +129,12 @@ _FORECAST = """
 """
 _TRAIN = """
 <div class="wx-grid"><article class="wx-panel"><h2>Station model training</h2>
- <div class="wx-notice">Training is not launched from this interface.
- Use the separately installed WeatherEdge AI command-line research workflow
- after collecting verified point-in-time features and independently verified
- contract-specific settlement labels.</div>
+ <div class="wx-notice">Training is intentionally not launched from this read-only
+ dashboard. Run <code>kalshi-edge weather-train</code> with at least 60 independent
+ climate-day feature/label records and reviewed first-party settlement evidence.
+ A chronological holdout is reported, but the model remains research-only.</div>
  <div class="wx-rows">
-  <div class="wx-row"><span>Training from KalshiEdge UI</span><strong>DISABLED</strong></div>
+  <div class="wx-row"><span>Training from KalshiEdge UI</span><strong>CLI ONLY</strong></div>
   <div class="wx-row"><span>Calibration certification</span><strong>NOT VERIFIED</strong></div>
   <div class="wx-row"><span>OOS profitability</span><strong>NOT VERIFIED</strong></div>
   <div class="wx-row"><span>Live order permission</span><strong>DISABLED</strong></div>
@@ -167,9 +168,11 @@ _DATA = """
  <div class="wx-row"><span>Database</span><strong id="wx-db">CHECKING</strong></div>
  <div class="wx-row"><span>Kalshi settlement audit</span><strong>REVIEW REQUIRED</strong></div>
  <div class="wx-row"><span>Live order submission</span><strong>DISABLED</strong></div>
- </div><p>Run the separately installed WeatherEdge AI collector from the
- KalshiEdge project root with <code>--db data/weather/weatheredge.sqlite3</code>
- to populate this screen.</p><p id="wx-updated">Waiting for collector status…</p>
+ </div><p>Use built-in commands <code>kalshi-edge weather-collect-metars --watch</code>
+ and <code>kalshi-edge weather-collect-nwp --watch</code> to populate
+ <code>data/weather/weatheredge.sqlite3</code>. NOAA GRIB decoding requires
+ the optional Python weather dependencies.</p>
+ <p id="wx-updated">Waiting for collector status…</p>
  </article></div>
 """
 
@@ -267,6 +270,11 @@ WEATHER_FORECAST_SCRIPT = r"""<script>
    put("wx-forecast-state",station.status||"UNAVAILABLE");
    put("wx-forecast-day",station.climate_day||"—");
    put("wx-forecast-asof",station.asof?"Snapshot UTC: "+station.asof:"No receipt evidence");
+   const rec=station.nwp_receipts_utc||{};
+   put("wx-forecast-freshness","METAR event: "+(station.metar_event_at||"—")+
+      " · received: "+(station.metar_received_at||"—")+
+      " · HRRR received: "+(rec.HRRR||"—")+
+      " · NBM received: "+(rec.NBM||"—"));
    put("wx-forecast-mean",temp(station.mean_f));
    put("wx-forecast-observed",temp(station.observed_max_f));
    put("wx-forecast-hrrr",temp(station.hrrr_max_f));
