@@ -24,6 +24,7 @@ from kalshi_edge.gold.research_ui import render_gold_page
 from kalshi_edge.gold.experiment import gold_experiment_status
 from kalshi_edge.weather.research_ui import render_weather_page
 from kalshi_edge.weather.status import read_weather_status
+from kalshi_edge.weather.predictor import read_weather_forecasts
 
 PREVIEW_PORT = 8900
 _RESERVED_PORTS = frozenset((8898, 8899))
@@ -272,6 +273,9 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
                 return
             if path == "/api/weather/status":
                 self._json(200, read_weather_status(Path("."), preview=True))
+                return
+            if path == "/api/weather/forecast":
+                self._json(200, read_weather_forecasts(Path("."), preview=True))
                 return
             if path in ("/api/training", "/api/training/progress"):
                 data = _training()

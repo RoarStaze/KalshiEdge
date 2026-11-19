@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from .collector import KalshiCollector
@@ -92,6 +92,42 @@ def build_parser() -> argparse.ArgumentParser:
     app = sub.add_parser("start", help="launch unified local dashboard, live model and settlement tracking")
     app.add_argument("--no-browser", action="store_true", help="do not automatically open the browser")
     app.add_argument("--port", type=int, default=8899, help="local dashboard port (default 8899)")
+    # Isolated weather research/observation commands. No exchange orders.
+    weather_forecast = sub.add_parser(
+        "weather-forecast", help="inspect actual airport proxy probabilities from fresh METAR/HRRR/NBM data"
+    )
+    weather_forecast.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"))
+    weather_forecast.add_argument("--asof", help="timezone-aware historical as-of timestamp for point-in-time audit")
+    weather_export = sub.add_parser(
+        "weather-export-training", help="join original weather snapshots to documented first-party publisher labels"
+    )
+    weather_export.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"), required=True)
+    weather_export.add_argument("--evidence-jsonl", type=Path, required=True)
+    weather_export.add_argument("--out-jsonl", type=Path, required=True)
+    weather_export.add_argument("--db", type=Path, default=None)
+    weather_train = sub.add_parser(
+        "weather-train", help="fit research-only station model from labeled daily JSONL with chronological holdout"
+    )
+    weather_train.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"), required=True)
+    weather_train.add_argument("--input-jsonl", type=Path, required=True)
+    weather_train.add_argument("--model-out", type=Path, default=None)
+    weather_train.add_argument("--min-days", type=int, default=60)
+    weather_metars = sub.add_parser(
+        "weather-collect-metars", help="read NOAA AWC observations into the WeatherEdge SQLite database"
+    )
+    weather_metars.add_argument("--stations", default="KORD,KDEN,KATL,KLAX")
+    weather_metars.add_argument("--db", type=Path, default=None)
+    weather_metars.add_argument("--watch", action="store_true", help="poll in foreground every five minutes")
+    weather_metars.add_argument("--interval-seconds", type=int, default=300)
+    weather_nwp = sub.add_parser(
+        "weather-collect-nwp", help="collect NOAA HRRR and NBM GRIB2 station guidance"
+    )
+    weather_nwp.add_argument("--db", type=Path, default=None)
+    weather_nwp.add_argument("--models", default="HRRR,NBM")
+    weather_nwp.add_argument("--forecast-hours", default="1,2,3,4,5,6,7,8,9,10,11,12")
+    weather_nwp.add_argument("--lookback-hours", type=int, default=5)
+    weather_nwp.add_argument("--watch", action="store_true")
+    weather_nwp.add_argument("--interval-seconds", type=int, default=3600)
     sub.add_parser("predict-live", help="run the read-only live predictor from a promoted/default bootstrap model")
     history = sub.add_parser("final-history", help="show local final-forecast history and sync official Kalshi settlements")
     history.add_argument("--once", action="store_true", help="sync available official settlements once and exit")
@@ -311,6 +347,117 @@ def main(argv: list[str] | None = None) -> int:
         if not 1 <= args.port <= 65535:
             parser.error("--port must be between 1 and 65535")
         return start(port=args.port, open_browser=not args.no_browser)
+    if args.command == "weather-forecast":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.predictor import read_weather_forecasts, read_station_forecast
+        from .weather.status import weather_database_path
+
+        root = BootstrapSettings().bootstrap_dir
+        asof = None
+        if args.asof:
+            try:
+                asof = datetime.fromisoformat(args.asof.replace("Z","+00:00"))
+                if asof.utcoffset() is None:
+                    raise ValueError("timestamp lacks UTC offset")
+            except ValueError as exc:
+                parser.error(f"--asof must be timezone-aware: {exc}")
+        if args.station:
+            result = read_station_forecast(weather_database_path(root), args.station, asof)
+            print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+            return 0 if result["status"] == "READY_RESEARCH" else 2
+        result = read_weather_forecasts(root, asof=asof)
+        print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+        return 0 if any(x["status"] == "READY_RESEARCH" for x in result["forecasts"]) else 2
+    if args.command == "weather-export-training":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.dataset import export_labeled_days
+        from .weather.status import weather_database_path
+
+        db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
+        try:
+            report = export_labeled_days(
+                db, args.evidence_jsonl, args.out_jsonl, args.station
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            parser.error(f"weather historical export rejected: {exc}")
+        print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
+        return 0 if report["exported"] else 2
+    if args.command == "weather-train":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.training import train_model_file
+
+        root = BootstrapSettings().bootstrap_dir
+        destination = (args.model_out or
+                       root.parent / "weather" / "models" / f"{args.station}.json")
+        try:
+            model = train_model_file(
+                args.input_jsonl, args.station, destination, min_days=args.min_days
+            )
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            parser.error(f"weather training rejected: {exc}")
+        print(json.dumps({
+            "model_path": str(destination), "mode": "RESEARCH_ONLY",
+            "model": model,
+        }, indent=2, sort_keys=True, allow_nan=False))
+        return 0
+    if args.command == "weather-collect-metars":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.collection import collect_metars_once, watch_metars
+        from .weather.predictor import STATIONS
+        from .weather.status import weather_database_path
+
+        stations = tuple(v.strip().upper() for v in args.stations.split(","))
+        if not stations or any(x not in STATIONS for x in stations):
+            parser.error("--stations must be a nonempty list of KORD,KDEN,KATL,KLAX")
+        if args.interval_seconds < 300:
+            parser.error("--interval-seconds must be at least 300")
+        db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
+        try:
+            if args.watch:
+                asyncio.run(watch_metars(
+                    db, stations=stations, interval_seconds=args.interval_seconds
+                ))
+            else:
+                result = asyncio.run(collect_metars_once(db, stations=stations))
+                print(json.dumps(result, indent=2, sort_keys=True))
+        except KeyboardInterrupt:
+            return 130
+        return 0
+    if args.command == "weather-collect-nwp":
+        from .bootstrap.config import BootstrapSettings
+        from .weather.nwp_collection import collect_recent, watch_nwp
+        from .weather.status import weather_database_path
+
+        models = tuple(x.strip().upper() for x in args.models.split(","))
+        try:
+            hours = [int(x.strip()) for x in args.forecast_hours.split(",")]
+        except ValueError:
+            parser.error("--forecast-hours must be comma-separated integers")
+        if not models or any(m not in ("HRRR","NBM") for m in models):
+            parser.error("--models must be HRRR and/or NBM")
+        if not hours or len(set(hours)) != len(hours) or any(not 1 <= h <= 48 for h in hours):
+            parser.error("--forecast-hours must be unique integers between 1 and 48")
+        if not 1 <= args.lookback_hours <= 24:
+            parser.error("--lookback-hours must be 1..24")
+        if args.watch and args.interval_seconds < 900:
+            parser.error("--interval-seconds must be at least 900")
+        db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
+        try:
+            if args.watch:
+                asyncio.run(watch_nwp(db, interval_seconds=args.interval_seconds))
+            else:
+                report = asyncio.run(collect_recent(
+                    db, models=models, forecast_hours=hours,
+                    lookback_hours=args.lookback_hours,
+                ))
+                print(json.dumps(report, indent=2, sort_keys=True))
+                return 0 if all(x.get("mode") == "DATA_ONLY" for x in report.values()) else 2
+        except (ImportError, OSError) as exc:
+            parser.error("NOAA GRIB decoding requires optional weather dependencies: "
+                         f"{exc}. Install with pip install -e '.[weather]'")
+        except KeyboardInterrupt:
+            return 130
+        return 0
     if args.command == "predict-live":
         from .bootstrap.live import run_live
 

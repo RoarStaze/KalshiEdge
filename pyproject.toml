@@ -18,6 +18,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=9,<10", "pytest-asyncio>=1.2,<2"]
 gui = ["PySide6>=6.8,<7"]
+# Only needed for native NOAA HRRR/NBM GRIB2 decoding, not base app startup.
+weather = [
+  "numpy>=2.5,<3",
+  "xarray>=2024.6",
+  "cfgrib>=0.9.15",
+  "eccodes>=2.38",
+]
 research = [
   "duckdb>=1.5,<2",
   "numpy>=2.5,<3",

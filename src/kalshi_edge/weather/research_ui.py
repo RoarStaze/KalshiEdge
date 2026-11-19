@@ -53,6 +53,16 @@ body[data-market="weather"] .site-nav-link.is-active{
 .wx-station{padding:13px;border:1px solid #628da058;background:#0d27328c;border-radius:11px}
 .wx-station-title{font-weight:800;color:#d8f4ff;font-size:14px;margin-bottom:7px}
 .wx-station-line{font-size:12px;color:#b2d6e1;line-height:1.7}
+.wx-prediction-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.wx-picker-label{display:flex;align-items:center;gap:9px;color:#b8d2de;font-size:12px}
+.wx-picker-label select{max-width:100%;padding:8px 10px;border:1px solid #6b9eaf92;border-radius:9px;
+ color:#e8f8ff;background:#0b2b3c;cursor:pointer}
+.wx-buckets{max-height:480px;overflow-y:auto;display:grid;gap:7px;padding:8px 0 10px}
+.wx-bucket{display:grid;grid-template-columns:92px minmax(40px,1fr) 58px;gap:9px;align-items:center;font-size:12px}
+.wx-bucket-label{color:#c5e5f0;font-variant-numeric:tabular-nums}
+.wx-bucket-track{height:10px;background:rgba(36,74,89,.65);border-radius:99px;overflow:hidden}
+.wx-bucket-fill{height:100%;background:linear-gradient(90deg,#2aa8be,#75d8e8);border-radius:99px}
+.wx-bucket-prob{text-align:right;color:#def6ff;font-variant-numeric:tabular-nums}
 .wx-footer{border-top:1px solid #ffffff1a;padding:16px 0;color:#90abb9;font-size:11px}
 .wx-panel code{color:#c0e7f9;overflow-wrap:anywhere}
 @media(max-width:920px){.wx-grid{grid-template-columns:1fr}.wx-panel{padding:19px}}
@@ -75,36 +85,56 @@ WEATHER_SECTIONS = {
 
 _FORECAST = """
 <div class="wx-grid">
- <article class="wx-panel"><h2>Daily high-temperature probabilities</h2>
-  <div class="wx-notice">No calibrated station-level temperature distribution is active in KalshiEdge.
-  WeatherEdge AI remains a separate research/paper-trading engine. Do not interpret
-  incoming model forecasts as settlement-certified Kalshi probabilities.</div>
+ <article class="wx-panel">
+  <div class="wx-prediction-heading"><h2>Daily high · airport probability forecast</h2>
+  <label class="wx-picker-label" for="wx-forecast-station">Station
+   <select id="wx-forecast-station" aria-label="Airport weather station">
+    <option value="KORD">Chicago O'Hare (KORD)</option>
+    <option value="KDEN">Denver (KDEN)</option>
+    <option value="KATL">Atlanta (KATL)</option>
+    <option value="KLAX">Los Angeles (KLAX)</option>
+   </select></label></div>
+  <div class="wx-notice">EXPERIMENTAL AIRPORT PROXY · These are modeled
+  one-degree temperature probabilities, NOT Kalshi contract odds.
+  Contract-specific settlement sources, calibration and forward profitability
+  remain independently unverified. No orders can be placed here.</div>
   <div class="wx-stats">
-   <div class="wx-stat"><span>Forecast availability</span><strong>UNVALIDATED</strong></div>
-   <div class="wx-stat"><span>Order submission</span><strong>DISABLED</strong></div>
+   <div class="wx-stat"><span>Predicted daily maximum</span><strong id="wx-forecast-mean">—</strong></div>
+   <div class="wx-stat"><span>90% modeled interval</span><strong id="wx-forecast-interval">—</strong></div>
+   <div class="wx-stat"><span>Observed airport high so far</span><strong id="wx-forecast-observed">—</strong></div>
+   <div class="wx-stat"><span>Model / confidence</span><strong id="wx-forecast-model">NOT READY</strong></div>
   </div>
-  <p>HRRR/NBM and station observations become visible here as the external
-  collector writes to the shared weather database. The UI never submits real orders.</p>
- </article>
- <article class="wx-panel"><h2>Live data readiness</h2>
   <div class="wx-rows">
-   <div class="wx-row"><span>Collector database</span><strong id="wx-db">CHECKING</strong></div>
-   <div class="wx-row"><span>Weather records</span><strong id="wx-samples">—</strong></div>
-   <div class="wx-row"><span>Stations</span><strong id="wx-station-count">—</strong></div>
-   <div class="wx-row"><span>Settlement labels</span><strong>NOT CERTIFIED</strong></div>
-  </div><p id="wx-updated">Waiting for collector status…</p>
+   <div class="wx-row"><span>Forecast readiness</span><strong id="wx-forecast-state">WAITING</strong></div>
+   <div class="wx-row"><span>HRRR model peak</span><strong id="wx-forecast-hrrr">—</strong></div>
+   <div class="wx-row"><span>NBM model peak</span><strong id="wx-forecast-nbm">—</strong></div>
+   <div class="wx-row"><span>Target climate day (standard time)</span><strong id="wx-forecast-day">—</strong></div>
+  </div>
+  <p id="wx-forecast-asof">Waiting for NOAA receipt timestamps…</p>
+  <p id="wx-forecast-freshness">Actual observation and forecast receipt times unavailable.</p>
+ </article>
+ <article class="wx-panel">
+  <h2>Fine-grained temperature distribution</h2>
+  <p>One-degree Fahrenheit buckets, including both tails. The bar length is
+  estimated probability, not trading expected value.</p>
+  <div id="wx-forecast-buckets" class="wx-buckets" aria-live="polite">
+   <div class="wx-empty">Waiting for fresh HRRR, NBM and METAR data…</div>
+  </div>
+  <div class="wx-rows">
+   <div class="wx-row"><span>Real order submission</span><strong>DISABLED</strong></div>
+   <div class="wx-row"><span>Kalshi settlement certification</span><strong>NOT VERIFIED</strong></div>
+  </div>
  </article>
 </div>
 """
-
 _TRAIN = """
 <div class="wx-grid"><article class="wx-panel"><h2>Station model training</h2>
- <div class="wx-notice">Training is not launched from this interface.
- Use the separately installed WeatherEdge AI command-line research workflow
- after collecting verified point-in-time features and independently verified
- contract-specific settlement labels.</div>
+ <div class="wx-notice">Training is intentionally not launched from this read-only
+ dashboard. Run <code>kalshi-edge weather-train</code> with at least 60 independent
+ climate-day feature/label records and reviewed first-party settlement evidence.
+ A chronological holdout is reported, but the model remains research-only.</div>
  <div class="wx-rows">
-  <div class="wx-row"><span>Training from KalshiEdge UI</span><strong>DISABLED</strong></div>
+  <div class="wx-row"><span>Training from KalshiEdge UI</span><strong>CLI ONLY</strong></div>
   <div class="wx-row"><span>Calibration certification</span><strong>NOT VERIFIED</strong></div>
   <div class="wx-row"><span>OOS profitability</span><strong>NOT VERIFIED</strong></div>
   <div class="wx-row"><span>Live order permission</span><strong>DISABLED</strong></div>
@@ -138,9 +168,11 @@ _DATA = """
  <div class="wx-row"><span>Database</span><strong id="wx-db">CHECKING</strong></div>
  <div class="wx-row"><span>Kalshi settlement audit</span><strong>REVIEW REQUIRED</strong></div>
  <div class="wx-row"><span>Live order submission</span><strong>DISABLED</strong></div>
- </div><p>Run the separately installed WeatherEdge AI collector from the
- KalshiEdge project root with <code>--db data/weather/weatheredge.sqlite3</code>
- to populate this screen.</p><p id="wx-updated">Waiting for collector status…</p>
+ </div><p>Use built-in commands <code>kalshi-edge weather-collect-metars --watch</code>
+ and <code>kalshi-edge weather-collect-nwp --watch</code> to populate
+ <code>data/weather/weatheredge.sqlite3</code>. NOAA GRIB decoding requires
+ the optional Python weather dependencies.</p>
+ <p id="wx-updated">Waiting for collector status…</p>
  </article></div>
 """
 
@@ -197,6 +229,84 @@ WEATHER_STATUS_SCRIPT = r"""<script>
 </script>"""
 
 
+WEATHER_FORECAST_SCRIPT = r"""<script>
+(function(){
+ "use strict";
+ const selector=document.getElementById("wx-forecast-station");
+ if(!selector)return;
+ const node=id=>document.getElementById(id);
+ const put=(id,v)=>{const target=node(id);if(target)target.textContent=String(v);};
+ const temp=value=>Number.isFinite(value)?value.toFixed(1)+" °F":"—";
+ const showBuckets=(buckets)=>{
+   const target=node("wx-forecast-buckets");
+   if(!target)return;
+   target.replaceChildren();
+   if(!Array.isArray(buckets)||!buckets.length){
+     const empty=document.createElement("div");
+     empty.className="wx-empty";
+     empty.textContent="Probabilities unavailable. Requires fresh model cycles and observations.";
+     target.appendChild(empty);return;
+   }
+   for(const entry of buckets){
+     const p=Number(entry.probability);
+     if(!Number.isFinite(p)||p<0||p>1)continue;
+     const row=document.createElement("div");row.className="wx-bucket";
+     const name=document.createElement("span");name.className="wx-bucket-label";
+     name.textContent=entry.label;
+     const track=document.createElement("div");track.className="wx-bucket-track";
+     const fill=document.createElement("div");fill.className="wx-bucket-fill";
+     fill.style.width=(100*p).toFixed(2)+"%";
+     track.appendChild(fill);
+     const percent=document.createElement("span");percent.className="wx-bucket-prob";
+     percent.textContent=(100*p).toFixed(2)+"%";
+     row.append(name,track,percent);
+     target.appendChild(row);
+   }
+ };
+ let latest={};
+ function render(){
+   const station=latest[selector.value];
+   if(!station){put("wx-forecast-state","NO DATA");showBuckets([]);return;}
+   put("wx-forecast-state",station.status||"UNAVAILABLE");
+   put("wx-forecast-day",station.climate_day||"—");
+   put("wx-forecast-asof",station.asof?"Snapshot UTC: "+station.asof:"No receipt evidence");
+   const rec=station.nwp_receipts_utc||{};
+   put("wx-forecast-freshness","METAR event: "+(station.metar_event_at||"—")+
+      " · received: "+(station.metar_received_at||"—")+
+      " · HRRR received: "+(rec.HRRR||"—")+
+      " · NBM received: "+(rec.NBM||"—"));
+   put("wx-forecast-mean",temp(station.mean_f));
+   put("wx-forecast-observed",temp(station.observed_max_f));
+   put("wx-forecast-hrrr",temp(station.hrrr_max_f));
+   put("wx-forecast-nbm",temp(station.nbm_max_f));
+   put("wx-forecast-interval",Array.isArray(station.interval_90_f)?
+      station.interval_90_f.map(v=>temp(v)).join(" – "):"—");
+   put("wx-forecast-model",station.model_kind==="STATION_BIAS_GAUSSIAN_RESEARCH"?
+      "TRAINED · RESEARCH ONLY":station.model_kind==="BASELINE_UNCALIBRATED"?
+      "UNCALIBRATED":"NOT READY");
+   showBuckets(station.buckets);
+ }
+ async function refresh(){
+   try{
+     const response=await fetch("/api/weather/forecast",{cache:"no-store"});
+     if(!response.ok)throw new Error("forecast API unavailable");
+     const data=await response.json();
+     latest={};
+     if(Array.isArray(data.forecasts))
+       for(const item of data.forecasts)latest[item.station]=item;
+     render();
+   }catch(_error){
+     latest={};put("wx-forecast-state","FEED UNAVAILABLE");
+     put("wx-forecast-mean","—");put("wx-forecast-interval","—");
+     showBuckets([]);
+   }
+ }
+ selector.addEventListener("change",render);
+ refresh();setInterval(refresh,15000);
+})();
+</script>"""
+
+
 def render_weather_page(section: str) -> str:
     """Render isolated read-only WeatherEdge workspace, no Bitcoin page scripts."""
     if section not in WEATHER_SECTIONS:
@@ -233,4 +343,4 @@ def render_weather_page(section: str) -> str:
 </main>
 <footer class="wx-footer">WeatherEdge AI · station research and paper-only data.
 Weather observations are not necessarily Kalshi's official settlement measurements.</footer>
-</div>{WEATHER_STATUS_SCRIPT}{MOTION_SCRIPT}</body></html>"""
+</div>{WEATHER_STATUS_SCRIPT}{WEATHER_FORECAST_SCRIPT}{MOTION_SCRIPT}</body></html>"""
