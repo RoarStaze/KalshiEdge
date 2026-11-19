@@ -140,7 +140,7 @@ def _evidence_item(raw: dict, root: Path) -> dict:
     }
 
 
-def audit_settlement_evidence(root: Path) -> tuple[list[dict],list[dict]]:
+def _audit_manual_evidence(root: Path) -> tuple[list[dict],list[dict]]:
     """Validate *local bytes and metadata*, not the publisher's online identity.
 
     A genuinely independent certification still requires publisher retrieval
@@ -169,6 +169,110 @@ def audit_settlement_evidence(root: Path) -> tuple[list[dict],list[dict]]:
         except (OSError,ValueError,TypeError,KeyError,OverflowError,json.JSONDecodeError) as exc:
             rejected.append({"line":line_num,"reason":str(exc)[:250]})
     return accepted,rejected
+
+
+def _auto_evidence_item(raw: dict, root: Path) -> dict:
+    """Re-parse TWO immutable first-party HTTP responses before scoring.
+
+    User-editable manifest assertions alone CANNOT create a certified label.
+    Verify each original raw payload hash, exact source hosts, market terms,
+    official numeric high, and all returned settled market outcomes.
+    """
+    from .settlement_collector import (
+        TWC_ENDPOINT, KALSHI_MARKETS_ENDPOINT,
+        extract_twc_high, verify_kalshi_markets,
+    )
+    if not isinstance(raw,dict):
+        raise ValueError("INVALID_AUTO_EVIDENCE")
+    station=raw["station"]
+    day=date.fromisoformat(raw["climate_day"])
+    spec=STATIONS.get(station)
+    if spec is None or spec.kalshi_series is None:
+        raise ValueError("AUTO_STATION_NOT_SUPPORTED")
+    event=spec.kalshi_series+"-"+day.strftime("%y%b%d").upper()
+    if (raw.get("official_source")!="THE_WEATHER_COMPANY" or
+        raw.get("market_rules_source")!="THE_WEATHER_COMPANY" or
+        raw.get("evidence_state")!="AUTO_CORROBORATED_UNCERTIFIED" or
+        raw.get("source_url")!=TWC_ENDPOINT+"?date="+day.isoformat() or
+        raw.get("kalshi_url")!=KALSHI_MARKETS_ENDPOINT+"?event_ticker="+event):
+        raise ValueError("AUTO_PRIMARY_SOURCE_MISMATCH")
+    def original_bytes(filename_key: str, digest_key: str) -> bytes:
+        name=raw[filename_key]
+        sha=raw[digest_key]
+        if (not isinstance(name,str) or len(name)>160 or
+            name!=Path(name).name or name in (".","..") or
+            not isinstance(sha,str) or not _HEX256.fullmatch(sha)):
+            raise ValueError("UNSAFE_AUTO_CAPTURE_METADATA")
+        directory=(root/"evidence").resolve()
+        file=(directory/name).resolve()
+        if file.parent!=directory or not file.is_file() or file.stat().st_size>2_000_000:
+            raise ValueError("MISSING_AUTO_CAPTURE")
+        body=file.read_bytes()
+        if not hmac.compare_digest(hashlib.sha256(body).hexdigest(),sha.lower()):
+            raise ValueError("TAMPERED_AUTO_CAPTURE")
+        return body
+    publisher_bytes=original_bytes("source_capture_file","source_sha256")
+    exchange_bytes=original_bytes("kalshi_capture_file","kalshi_sha256")
+    high=extract_twc_high(publisher_bytes,day,station)
+    kalshi_json=json.loads(exchange_bytes)
+    if (not isinstance(kalshi_json,dict) or kalshi_json.get("cursor")):
+        raise ValueError("INCOMPLETE_AUTO_KALSHI_CAPTURE")
+    ticker=verify_kalshi_markets(kalshi_json.get("markets"),station,day,high)
+    if raw.get("market_ticker")!=ticker or raw.get("actual_max_f")!=high:
+        raise ValueError("AUTO_RECONCILIATION_MISMATCH")
+    fetched=_time(raw["retrieved_at"])
+    offset=timedelta(hours=spec.standard_offset_hours)
+    midnight=(datetime(day.year,day.month,day.day,tzinfo=timezone.utc)-offset
+              +timedelta(days=1))
+    if fetched<midnight+timedelta(hours=8):
+        raise ValueError("AUTO_REPORT_PREMATURE")
+    return {
+        "station":station,"climate_day":day.isoformat(),
+        "actual_max_f":high,"market_ticker":ticker,
+        "official_source":"THE_WEATHER_COMPANY",
+        "source_url":raw["source_url"],
+        "sha256":raw["source_sha256"].lower(),
+        "evidence_state":"AUTO_CORROBORATED_UNCERTIFIED",
+    }
+
+
+def audit_settlement_evidence(root: Path) -> tuple[list[dict],list[dict]]:
+    """Combine manually reviewed and independently captured source evidence.
+
+    Any disagreement on the same station/day makes that day unscorable.
+    Publisher/exchange HTTPS responses are two distinct sources, but neither
+    is cryptographically signed by its publisher: never claim certification.
+    """
+    root=Path(root)
+    manual,rejected=_audit_manual_evidence(root)
+    accepted={ (row["station"],row["climate_day"]):row for row in manual }
+    auto_manifest=root/"settlement_auto.jsonl"
+    if not auto_manifest.is_file():
+        return manual,rejected
+    if auto_manifest.stat().st_size>10_000_000:
+        return manual,rejected+[{"line":0,"reason":"auto evidence oversized"}]
+    seen=set()
+    for idx,line in enumerate(auto_manifest.read_text(encoding="utf-8").splitlines(),1):
+        if idx>100_000:
+            rejected.append({"line":idx,"reason":"auto manifest too long"})
+            break
+        if not line.strip():
+            continue
+        try:
+            row=_auto_evidence_item(json.loads(line),root)
+            key=(row["station"],row["climate_day"])
+            if key in seen:
+                raise ValueError("duplicate automatic station/day")
+            seen.add(key)
+            prior=accepted.get(key)
+            if prior is not None and prior["actual_max_f"]!=row["actual_max_f"]:
+                accepted.pop(key,None)
+                raise ValueError("manual and auto official high conflict")
+            accepted[key]=row
+        except (OSError,ValueError,TypeError,KeyError,OverflowError,
+                json.JSONDecodeError) as exc:
+            rejected.append({"line":idx,"reason":str(exc)[:250]})
+    return list(accepted.values()),rejected
 
 
 def _bootstrap_paired_ci(deltas: list[float], *, samples: int = 1500) -> list[float] | None:
@@ -210,7 +314,8 @@ def evaluate_station(station: str, snapshots: list[dict], evidence: list[dict],
             earliest[key]=row
     labels={}
     for row in evidence:
-        if row.get("station")!=station or row.get("evidence_state")!="MANUAL_REVIEWED_UNVERIFIED":
+        if (row.get("station")!=station or row.get("evidence_state") not in
+            ("MANUAL_REVIEWED_UNVERIFIED","AUTO_CORROBORATED_UNCERTIFIED")):
             continue
         key=row.get("climate_day")
         if key in labels:
