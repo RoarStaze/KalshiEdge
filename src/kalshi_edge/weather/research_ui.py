@@ -203,11 +203,14 @@ def render_weather_page(section: str) -> str:
         raise ValueError("Unknown WeatherEdge section")
     base_css = PAGE.split("<style>", 1)[1].split("</style>", 1)[0]
     css = "\n".join((base_css, STYLE, MOTION_STYLE, MARKET_SELECTOR_STYLE, WEATHER_STYLE))
-    links = "".join(
-        f'<a class="site-nav-link{" is-active" if key == section else ""}" '
-        f'href="{url}"{" aria-current=\"page\"" if key == section else ""}>{label}</a>'
-        for key, label, url in WEATHER_NAV
-    )
+    parts = []
+    for key, label, url in WEATHER_NAV:
+        active = " is-active" if key == section else ""
+        current = ' aria-current="page"' if key == section else ""
+        parts.append(
+            f'<a class="site-nav-link{active}" href="{url}"{current}>{label}</a>'
+        )
+    links = "".join(parts)
     title, description = WEATHER_SECTIONS[section]
     selector = render_market_selector("weather")
     return f"""<!doctype html>
