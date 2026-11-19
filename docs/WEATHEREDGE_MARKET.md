@@ -101,6 +101,33 @@ The climate-day calculation assumes local **standard** time, with a 3 PM
 standard-time expected peak. That forecast-proxy convention is not a claim
 about the rules for any particular Kalshi market.
 
+## Build a labeled training dataset from actual recorded weather
+
+Once real NOAA data exists for many independent days, prepare an evidence
+manifest, one JSON object per station/day with the following fields:
+`station`, `settlement_day`, `asof` (point-in-time snapshot UTC),
+`actual_max_f`, `source_uri` (first-party publisher),
+`source_sha256` (SHA-256 of captured publisher source bytes), and
+`source_market_ticker` (specific Kalshi contract).
+
+The exporter only accepts first-party source domains listed in its code.
+It checks evidence formatting and that the saved historical NOAA inputs
+were actually available at the specified `asof`. It **does not independently
+authenticate** the publisher bytes, market rules or the accuracy of the
+user-provided labels. You must review those sources separately.
+
+```powershell
+& .\.venv\Scripts\python.exe -m kalshi_edge.cli weather-export-training `
+  --station KORD `
+  --evidence-jsonl "data/weather/settlement_evidence.jsonl" `
+  --out-jsonl "data/weather/verified_training_cases.jsonl"
+```
+
+The exporter reports skipped days when a historical point-in-time forecast
+would have required unavailable NOAA data. Missing/late inputs are never
+backfilled with observations acquired after the requested timestamp.
+It does not manufacture historical training cases.
+
 ## Train station-specific research models
 
 Training requires at least **60 distinct climate days** of retrospective
@@ -156,6 +183,7 @@ diagrams and the required 30-day forward paper trial.
 - `src/kalshi_edge/weather/nwp_collection.py`: NOAA GRIB2 indexed downloads.
 - `src/kalshi_edge/weather/predictor.py`: point-in-time station inference.
 - `src/kalshi_edge/weather/training.py`: chronological station training.
+- `src/kalshi_edge/weather/dataset.py`: retrospective point-in-time feature/label export.
 - `src/kalshi_edge/weather/research_ui.py`: Weather Forecast/Train/History/Data UI.
 - `src/kalshi_edge/weather/status.py`: database health and counts.
 - `tests/weather/`: data-integrity, API, calibration and route tests.
