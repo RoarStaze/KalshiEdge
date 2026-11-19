@@ -292,10 +292,11 @@ async def collect_station_day(root: Path, station: str, climate_day: date,
                                         climate_day,high)
         except (httpx.HTTPError,ValueError,TypeError,OverflowError,
                 KeyError,json.JSONDecodeError) as exc:
-            if high is not None and twc_body is not None:
-                # Publisher really provided a specific final/revised value,
-                # but we could NOT corroborate it with Kalshi's outcome.
-                # Preserve that publisher revision and revoke any old label.
+            if (twc_body is not None and
+                (high is not None or str(exc)=="PUBLISHER_VALUE_NOT_FINAL")):
+                # A new final/revised value disagreed with Kalshi, or a once
+                # final report is now explicitly preliminary. Preserve the
+                # publisher revision and suspend any old accepted daily label.
                 root=Path(root)
                 digest=hashlib.sha256(twc_body).hexdigest()
                 name=(f"{station}_{climate_day.isoformat()}_"
