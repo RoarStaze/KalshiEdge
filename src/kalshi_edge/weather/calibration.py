@@ -386,6 +386,7 @@ def calibration_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
         "status":"WAITING_FOR_SETTLEMENT_EVIDENCE",
         "evidence_state":"MANUAL_CLAIMS_NOT_INDEPENDENTLY_CERTIFIED",
         "matched_days":0,"rejected_evidence_count":0,
+        "automated_label_count":0,"manual_label_count":0,
         "journal":{"recorded_snapshots":0,"independent_station_days":0,
                    "recorded_noon_snapshots":0},
         "stations":[],
@@ -402,6 +403,14 @@ def calibration_status(bootstrap_root: Path, *, preview: bool = False) -> dict:
         result["journal"]=journal
         result["rejected_evidence_count"]=len(rejected)
         result["evidence_errors"]=rejected[:20]
+        result["automated_label_count"]=sum(
+            r.get("evidence_state")=="AUTO_CORROBORATED_UNCERTIFIED"
+            for r in settled
+        )
+        result["manual_label_count"]=sum(
+            r.get("evidence_state")=="MANUAL_REVIEWED_UNVERIFIED"
+            for r in settled
+        )
         stations=[]
         for station in STATIONS:
             rows=read_station_snapshots(db,station)
