@@ -31,6 +31,7 @@ from kalshi_edge.gold.research_ui import render_gold_page
 from kalshi_edge.gold.experiment import gold_experiment_status
 from kalshi_edge.weather.research_ui import render_weather_page
 from kalshi_edge.weather.status import read_weather_status
+from kalshi_edge.weather.predictor import read_weather_forecasts
 from .api_credentials_ui import integrate_api_credentials
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
@@ -847,6 +848,11 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 kind = "application/json; charset=utf-8"
             elif path == "/api/weather/status":
                 content = json.dumps(read_weather_status(root), separators=(",", ":"),
+                                     allow_nan=False).encode("utf-8")
+                kind = "application/json; charset=utf-8"
+            elif path == "/api/weather/forecast":
+                # Read-only research projections: never call a trading client.
+                content = json.dumps(read_weather_forecasts(root), separators=(",", ":"),
                                      allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
             elif self.path == "/api/health":
