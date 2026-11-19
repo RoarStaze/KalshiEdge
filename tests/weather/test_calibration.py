@@ -80,7 +80,7 @@ def test_invalid_settlement_capture_is_rejected_and_never_scored(tmp_path):
     record={
        "station":"KMDW","climate_day":"2026-11-19",
        "actual_max_f":65,
-       "market_ticker":"KXHIGHCHI-TEST",
+       "market_ticker":"KXHIGHCHI-26NOV19-T65",
        "market_rules_source":"THE_WEATHER_COMPANY",
        "official_source":"THE_WEATHER_COMPANY",
        "source_url":"https://weather.com/kalshi",
@@ -98,6 +98,7 @@ def test_invalid_settlement_capture_is_rejected_and_never_scored(tmp_path):
         {"market_rules_source":"NWS_CLI"},
         {"capture_file":"../../outside.txt"},
         {"source_url":"https://example.com"},
+        {"market_ticker":"KXHIGHCHI-26NOV18-T65"},
     ):
         manifest.write_text(json.dumps({**record,**change})+"\n")
         invalid,reason=audit_settlement_evidence(root)
