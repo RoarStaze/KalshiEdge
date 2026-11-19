@@ -219,7 +219,7 @@ def _load_model(path: Path, station: str, asof_day: date) -> tuple[float, float,
         n = int(obj["train_days"])
         if isinstance(obj["train_days"], bool) or n < 30:
             raise ValueError("insufficient training days")
-        if date.fromisoformat(obj["train_end_day"]) > asof_day:
+        if date.fromisoformat(obj["train_end_day"]) >= asof_day:
             raise ValueError("model trained on future settlement")
         return bias, sigma, "STATION_BIAS_GAUSSIAN_RESEARCH", n
     except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
