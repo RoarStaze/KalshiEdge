@@ -28,14 +28,17 @@ _HEX256 = re.compile(r"^[0-9a-fA-F]{64}$")
 def _validate_manifest_row(raw: dict, station: str) -> dict | None:
     if raw.get("station") != station:
         return None
-    day = date.fromisoformat(raw["settlement_day"])
-    asof = _time(raw["asof"])
-    actual = _finite(raw["actual_max_f"], -130, 150)
+    try:
+        day = date.fromisoformat(raw["settlement_day"])
+        asof = _time(raw["asof"])
+        actual = _finite(raw["actual_max_f"], -130, 150)
+        uri = raw["source_uri"]
+        digest = raw["source_sha256"]
+        ticker = raw["source_market_ticker"]
+    except KeyError as exc:
+        raise ValueError(f"missing publisher evidence field: {exc.args[0]}") from exc
     if station_day(STATIONS[station], asof)[0] != day:
         raise ValueError("manifest climate day/asof mismatch")
-    uri = raw["source_uri"]
-    digest = raw["source_sha256"]
-    ticker = raw["source_market_ticker"]
     if (not isinstance(uri, str) or not any(uri == base or
           (uri.startswith(base) and base.endswith("/"))
           for base in _ALLOWED_PUBLISHERS)):
