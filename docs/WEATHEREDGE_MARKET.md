@@ -201,3 +201,107 @@ diagrams and the required 30-day forward paper trial.
 
 No real weather orders are ever submitted. Real Kalshi outcome-bin pricing,
 fees, liquidity, and maker execution are not enabled by these commands.
+
+## Prospective forecast calibration (new)
+
+**Daily use remains one command: `kalshiedge start`.** The app owns
+the NOAA collectors *and* records actual forward research forecasts every
+10 minutes when weather inputs are ready. These snapshots use the forecast
+available at the time, frozen by local-standard-time forecast hour. Old NOAA
+data downloaded today is never misrepresented as a forecast made yesterday.
+
+Only the **first usable noon local-standard-time** snapshot per station/day
+enters the registered primary calibration score; the other hourly forecasts
+are retained for later research. The stored journal is
+`data/weather/weatheredge.sqlite3`,
+table `weather_forecast_snapshots`.
+Historical records are write-once per hour, never overwritten with later
+model runs or newly observed temperatures.
+
+The Weather pages query **`GET /api/weather/calibration`** and show:
+- Actual independent station/day matches; not model samples or NOAA rows.
+- Observed 50%, 80%, 90% interval coverage, and a 95% Wilson confidence
+  interval for 90% coverage.
+- Proper **fixed-category** multiclass Brier and log loss with a paired
+  NBM baseline, MAE, and a day-resampled paired Brier difference interval
+  when at least 30 matched days exist.
+- `NOT MEASURED` before 10 eligible outcomes and **NOT CERTIFIED**
+  until the full per-market settlement and original first-party source
+  reconciliation is complete. No model is promoted or traded automatically.
+
+### Settlement evidence is required for accuracy claims
+
+NOAA METAR is **not** automatically equal to the contract's officially
+determined daily maximum. Kalshi's public help guidance and later Weather
+Company partnership announcements differ; the actual market's own
+`rules_primary` / specified source prevails. WeatherEdge does not
+currently have an authenticated, stable first-party feed containing all
+official TWC daily-high values or contract revisions. Thus **automatic
+forward logging works now**, while **source-certified accuracy reporting
+remains blocked until genuine publisher records are reviewed**.
+
+The optional data path is
+`data/weather/settlement_evidence.jsonl`, one claim per station/day.
+Each claim must provide these fields:
+
+```text
+station: KORD (or KDEN/KATL/KLAX)
+climate_day: YYYY-MM-DD
+actual_max_f: documented whole-degree outcome (number)
+market_ticker: exact related Kalshi ticker
+official_source: THE_WEATHER_COMPANY or NWS_CLI
+market_rules_source: same source verified from that specific market's rules
+source_url: https://weather.com/kalshi (or first-party NWS product URL)
+capture_file: local filename in data/weather/evidence/
+sha256: SHA-256 of the exact capture_file bytes
+reviewed_at: timezone-aware review timestamp after the climate day ends
+```
+
+**Important:** A hash confirms local file integrity, not that the file
+came from the named source or that the submitted numeric high matches the
+file. Consequently even correctly formatted local evidence is labeled
+`MANUAL_REVIEWED_UNVERIFIED`; it is **never silently certified**.
+Invalid/revised/inconsistent labels are excluded and reported. Genuine
+source authentication and adjudicated Kalshi contract matching require
+independent review, including publisher revisions.
+
+Do not paste example numbers as if they were real settlements. No Brier
+score, 90% coverage, calibration improvement, or trading profitability
+is claimed before actual forward evidence is acquired.
+
+References:
+- Kalshi weather help: https://help.kalshi.com/en/articles/13823837-weather-markets
+- The Weather Company: https://weather.com/kalshi
+- NWS climate daily reports: https://www.weather.gov/climate/
+- Calibration proper scoring and independent data: https://scikit-learn.org/stable/modules/calibration.html
+
+
+### Market-specific airport mapping (verified November 19, 2026)
+
+The Kalshi **Chicago daily high** market `KXHIGHCHI` references
+**CLIMDW / KMDW (Chicago Midway)**, *not* KORD (Chicago O'Hare).
+The earlier O'Hare-only predictor could give a meteorologically good
+forecast for the **wrong airport**. Never reuse KORD labels for Midway
+markets. Both stations remain available for independent research; the
+Weather Forecast dropdown now defaults to Midway.
+
+Current market-to-airport evidence (recheck each market's rules before use):
+
+| Market series | Station ID in rules | Observation airport | WeatherEdge station |
+| --- | --- | --- | --- |
+| KXHIGHCHI | CLIMDW | Chicago Midway | KMDW |
+| KXHIGHDEN | CLIDEN | Denver International | KDEN |
+| KXHIGHTATL | CLIATL | Atlanta Hartsfield-Jackson | KATL |
+| KXHIGHLAX | CLILAX | Los Angeles International | KLAX |
+
+First-party Kalshi market examples:
+- https://kalshi.com/markets/kxhighchi/highest-temperature-in-chicago/kxhighchi-26nov19
+- https://kalshi.com/markets/kxhighden/highest-temperature-in-denver/kxhighden-26nov19
+- https://kalshi.com/markets/kxhightatl/atlanta-max-temperature/kxhightatl-26nov19
+- https://kalshi.com/markets/kxhighlax/highest-temperature-in-los-angeles/kxhighlax-26nov19
+
+The collector automatically begins saving new KMDW airport observations
+and guidance after the next `kalshiedge start`. Existing historical
+KORD rows are preserved but never relabeled. First-party settlement
+labels must match both the named station and the market series.
+

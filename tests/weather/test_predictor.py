@@ -57,8 +57,10 @@ def _data(tmp_path, *, late=False, incomplete=False, stale=False):
 
 
 def test_station_specs_restrict_to_configured_airports():
-    assert set(STATIONS)=={"KORD","KDEN","KATL","KLAX"}
+    assert set(STATIONS)=={"KORD","KMDW","KDEN","KATL","KLAX"}
     assert STATIONS["KORD"].standard_offset_hours==-6
+    assert STATIONS["KMDW"].kalshi_series=="KXHIGHCHI"
+    assert STATIONS["KORD"].kalshi_series is None
 
 
 def test_point_in_time_weather_forecast_excludes_late_metar(tmp_path):
@@ -184,7 +186,7 @@ def test_weather_forecast_endpoint_is_read_only(tmp_path):
             data=response.json()
             assert data["mode"]=="PAPER_ONLY"
             assert data["real_orders_enabled"] is False
-            assert len(data["forecasts"])==4
+            assert len(data["forecasts"])==5
             assert all(x["mean_f"] is None for x in data["forecasts"])
             assert client.post(base+"/api/weather/forecast",json={}).status_code in (403,404)
     finally:
@@ -247,3 +249,34 @@ def test_weather_dashboard_explains_missing_model_status_instead_of_blanks():
     assert "wx-collector-health" in page
     assert "source_statuses" in page
     assert "/api/manual-trade/" not in page
+
+
+
+def test_same_day_trained_artifact_is_not_usable_for_prior_noon_forecast(tmp_path):
+    # An artifact fitted with today's final daily high would leak future
+    # settlement into an afternoon forecast; require train_end < target day.
+    db,asof=_data(tmp_path)
+    model_dir=tmp_path/"models"
+    model_dir.mkdir()
+    artifact={
+        "station":"KORD","model_kind":"STATION_BIAS_GAUSSIAN_RESEARCH",
+        "bias_f":1.0,"sigma_f":3.0,"train_days":60,
+        "train_end_day":"2026-11-19",
+    }
+    (model_dir/"KORD.json").write_text(json.dumps(artifact))
+    result=read_station_forecast(db,"KORD",asof,model_dir=model_dir)
+    assert result["status"]=="INVALID_MODEL"
+    assert result["mean_f"] is None
+
+
+
+def test_market_ticker_station_and_day_must_match_verified_market_rules():
+    from kalshi_edge.weather.predictor import ticker_matches_station_day
+    from datetime import date
+    day=date(2026,11,19)
+    assert ticker_matches_station_day("KMDW","KXHIGHCHI-26NOV19-T62",day)
+    assert ticker_matches_station_day("KDEN","KXHIGHDEN-26NOV19-B55.5",day)
+    assert not ticker_matches_station_day("KORD","KXHIGHCHI-26NOV19-T62",day)
+    assert not ticker_matches_station_day("KMDW","KXHIGHCHI-26NOV18-T62",day)
+    assert not ticker_matches_station_day("KMDW","KXHIGHCHI-TEST",day)
+    assert not ticker_matches_station_day("KMDW","KXHIGHDEN-26NOV19-T62",day)

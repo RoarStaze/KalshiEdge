@@ -23,6 +23,7 @@ from typing import Awaitable, Callable
 
 from .collection import collect_metars_once
 from .nwp_collection import collect_recent
+from .prospective import capture_station_snapshots
 from .status import weather_database_path
 
 
@@ -35,6 +36,7 @@ WEATHER_WHEELS = (
 )
 METAR_SECONDS = 300
 NWP_SECONDS = 1800
+FORECAST_JOURNAL_SECONDS = 600
 
 
 def _missing_decoder_modules() -> list[str]:
@@ -122,11 +124,14 @@ class WeatherSupervisor:
         metar_collect: Callable[[Path], Awaitable[dict]] = collect_metars_once,
         nwp_collect: Callable[[Path], Awaitable[dict]] = collect_recent,
         ensure_decoder: Callable[[], dict] | None = None,
+        forecast_capture: Callable[[Path], dict] = capture_station_snapshots,
     ):
         self.db_path = Path(db_path)
         self.status_path = collector_health_path(self.db_path)
         self._collect_metar = metar_collect
         self._collect_nwp = nwp_collect
+        self._capture_forecasts = forecast_capture
+        self._forecast_journal = {"state": "STARTING", "inserted": 0}
         self._ensure_decoder = ensure_decoder or (
             lambda: ensure_weather_decoder(Path.cwd())
         )
@@ -144,6 +149,7 @@ class WeatherSupervisor:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "feeds": self._feeds,
             "decoder": self._decoder_state or {"state": "NOT_CHECKED"},
+            "forecast_journal": self._forecast_journal,
             "real_orders_enabled": False,
         }
         temp_path = None
@@ -235,6 +241,30 @@ class WeatherSupervisor:
             "HRRR": self._feeds["HRRR"], "NBM": self._feeds["NBM"],
         }), flush=True)
 
+    async def poll_forecasts(self) -> None:
+        """Record only forecasts whose exact event/receipt-time inputs exist.
+
+        This is independent of METAR/NWP loops. A missing model or failed
+        write is a health status, never a fabricated forecast or label.
+        """
+        try:
+            status = await asyncio.to_thread(self._capture_forecasts, self.db_path)
+            if not isinstance(status, dict) or status.get("mode") != "PAPER_ONLY":
+                raise ValueError("invalid prospective journal result")
+            self._forecast_journal = {
+                "state": "READY" if status.get("inserted", 0) else "WAITING",
+                "inserted": int(status["inserted"]),
+                "stations": status.get("statuses", {}),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            self._forecast_journal = {
+                "state": "UNAVAILABLE",
+                "reason": f"{type(exc).__name__}: {exc}"[:350],
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        self._persist()
+
     async def run_forever(self) -> None:
         async def every(poll, period: int) -> None:
             while True:
@@ -244,6 +274,7 @@ class WeatherSupervisor:
         await asyncio.gather(
             every(self.poll_metar, METAR_SECONDS),
             every(self.poll_nwp, NWP_SECONDS),
+            every(self.poll_forecasts, FORECAST_JOURNAL_SECONDS),
         )
 
 

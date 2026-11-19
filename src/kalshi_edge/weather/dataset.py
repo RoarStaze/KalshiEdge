@@ -14,14 +14,14 @@ from datetime import date
 from pathlib import Path
 
 from .predictor import (
-    STATIONS, _finite, _time, read_station_forecast, station_day,
+    STATIONS, _finite, _time, read_station_forecast, station_day, ticker_matches_station_day,
 )
 
 _ALLOWED_PUBLISHERS = (
     "https://weather.com/kalshi",
     "https://api.weather.gov/products/",
 )
-_TICKER = re.compile(r"^[A-Z0-9-]{4,100}$")
+_TICKER = re.compile(r"^[A-Z0-9.-]{4,100}$")
 _HEX256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
@@ -47,6 +47,8 @@ def _validate_manifest_row(raw: dict, station: str) -> dict | None:
         raise ValueError("publisher evidence SHA-256 missing or invalid")
     if not isinstance(ticker, str) or not _TICKER.fullmatch(ticker):
         raise ValueError("market ticker evidence missing or invalid")
+    if not ticker_matches_station_day(station, ticker, day):
+        raise ValueError("settlement ticker, station or climate day mismatch")
     return {
         "station": station, "settlement_day": day.isoformat(),
         "asof": asof.isoformat(), "actual_max_f": actual,

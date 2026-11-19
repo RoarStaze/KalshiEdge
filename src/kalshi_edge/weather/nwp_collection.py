@@ -24,6 +24,9 @@ from .predictor import STATIONS, _utc
 
 
 STATION_COORDINATES = {
+    # Kalshi KXHIGHCHI settles Chicago Midway CLIMDW, not O'Hare KORD.
+    # Midway reference coordinates from FAA airport location data.
+    "KMDW": (41.7856431, -87.7527286),
     "KORD": (41.9786, -87.9048),
     "KDEN": (39.8561, -104.6737),
     "KATL": (33.6407, -84.4277),

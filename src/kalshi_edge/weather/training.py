@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from .predictor import (
-    STATIONS, baseline_mean, normal_bucket_probabilities, normal_cdf, _finite, _time,
-    DEFAULT_SIGMA_F,
+    STATIONS, baseline_mean, _finite, _time, DEFAULT_SIGMA_F,
 )
+from .calibration import score_gaussian_degree
 
 
 def _case(raw: dict, station: str) -> dict | None:
@@ -56,24 +56,25 @@ def _raw_prediction(case: dict) -> float:
 
 
 def _score(rows: list[dict], bias: float, sigma: float) -> dict[str, float]:
-    loss = 0.
-    multiclass_brier = 0.
-    mae = 0.
+    """Proper score on fixed -60..140°F outcomes shared by all models.
+
+    The former forecast-centered bins made Brier values incomparable when
+    model means differed. Here baseline and challenger use identical classes.
+    Full-record MAE retains decimal label precision; daily categorical
+    scoring rounds to a whole Fahrenheit degree (settlement-style).
+    """
+    if not rows:
+        raise ValueError("empty scoring split")
+    loss = 0.0
+    multiclass_brier = 0.0
+    mae = 0.0
     for row in rows:
         mean = max(row["observed_max_f"], _raw_prediction(row) + bias)
         actual = row["actual_max_f"]
-        observed_integer = int(math.floor(actual + .5))
-        p = max(1e-12, normal_cdf(observed_integer+.5, mean, sigma)
-                - normal_cdf(observed_integer-.5, mean, sigma))
-        loss -= math.log(p)
-        bins = normal_bucket_probabilities(mean, sigma)
-        brier = 0.
-        for bin_data in bins:
-            low, high = bin_data["lower_f"], bin_data["upper_f"]
-            truth = int((low is None or observed_integer >= low)
-                        and (high is None or observed_integer <= high))
-            brier += (bin_data["probability"] - truth) ** 2
-        multiclass_brier += brier
+        outcome = int(math.floor(actual + 0.5))
+        score = score_gaussian_degree(mean, sigma, outcome)
+        loss += score["log_loss"]
+        multiclass_brier += score["multiclass_brier"]
         mae += abs(actual - mean)
     n = len(rows)
     return {
@@ -81,7 +82,6 @@ def _score(rows: list[dict], bias: float, sigma: float) -> dict[str, float]:
         "multiclass_brier": round(multiclass_brier / n, 8),
         "mae_f": round(mae / n, 6),
     }
-
 
 def fit_station_model(rows: list[dict], station: str, *, min_days: int = 60) -> dict:
     """Fit only on earlier independent days, score untouched later days."""

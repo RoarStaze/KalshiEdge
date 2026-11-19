@@ -100,26 +100,26 @@ def build_parser() -> argparse.ArgumentParser:
     weather_forecast = sub.add_parser(
         "weather-forecast", help="inspect actual airport proxy probabilities from fresh METAR/HRRR/NBM data"
     )
-    weather_forecast.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"))
+    weather_forecast.add_argument("--station", choices=("KMDW","KORD","KDEN","KATL","KLAX"))
     weather_forecast.add_argument("--asof", help="timezone-aware historical as-of timestamp for point-in-time audit")
     weather_export = sub.add_parser(
         "weather-export-training", help="join original weather snapshots to documented first-party publisher labels"
     )
-    weather_export.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"), required=True)
+    weather_export.add_argument("--station", choices=("KMDW","KORD","KDEN","KATL","KLAX"), required=True)
     weather_export.add_argument("--evidence-jsonl", type=Path, required=True)
     weather_export.add_argument("--out-jsonl", type=Path, required=True)
     weather_export.add_argument("--db", type=Path, default=None)
     weather_train = sub.add_parser(
         "weather-train", help="fit research-only station model from labeled daily JSONL with chronological holdout"
     )
-    weather_train.add_argument("--station", choices=("KORD","KDEN","KATL","KLAX"), required=True)
+    weather_train.add_argument("--station", choices=("KMDW","KORD","KDEN","KATL","KLAX"), required=True)
     weather_train.add_argument("--input-jsonl", type=Path, required=True)
     weather_train.add_argument("--model-out", type=Path, default=None)
     weather_train.add_argument("--min-days", type=int, default=60)
     weather_metars = sub.add_parser(
         "weather-collect-metars", help="read NOAA AWC observations into the WeatherEdge SQLite database"
     )
-    weather_metars.add_argument("--stations", default="KORD,KDEN,KATL,KLAX")
+    weather_metars.add_argument("--stations", default="KMDW,KORD,KDEN,KATL,KLAX")
     weather_metars.add_argument("--db", type=Path, default=None)
     weather_metars.add_argument("--watch", action="store_true", help="poll in foreground every five minutes")
     weather_metars.add_argument("--interval-seconds", type=int, default=300)
@@ -416,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
 
         stations = tuple(v.strip().upper() for v in args.stations.split(","))
         if not stations or any(x not in STATIONS for x in stations):
-            parser.error("--stations must be a nonempty list of KORD,KDEN,KATL,KLAX")
+            parser.error("--stations must be a nonempty list of KMDW,KORD,KDEN,KATL,KLAX")
         if args.interval_seconds < 300:
             parser.error("--interval-seconds must be at least 300")
         db = args.db or weather_database_path(BootstrapSettings().bootstrap_dir)

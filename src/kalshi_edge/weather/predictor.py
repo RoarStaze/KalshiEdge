@@ -24,14 +24,45 @@ class Station:
     name: str
     standard_offset_hours: int
     expected_peak_hour_standard: int = 15
+    # Only market series explicitly evidenced for this airport. A forecast
+    # against KORD must NEVER be labeled as Chicago KXHIGHCHI (CLIMDW).
+    kalshi_series: str | None = None
+    settlement_station: str | None = None
 
 
 STATIONS: dict[str, Station] = {
-    "KORD": Station("KORD", "Chicago O'Hare", -6),
-    "KDEN": Station("KDEN", "Denver International", -7),
-    "KATL": Station("KATL", "Atlanta Hartsfield-Jackson", -5),
-    "KLAX": Station("KLAX", "Los Angeles International", -8),
+    "KMDW": Station("KMDW", "Chicago Midway · Kalshi Chicago", -6,
+                     kalshi_series="KXHIGHCHI", settlement_station="CLIMDW"),
+    "KORD": Station("KORD", "Chicago O'Hare · separate research", -6),
+    "KDEN": Station("KDEN", "Denver International", -7,
+                     kalshi_series="KXHIGHDEN", settlement_station="CLIDEN"),
+    "KATL": Station("KATL", "Atlanta Hartsfield-Jackson", -5,
+                     kalshi_series="KXHIGHTATL", settlement_station="CLIATL"),
+    "KLAX": Station("KLAX", "Los Angeles International", -8,
+                     kalshi_series="KXHIGHLAX", settlement_station="CLILAX"),
 }
+
+def ticker_matches_station_day(station: str, ticker: str, climate_day: date) -> bool:
+    """Reject outcomes for a different airport, series or settlement date.
+
+    NOAA and Kalshi daily-high series must be linked by actual contract
+    metadata, never by a friendly city name or neighboring airport.
+    """
+    spec = STATIONS.get(station)
+    if (spec is None or spec.kalshi_series is None or
+        not isinstance(ticker, str) or not isinstance(climate_day, date)):
+        return False
+    prefix = spec.kalshi_series + "-"
+    if not ticker.startswith(prefix):
+        return False
+    tail = ticker[len(prefix):].split("-", 1)
+    if len(tail) != 2 or len(tail[0]) != 7:
+        return False
+    try:
+        return datetime.strptime(tail[0], "%y%b%d").date() == climate_day
+    except ValueError:
+        return False
+
 
 NWP_MAX_AGE = timedelta(hours=5)
 METAR_MAX_AGE = timedelta(minutes=90)
@@ -219,7 +250,7 @@ def _load_model(path: Path, station: str, asof_day: date) -> tuple[float, float,
         n = int(obj["train_days"])
         if isinstance(obj["train_days"], bool) or n < 30:
             raise ValueError("insufficient training days")
-        if date.fromisoformat(obj["train_end_day"]) > asof_day:
+        if date.fromisoformat(obj["train_end_day"]) >= asof_day:
             raise ValueError("model trained on future settlement")
         return bias, sigma, "STATION_BIAS_GAUSSIAN_RESEARCH", n
     except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
