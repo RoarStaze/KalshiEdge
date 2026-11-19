@@ -228,7 +228,7 @@ def _load_model(path: Path, station: str, asof_day: date) -> tuple[float, float,
 
 def read_station_forecast(
     db_path: Path, station: str, asof: datetime | None = None,
-    *, model_dir: Path | None = None,
+    *, model_dir: Path | None = None, baseline_only: bool = False,
 ) -> dict:
     """Produce station airport-proxy distribution only from data known at asof.
 
@@ -267,9 +267,13 @@ def read_station_forecast(
                 _rows(conn, station, "NBM", asof - NWP_MAX_AGE, asof),
                 start, end, peak, asof)
         hours = max(0., (peak - asof).total_seconds() / 3600)
-        bias, sigma, model_kind, n_days = _load_model(
-            (model_dir or Path(db_path).parent / "models") / f"{station}.json",
-            station, climate_day)
+        if baseline_only:
+            bias, sigma, model_kind, n_days = (
+                0., DEFAULT_SIGMA_F, "BASELINE_UNCALIBRATED", 0)
+        else:
+            bias, sigma, model_kind, n_days = _load_model(
+                (model_dir or Path(db_path).parent / "models") / f"{station}.json",
+                station, climate_day)
         base = baseline_mean(hrrr, nbm, observed, trend, hours)
         mean = max(observed, base + bias)
         result.update({
