@@ -52,10 +52,10 @@ The startup terminal stores detailed weather logs under
 
 If `numpy`, `xarray`, `cfgrib` or `eccodes` is missing, the weather
 worker attempts a **one-time background installation** of the declared
-binary wheel dependencies, with no shell or manual intervention. This may
-require network access to PyPI and available Windows wheels and can modify
-the project's active Python environment. To disable automatic installs
-in an environment managed by another package manager, set
+binary wheel dependencies into a private `data/weather/decoder-pyXY`
+directory, with no shell or manual intervention. This may require access
+to PyPI and compatible Windows wheels. The BTC/training Python environment
+is not modified. To disable automatic weather package installation, set
 `KALSHIEDGE_WEATHER_AUTOINSTALL=0` before starting the app.
 
 If installation fails, METAR continues independently; HRRR/NBM show
