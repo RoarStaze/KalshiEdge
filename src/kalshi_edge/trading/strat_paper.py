@@ -264,7 +264,7 @@ class StratPaperTrader:
         while lo < hi:
             mid = (lo + hi + 1) // 2
             qty = D(mid) / 100
-            if qty * price + taker_fee_reserve(price, qty) <= budget:
+            if qty * price + standard_taker_fee_estimate(price, qty) <= budget:
                 lo = mid
             else:
                 hi = mid - 1
