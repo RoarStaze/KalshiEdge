@@ -28,3 +28,16 @@ The default 0.23 BPW is an **illustrative scenario**, not a verified LittleBit 7
 5. Coding benchmark quality is compared with a smaller local baseline.
 
 No automatic downloads or model execution occur here. A failed memory estimate must never be represented as a working deployment.
+
+## Verified LittleBit-only checkpoint search (2026-11-22)
+
+**Scope restriction:** This project is **Samsung LittleBit/LittleBit-2 only**. Do not substitute GGUF, GPTQ, AWQ, or unrelated quantizers and describe them as LittleBit.
+
+- **70B:** No trained, publicly verifiable checkpoint found in the official Samsung repo, Hugging Face's `littlebit` tagged listings, or searches. Absence from search is not proof that no private model exists.
+- **32B:** Supported in research, but no ready-to-run public LittleBit checkpoint verified.
+- **27B:** [Haverbex/Qwen3.8-27B-LittleBit-0.1bit](https://huggingface.co/Haverbex/Qwen3.8-27B-LittleBit-0.1bit) is an independent experimental conversion, **not a trained, quality-preserving 0.1-BPW whole-model release**. Model card: 21.57 GB stored weights, 192 MLP projections at target 0.1 BPW, other weights BF16, 0 QAT/recovery steps, severe benchmark degradation, and no packed inference kernel. Its bundled loader expands factors. **Reject for 6GB VRAM / 16GB RAM without additional verified streaming implementation and quality recovery**. Do not auto-download.
+- **8B:** [LittleBitLLM/littlebit-qwen3-8b-0.55bpw](https://huggingface.co/LittleBitLLM/littlebit-qwen3-8b-0.55bpw) is an early checkpoint and below the user's target model size.
+
+Official source: https://github.com/SamsungLabs/LittleBit . The official README documents quantization-aware training and evaluation, not a prebuilt 70B local deployment package.
+
+**Release gate:** Never advertise this experiment as a local 27B/70B inference application until real hardware inference, speed, memory, quality, and checkpoint provenance have been demonstrated. Running `discover.py` alone is insufficient.
