@@ -141,3 +141,62 @@ def test_junction_or_symlinked_trade_directory_is_rejected(tmp_path):
     with pytest.raises(ValueError, match="link|junction|external"):
         prune_historical_trades(root, apply=True)
     assert (external / "dont-delete.txt").exists()
+
+
+def test_extra_local_files_and_subfolders_do_not_block_paired_trade_cleanup(tmp_path):
+    """Only source JSON with matching provenance manifests may be removed."""
+    root = _root(tmp_path)
+    bootstrap = root / "data/bootstrap"
+    trades = bootstrap / "raw/kalshi/trades"
+    manifests = bootstrap / "manifests/kalshi/trades"
+
+    (trades / "still-writing.tmp").write_text("DO NOT TOUCH")
+    (trades / "unpaired.json").write_text("UNPAIRED RECORD")
+    subfolder = trades / "diagnostics"
+    subfolder.mkdir()
+    (subfolder / "notes.txt").write_text("KEEP")
+    (manifests / "unpaired-manifest.json.manifest.json").write_text("{}")
+    (manifests / "metadata.txt").write_text("KEEP")
+
+    preview = prune_historical_trades(root, apply=False)
+    assert preview["paired_trade_files"] == 1
+    assert preview["reclaimable_bytes"] >= 4096
+    assert preview["retained_other_entries"] >= 5
+    assert (trades / "old.json").exists()
+
+    applied = prune_historical_trades(root, apply=True)
+    assert applied["applied"] is True
+    assert is_historical_trade_history_pruned(bootstrap)
+    assert not (trades / "old.json").exists()
+    assert not (manifests / "old.json.manifest.json").exists()
+    assert (trades / "still-writing.tmp").read_text() == "DO NOT TOUCH"
+    assert (trades / "unpaired.json").read_text() == "UNPAIRED RECORD"
+    assert (subfolder / "notes.txt").read_text() == "KEEP"
+    assert (manifests / "unpaired-manifest.json.manifest.json").exists()
+    assert (manifests / "metadata.txt").read_text() == "KEEP"
+
+
+def test_reclaim_never_deletes_symlinked_unrecognized_entries(tmp_path):
+    root = _root(tmp_path)
+    trades = root / "data/bootstrap/raw/kalshi/trades"
+    external = tmp_path / "another-data-folder"
+    external.mkdir()
+    (external / "keep.txt").write_text("KEEP")
+    try:
+        (trades / "foreign").symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlinks not permitted")
+    report = prune_historical_trades(root, apply=True)
+    assert report["paired_trade_files"] == 1
+    assert (trades / "foreign").is_symlink()
+    assert (external / "keep.txt").read_text() == "KEEP"
+
+
+def test_no_paired_archive_files_will_not_create_prune_marker(tmp_path):
+    root = _root(tmp_path)
+    bootstrap = root / "data/bootstrap"
+    (bootstrap / "manifests/kalshi/trades/old.json.manifest.json").unlink()
+    with pytest.raises(ValueError, match="matching|paired|manifest"):
+        prune_historical_trades(root, apply=True)
+    assert (bootstrap / "raw/kalshi/trades/old.json").exists()
+    assert not is_historical_trade_history_pruned(bootstrap)
