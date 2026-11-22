@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from pathlib import Path
 import logging
 import threading
@@ -18,7 +18,6 @@ from typing import Callable
 
 from .paper import PublicMarketClient
 from .paper_scalper import PaperScalpLedger
-from .risk import taker_fee_reserve
 from .scalp_policy import quote_from_kalshi
 from .strat_policy import UpQuote, evaluate_side_momentum
 
@@ -30,6 +29,27 @@ MAX_CYCLES = 12
 COOLDOWN_NS = 6 * NS
 DAILY_LOSS_LIMIT = D("2.00")
 INITIAL_CAPITAL = D("100.00")
+SINGLE_FILL_FEE_QUANTUM = D("0.0001")  # centicent per official 2026 schedule
+
+
+def standard_taker_fee_estimate(price: D, quantity: D) -> D:
+    """Indicative default Kalshi taker fee, not a live-account fee quote.
+
+    2026-07-07 standard schedule: round up cost + 0.07*qty*p*(1-p)
+    to a centicent, then subtract cost. Market-specific multipliers
+    and split-fill adjustments are not verified.
+    """
+    if (not isinstance(price, D) or not isinstance(quantity, D)
+            or not price.is_finite() or not quantity.is_finite()
+            or not D("0") < price < D("1") or quantity < 0):
+        raise ValueError("Invalid estimated fee inputs")
+    if quantity == 0:
+        return D("0")
+    cost = price * quantity
+    raw = D("0.07") * price * (D("1") - price) * quantity
+    return (cost + raw).quantize(
+        SINGLE_FILL_FEE_QUANTUM, rounding=ROUND_CEILING
+    ) - cost
 
 
 def _cash(x: D) -> str:
@@ -67,6 +87,7 @@ class StratPaperTrader:
         self._last_down_ask_cents: str | None = None
         self._side_speeds = {"UP": 0.0, "DOWN": 0.0}
         self._side_reasons = {"UP": "WARMING_UP", "DOWN": "WARMING_UP"}
+        self._breakeven_cents = {"UP": None, "DOWN": None}
 
     def _market(self, now: int) -> tuple[str, int] | None:
         try:
@@ -120,7 +141,7 @@ class StratPaperTrader:
         payout = qty if row["side"] == winning_side else D("0")
         pnl = payout - D(row["total_paid"])
         self.ledger.close(
-            row["id"], price=D("1") if side == "yes" else D("0"),
+            row["id"], price=D("1") if row["side"] == winning_side else D("0"),
             fee=D("0"), now_ns=now, reason="OFFICIAL_SETTLEMENT",
             pnl=pnl, settled=True)
         self._exit_latched = False
@@ -143,6 +164,19 @@ class StratPaperTrader:
             cash -= D(opened["total_paid"])
         return {"pnl": pnl, "loss": loss, "open": opened, "cash": cash}
 
+    def _market_loss_streak(self, ticker: str | None) -> int:
+        """Consecutive settled/closed paper losses, scoped to one ticker."""
+        if not ticker:
+            return 0
+        streak = 0
+        for row in self.ledger.recent(100000):
+            if row["ticker"] != ticker or row["status"] == "OPEN":
+                continue
+            if D(row["paper_net_pnl"]) >= 0:
+                break
+            streak += 1
+        return streak
+
     def status(self) -> dict:
         with self._lock:
             now = self.clock()
@@ -156,6 +190,12 @@ class StratPaperTrader:
                 "virtual_cash_dollars": _cash(stats["cash"]),
                 "paper_net_pnl_dollars": _cash(stats["pnl"]),
                 "daily_paper_loss_dollars": _cash(stats["loss"]),
+                "market_loss_streak": self._market_loss_streak(self._ticker),
+                "max_same_market_loss_streak": 3,
+                "fee_mode": "INDICATIVE_STANDARD_TAKER_JULY_2026",
+                "slippage_cents_per_leg": "1.00",
+                "break_even_up_cents": self._breakeven_cents["UP"],
+                "break_even_down_cents": self._breakeven_cents["DOWN"],
                 "open_position": position,
                 "round_trips": self.ledger.recent(25),
                 "last_signal": self._last_signal,
@@ -180,8 +220,9 @@ class StratPaperTrader:
                     "entry": "NEW_EXECUTABLE_SIDE_ACCELERATION",
                     "exit": "HELD_SIDE_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
                 },
-                "warning": ("Paper only: simulated top-of-book fills with 1c "
-                            "slippage per contract per leg and estimated fees. "
+                "warning": ("Paper only: top-of-book hypothetical fills with 1c "
+                            "slippage per leg and indicative standard taker fees. "
+                            "Market-specific fees and actual fills are unverified. "
                             "No demonstrated positive after-fee expectancy; "
                             "an unfilled or illiquid exit can remain open."),
             }
@@ -231,7 +272,7 @@ class StratPaperTrader:
             self._last_signal = "BUDGET_OR_DEPTH_TOO_SMALL"
             return
         qty = D(lo) / 100
-        fee = taker_fee_reserve(price, qty)
+        fee = standard_taker_fee_estimate(price, qty)
         self.ledger.insert(
             ticker=quote.ticker, side=side, quantity=qty,
             price=price, fee=fee, paid=qty * price + fee,
@@ -245,7 +286,7 @@ class StratPaperTrader:
             self._last_signal = "EXIT_SIGNAL_LATCHED_WAITING_FOR_BID_DEPTH"
             return
         sale = quote.bid - SLIPPAGE
-        fee = taker_fee_reserve(sale, qty)
+        fee = standard_taker_fee_estimate(sale, qty)
         pnl = qty * sale - fee - D(row["total_paid"])
         self.ledger.close(
             row["id"], price=sale, fee=fee, now_ns=now,
@@ -277,6 +318,7 @@ class StratPaperTrader:
                     history.clear()
                 self._last_ask_cents = None
                 self._last_down_ask_cents = None
+                self._breakeven_cents = {"UP": None, "DOWN": None}
                 self._side_speeds = {"UP": 0.0, "DOWN": 0.0}
                 self._side_reasons = {"UP": "WARMING_UP", "DOWN": "WARMING_UP"}
                 self._ticker = ticker
@@ -302,6 +344,18 @@ class StratPaperTrader:
                 self._samples[side].append(quotes[side])
             self._last_ask_cents = format(quotes["UP"].ask * 100, ".2f")
             self._last_down_ask_cents = format(quotes["DOWN"].ask * 100, ".2f")
+            for side, q in quotes.items():
+                buy = q.ask + SLIPPAGE
+                sell = q.bid - SLIPPAGE
+                if D("0") < sell < buy < D("1"):
+                    # One-contract illustrative all-in quote cost, not a
+                    # forecast of the next fill or a profit guarantee.
+                    drag = (buy - sell
+                            + standard_taker_fee_estimate(buy, D("1"))
+                            + standard_taker_fee_estimate(sell, D("1")))
+                    self._breakeven_cents[side] = format(drag * 100, ".2f")
+                else:
+                    self._breakeven_cents[side] = None
             remain = (close - now) / NS
             signals = {
                 side: evaluate_side_momentum(
@@ -336,6 +390,8 @@ class StratPaperTrader:
                 self._last_signal = "DAILY_PAPER_LOSS_CIRCUIT"
             elif self.ledger.ticker_count(ticker) >= MAX_CYCLES:
                 self._last_signal = "MAX_MARKET_CYCLES"
+            elif self._market_loss_streak(ticker) >= 3:
+                self._last_signal = "THREE_SAME_MARKET_PAPER_LOSSES"
             elif now - self._last_exit_ns < COOLDOWN_NS:
                 self._last_signal = "REENTRY_COOLDOWN"
             else:
