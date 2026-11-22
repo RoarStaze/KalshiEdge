@@ -202,3 +202,18 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 **The decoder demo is CPU-only and uses untrained synthetic packed factors.** The expected LittleBit experiment suite contains **106 tests** (95 prior plus 11 new decoder tests). No PyTorch installation is needed to run these. The demo is not a Gemma 3 27B model or a text generator, and no new weights are downloaded.
+
+
+## Tiny Gemma 3 decoder executed on packed CUDA (experimental)
+
+See [GEMMA3_CUDA_DECODER.md](GEMMA3_CUDA_DECODER.md). This connects the existing **seven packed LittleBit CUDA warp projections** with CuPy RMSNorm, RoPE, grouped-query attention, causal sliding/global KV caching, gated MLP and residuals. Unlike the previous CPU-only decoder reference, this implementation aims to execute an entire **tiny** block on CUDA.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\gemma3_cuda_decoder.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+**Expected test count: 115** (106 previously passed + 9 new; six new CUDA-dependent). The hardware GPU path requires the RTX 4050 run; local CPU-side arithmetic checks passed. All demo factors are synthetic, with no real Gemma checkpoint or text generation.
