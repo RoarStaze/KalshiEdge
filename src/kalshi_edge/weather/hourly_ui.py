@@ -73,7 +73,7 @@ MAIN = """
   <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi prices or proof of a profitable bet. No automatic weather trading.</p>
   <details class="wx-hourly-details"><summary>Forecast uncertainty and technical details</summary>
    <div class="wx-rows">
-    <div class="wx-row"><span>Estimated 90% range (unvalidated)</span><strong id="wx-hourly-interval">—</strong></div>
+    <div class="wx-row"><span>90% modeled interval (not validated)</span><strong id="wx-hourly-interval">—</strong></div>
     <div class="wx-row"><span>Prediction status</span><strong id="wx-hourly-state">WAITING</strong></div>
     <div class="wx-row"><span>Prediction target (Eastern Time)</span><strong id="wx-hourly-et">—</strong></div>
     <div class="wx-row"><span>Target UTC</span><strong id="wx-hourly-utc">—</strong></div>
@@ -85,7 +85,7 @@ MAIN = """
   </details>
   <p id="wx-hourly-diagnostic" role="status">Waiting for fresh index data and matching hourly contracts.</p>
   <details class="wx-hourly-details"><summary>Data feed status</summary>
-   <div id="wx-hourly-health" class="wx-notice" role="status">Automatic collectors initializing…</div>
+   <div id="wx-hourly-health" class="wx-notice" role="status">Automatic hourly collectors initializing…</div>
   </details>
  </article>
  <article class="wx-panel">
