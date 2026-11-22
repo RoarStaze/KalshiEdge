@@ -64,3 +64,16 @@ python experiments/littlebit70b/large_check.py
 ```
 
 This search does not install, compress, or execute a model. No large model is currently verified runnable on the target hardware.
+
+## Optional CUDA packed-factor experiment
+
+See [CUDA_ENGINE.md](CUDA_ENGINE.md) for the isolated Windows environment, CuPy CUDA 12 installation, and CPU-vs-GPU validation instructions. The GPU demonstration uses only tiny **synthetic** packed binary factors, not a trained Gemma or Llama checkpoint.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\cuda_packed.py
+~~~
+
+Install CuPy into the isolated environment first using the instructions above. The GPU code is not yet validated on the target RTX 4050, and this milestone does not overcome the separate 27B checkpoint and QAT compute blockers.
