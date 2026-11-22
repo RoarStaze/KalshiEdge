@@ -23,6 +23,7 @@ MAX_HISTORY = 300
 def _metric_cases(cases: list[dict], bias: float, gain: float,
                   sigma_scale: float) -> dict:
     mae = brier = logloss = 0.0
+    coverage_hits = 0
     for row in cases:
         mean, sigma = _transform(row["baseline_mean_f"], row["baseline_sigma_f"],
                                  row["current_index_f"], bias, gain, sigma_scale)
@@ -30,11 +31,13 @@ def _metric_cases(cases: list[dict], bias: float, gain: float,
         p = max(1e-8, min(1-1e-8, 1-normal_cdf(row["threshold_f"], mean, sigma)))
         y = row["yes"]
         mae += abs(mean-actual)
+        coverage_hits += abs(mean-actual)<=1.64485362695*sigma
         brier += (p-y)**2
         logloss -= y*math.log(p) + (1-y)*math.log1p(-p)
     n = len(cases)
     return {"mae_f":round(mae/n,6),"brier":round(brier/n,6),
-            "logloss":round(logloss/n,6)}
+            "logloss":round(logloss/n,6),
+            "coverage_90":round(coverage_hits/n,6)}
 
 
 def _transform(mean: float, sigma: float, current: float,
@@ -89,11 +92,15 @@ def choose_correction(cases: list[dict]) -> dict:
                       "candidate_brier":candidate["brier"],
                       "baseline_logloss":baseline["logloss"],
                       "candidate_logloss":candidate["logloss"],
+                      "baseline_90_coverage":baseline["coverage_90"],
+                      "candidate_90_coverage":candidate["coverage_90"],
                    }})
     # Selection on the held-out tail is research-grade evidence, not
     # independent prospective certification. Require joint improvements.
     if (candidate["mae_f"] <= baseline["mae_f"]-.03 and
         candidate["mae_f"] <= 2.5 and  # reject catastrophic regime drift
+        candidate["coverage_90"] >= .75 and
+        candidate["coverage_90"] >= baseline["coverage_90"]-.15 and
         candidate["brier"] <= baseline["brier"]-.003 and
         candidate["logloss"] <= baseline["logloss"]-.001):
         report["enabled"]=True
