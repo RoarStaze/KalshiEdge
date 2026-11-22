@@ -68,6 +68,23 @@ def event_for(city: str, asof: datetime) -> tuple[str, datetime]:
             local_target.strftime("%y%b%d%H").upper(), target)
 
 
+def listed_event_target(city: str, event: str) -> datetime | None:
+    """Decode the actual listed Eastern-hour event without guessing its ticker."""
+    prefix = CITIES[city].series + "-"
+    if not isinstance(event, str) or not event.startswith(prefix):
+        return None
+    suffix = event[len(prefix):]
+    if not re.fullmatch(r"\\d{2}[A-Z]{3}\\d{2}\\d{2}", suffix):
+        return None
+    try:
+        local = datetime.strptime(suffix, "%y%b%d%H").replace(tzinfo=EASTERN, fold=0)
+        if local.astimezone(timezone.utc).astimezone(EASTERN).strftime("%y%b%d%H").upper() != suffix:
+            return None
+        return local.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
 def _finite(value: object) -> float:
     if isinstance(value, bool):
         raise ValueError("boolean is not a temperature")
@@ -143,12 +160,22 @@ def _valid_market(market: dict, city: str, event: str, *,
         return None
     if market.get("status") not in (("settled",) if settled else ("active", "open")):
         return None
-    rules = market.get("rules_primary")
-    if not isinstance(rules, str) or "kalshi weather index" not in rules.lower():
-        # Historical single-station/TWC markets are NOT these HS index contracts.
+    if market.get("series_ticker") not in (None, CITIES[city].series):
         return None
-    title = market.get("yes_sub_title", market.get("subtitle"))
-    match = _ABOVE.fullmatch(title) if isinstance(title, str) else None
+    if market.get("market_type") not in (None, "binary"):
+        return None
+    rules = market.get("rules_primary")
+    if not isinstance(rules, str) or not rules.strip():
+        return None
+    # The *whitelisted HS series* identifies the Kalshi multi-station index.
+    # Wording can mention the index publisher (Synoptic Data) instead of the
+    # literal string "Kalshi Weather Index". Never conflate the older
+    # Weather Company single-airport contracts with the HS series.
+    if "the weather company" in rules.lower() or "weather.com" in rules.lower():
+        return None
+    match = next((found for title in (market.get("yes_sub_title"), market.get("subtitle"))
+                  if isinstance(title, str)
+                  for found in [_ABOVE.fullmatch(title)] if found), None)
     if not match:
         return None
     try:
