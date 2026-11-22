@@ -33,6 +33,7 @@ def points(now=NOW):
 def market(event=EVENT,status="active",result="",strike=55):
     return {"ticker":event+"-T55","event_ticker":event,
             "status":status,"result":result,
+            "close_time":(NOW+timedelta(minutes=13)).isoformat(),
             "yes_sub_title":f"{strike}° or above","floor_strike":strike,
             "rules_primary":"Resolves Yes if the Kalshi Weather Index for Chicago Metro at 1pm ET is at least 55 degrees fahrenheit",
             "settlement_ts":TARGET.isoformat() if status=="settled" else ""}
@@ -97,6 +98,8 @@ def test_hourly_collection_and_prospective_forecast_one_command_compatible(tmp_p
     assert chicago["current_index_f"]==55.0
     assert chicago["model_kind"]=="UNVALIDATED_HOURLY_INDEX_TREND"
     assert chicago["markets"][0]["threshold_f"]==55
+    # Actual Kalshi close (17:33 UTC) must not be replaced by target hour (18:00 UTC).
+    assert chicago["markets"][0]["close_time_utc"]==(NOW+timedelta(minutes=13)).isoformat()
     assert 0 <= chicago["markets"][0]["probability_yes"]<=1
     assert chicago["source"]=="KALSHI_WEATHER_INDEX"
     assert chicago["real_orders_enabled"] is False
@@ -233,6 +236,32 @@ def test_hourly_api_routes_are_read_only_in_live_and_preview(tmp_path):
         finally:
             server.shutdown();server.server_close();worker.join(timeout=3)
 
+
+
+def test_hourly_market_close_unavailable_never_invented():
+    no_close=market()
+    no_close.pop("close_time")
+    invalid={**market(),"close_time":"2026-11-22T17:33:00"}  # No UTC offset.
+    for entry in (no_close,invalid):
+        rows=parse_markets({"markets":[entry],"cursor":""},"chicago",EVENT)
+        assert len(rows)==1
+        assert rows[0]["close_time_utc"] is None
+
+
+def test_weather_forecast_is_plain_english_and_counts_down_real_close():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    markup=render_hourly_page("forecast", "")
+    assert "Predicted temperature" in markup
+    assert "Closest Kalshi contract" in markup
+    assert "Model leans" in markup
+    assert "Market closes in" in markup
+    assert 'id="wx-hourly-close-clock"' in markup
+    assert 'setInterval(tickMarketClose,1000)' in markup
+    assert "close_time_utc" in markup
+    assert "Date.now()" in markup
+    assert 'id="wx-hourly-minutes"' not in markup
+    assert "Minutes to target" not in markup
+    assert "Calibration not verified" in markup
 
 
 def test_hourly_settlement_raw_evidence_tamper_fails_closed(tmp_path):
