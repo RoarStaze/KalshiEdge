@@ -17,7 +17,7 @@ The detector samples approximately every 0.75 seconds via public REST requests. 
 
 - Exactly one paper UP or DOWN position may be open at a time. UP and DOWN are never bought together by this experiment.
 - After selling, the scanner may open a new UP or DOWN position when fresh acceleration in that side again satisfies all four rules and the 2:00 or more buy window still remains open.
-- A **6-second cooldown** after an exit, **12 paper cycles per market**, a **$2 daily simulated loss circuit breaker**, a **three-consecutive-loss brake scoped to each current market**, and a maximum per-entry simulated spend of **$0.10–$5.00**, capped at **5% of virtual cash**, prevent runaway simulations. These are risk vetoes, not extra directional trade triggers.
+- A **6-second cooldown** after an exit, **12 paper cycles per market**, exactly one open simulated position at a time, and a maximum per-entry simulated spend of **$0.10–$5.00**, capped at **5% of virtual cash**, constrain paper order volume. They are not extra directional trade triggers. **Neither the number of paper losses in one market nor the day's accumulated hypothetical losses blocks new entries**; both are retained as visible audit metrics. The simulated virtual bankroll remains finite and real orders stay disabled.
 - Every simulated fill/exit, side (UP/DOWN), quantity, cost basis, fee estimate, and hypothetical P&L is stored separately from existing auto trader history in `data/bootstrap/trading/strat_up_paper.sqlite3`. The original file path is intentionally retained so earlier UP-only paper history is preserved.
 - Entry prices incorporate **one cent of per-contract slippage**, and exits lose an additional cent. New trades use the **indicative standard Kalshi taker fee formula** rather than the conservative `taker_fee_reserve` safety buffer that had added an unsupported $0.01 per leg. The new estimate rounds cost-plus-fee up to the next **$0.0001** (centicent), using the general 7% fee schedule effective July 7, 2026. This assumes the standard multiplier and a single fill; no individual market/account fee is verified by the simulated book.
 - The dashboard displays one-contract **illustrative break-even move**, gross simulated trade-price P&L, estimated entry/exit fees, and net paper P&L independently. The break-even illustration accounts for spread and two one-cent slippage assumptions and is **not a short-term price forecast**.
@@ -54,11 +54,15 @@ The same-day consecutive loss streak **across tickers** is informational only
 in this paper-only experiment. It no longer blocks new trades across all
 markets after three losses, which previously left Strat showing
 `GLOBAL_LOSS_CIRCUIT_ACTIVE` and unable to trade for the rest of that UTC day.
-The existing three-loss brake **within the same market**, the **$2 daily
-simulated dollar loss limit**, the 12-cycle market cap and re-entry cooldown
-still apply. The UI distinguishes the actual entry restriction from
-nonqualifying momentum, and separately shows the informational global streak,
-recorded snapshot count and market count. The Strat page has an **Analyze captured momentum** button. It opens a local,
+**The former same-market three-loss brake and the $2 daily paper-loss
+stop have also been removed from entry authorization.** Their historical
+loss and streak metrics remain intact; no ledger rows are removed or
+recalculated. There is no way to enable real orders through Strat.
+The 12-cycle market cap, simulated budget/virtual cash constraints, and
+6-second re-entry cooldown continue to apply. The UI prioritizes the
+current market's 2:00 entry cutoff, then the executable ask window,
+before displaying any other entry restriction. It separately reports
+the raw UP/DOWN momentum decision and informational loss history. The Strat page has an **Analyze captured momentum** button. It opens a local,
 read-only endpoint (`/api/strat/replay`) and compares prior unheld BUY signals
 with strictly subsequent executable best bids at 2, 5, 10 and 20 seconds
 (allowing at most three seconds of quote collection jitter). The report assumes
