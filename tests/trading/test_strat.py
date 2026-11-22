@@ -458,7 +458,7 @@ def test_quote_tape_preserves_two_sided_causal_observations(tmp_path):
     assert row["remaining_seconds"] == 600.0
 
 
-def test_global_consecutive_loss_brake_persists_across_tickers(tmp_path):
+def test_global_loss_streak_does_not_block_new_paper_market(tmp_path):
     from kalshi_edge.trading.strat_tape import StratQuoteTape
     now = [BASE]
     ticker = "KXBTC15M-NEWMARKET"
@@ -496,14 +496,18 @@ def test_global_consecutive_loss_brake_persists_across_tickers(tmp_path):
     for i in range(5):
         now[0] = BASE + i*NS
         trader.tick(now[0])
-    assert trader.ledger.open_position() is None
-    assert len(trader.ledger.recent()) == 3
-    assert trader.status()["last_signal"] == "GLOBAL_LOSS_CIRCUIT_ACTIVE"
+    position = trader.ledger.open_position()
+    assert position is not None and position["ticker"] == ticker
+    assert position["side"] == "UP"
+    assert len(trader.ledger.recent()) == 4
+    assert trader.status()["global_loss_streak"] == 3  # retained as audit only
+    assert trader.status()["entry_block_reason"] == "POSITION_OPEN"
+    assert "global_loss_circuit_active" not in trader.status()
     assert trader.status()["quote_tape_samples"] == 5
     tape = StratQuoteTape(tmp_path/"trading"/"strat_quote_tape.sqlite3")
     assert tape.summary()["markets"] == 1
     assert tape.recent(1)[0]["up_signal"] == "NEW_FAST_UP_MOMENTUM"
-    # A new UTC session starts a fresh global entry-risk streak.
+    # A new UTC session starts a fresh informational loss streak.
     assert trader._global_loss_streak(BASE + 24*3600*NS) == 0
     trader.close()
 
@@ -539,11 +543,11 @@ def test_no_entry_on_quote_recorder_failure(tmp_path):
     trader.close()
 
 
-def test_quote_tape_and_global_circuit_are_visible_in_dashboard():
+def test_quote_tape_and_informational_loss_streak_are_visible_in_dashboard():
     from kalshi_edge.bootstrap.strat_ui import render_strat_page
     html = render_strat_page()
     assert "Captured book snapshots" in html
-    assert "Cross-market loss streak" in html
+    assert "Informational daily loss streak" in html
     assert "quote_tape_samples" in html
     assert "global_loss_streak" in html
 
@@ -587,3 +591,59 @@ def test_market_close_gate_uses_post_response_quote_receipt_time(tmp_path):
     assert captured["remaining_seconds"] == 119.0
     assert captured["up_signal"] == "OUTSIDE_2_MINUTE_BUY_WINDOW"
     trader.close()
+
+
+
+def test_daily_paper_loss_limit_still_blocks_new_entry(tmp_path):
+    """Removing global streak gate must not bypass the $2 daily risk cap."""
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER,
+            "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER,
+                "prediction_ts_ns": now[0],
+            },
+        }
+
+    sequence = [D(x) for x in ("0.64", "0.64", "0.65", "0.66", "0.68")]
+    trader = StratPaperTrader(
+        tmp_path, live, client=FakeMarketClient(
+            [(bid, bid + D("0.02")) for bid in sequence]),
+        clock=lambda: now[0],
+    )
+    for n in range(3):
+        stamp = BASE-(30-n)*NS
+        trader.ledger.insert(
+            ticker=f"KXBTC15M-PREV{n}", side="UP", quantity=D("1"),
+            price=D("0.70"), fee=D("0.02"), paid=D("0.72"),
+            now_ns=stamp, close_ns=close,
+        )
+        position = trader.ledger.open_position()
+        trader.ledger.close(
+            position["id"], price=D("0"), fee=D("0"),
+            now_ns=stamp+NS, reason="OFFICIAL_SETTLEMENT",
+            pnl=D("-0.72"), settled=True,
+        )
+    trader.arm("1.00")
+    for i in range(5):
+        now[0] = BASE + i * NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is None
+    assert trader.status()["entry_block_reason"] == "DAILY_PAPER_LOSS_CIRCUIT"
+    assert trader.status()["last_signal"] == "DAILY_PAPER_LOSS_CIRCUIT"
+    assert trader.status()["quote_tape_samples"] == 5
+    trader.close()
+
+
+def test_dashboard_shows_entry_eligibility_separate_from_momentum():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    page = render_strat_page()
+    assert 'id="entryBlock"' in page
+    assert 's.entry_block_reason' in page
+    assert "Informational daily loss streak" in page
+    assert "GLOBAL_LOSS_CIRCUIT_ACTIVE" not in page
+    assert "s.global_loss_circuit_active" not in page
