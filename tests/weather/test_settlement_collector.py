@@ -234,9 +234,9 @@ def test_settlement_poll_never_limits_journal_to_oldest_800(monkeypatch,tmp_path
 def test_weather_dashboard_shows_per_station_settlement_failure_reason():
     from kalshi_edge.weather.research_ui import render_weather_page
     html=render_weather_page("forecast")
-    assert "collector.settlement" in html
-    assert "outcome.details" in html
-    assert "UNVERIFIED" in html
+    assert "hourly_settlement" in html
+    assert "wx-hourly-health" in html
+    assert "NO LIVE ORDERS" in html
     assert "/api/manual-trade" not in html
 
 

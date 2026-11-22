@@ -470,7 +470,14 @@ WEATHER_CALIBRATION_SCRIPT = r"""<script>
 
 
 def render_weather_page(section: str) -> str:
-    """Render isolated read-only WeatherEdge workspace, no Bitcoin page scripts."""
+    """Render hourly-only WeatherEdge; legacy daily pages are archived.
+
+    Historical source and model code remain reproducible but are no longer
+    surfaced as actionable hourly market forecasts.
+    """
+    from .hourly_ui import render_hourly_page
+    return render_hourly_page(section, WEATHER_STYLE)
+
     if section not in WEATHER_SECTIONS:
         raise ValueError("Unknown WeatherEdge section")
     base_css = PAGE.split("<style>", 1)[1].split("</style>", 1)[0]

@@ -1,0 +1,616 @@
+"""Hourly-only Kalshi Weather Index probabilistic research.
+
+Source: Kalshi's public GET /live_data/weather/{city} published canonical
+minute observations, NOT a single airport, daily high or Synoptic raw feed.
+All research estimates use actual locally stamped receipt time. No orders,
+credentials, trading EV, model training on future outcomes, or daily labels.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import math
+import re
+import sqlite3
+from contextlib import closing
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Callable
+from zoneinfo import ZoneInfo
+
+import httpx
+
+from .predictor import normal_cdf, _utc
+from .status import weather_database_path
+
+API = "https://external-api.kalshi.com/trade-api/v2"
+EASTERN = ZoneInfo("America/New_York")
+MAX_SIZE = 3_000_000
+COLLECT_SECONDS = 120
+SETTLE_SECONDS = 300
+MIN_SCORE_EVENTS = 10
+
+
+@dataclass(frozen=True)
+class City:
+    label: str
+    series: str
+
+
+CITIES = {
+    "chicago": City("Chicago Metro", "KXTEMPCHIHS"),
+    "nyc": City("New York City", "KXTEMPNYCHS"),
+    "la-coastal": City("Coastal Los Angeles", "KXTEMPLAXHS"),
+    "miami": City("Miami", "KXTEMPMIAH"),
+}
+
+
+def event_for(city: str, asof: datetime) -> tuple[str, datetime]:
+    """The target for the next clock hour, expressed in Eastern event time.
+
+    UTC arithmetic avoids nonexistent local hours when DST starts. Market
+    existence and exact scheduled expiration are still verified separately.
+    """
+    if city not in CITIES:
+        raise ValueError("UNKNOWN_HOURLY_CITY")
+    now = _utc(asof)
+    target = datetime.fromtimestamp(
+        (int(now.timestamp()) // 3600 + 1) * 3600, tz=timezone.utc)
+    local_target = target.astimezone(EASTERN)
+    if local_target.fold == 1:
+        # On fall-back DST, Kalshi's contract defaults to the earlier
+        # occurrence. Do not fabricate a second identical ET event ticker.
+        target += timedelta(hours=1)
+        local_target = target.astimezone(EASTERN)
+    return (CITIES[city].series + "-" +
+            local_target.strftime("%y%b%d%H").upper(), target)
+
+
+def _finite(value: object) -> float:
+    if isinstance(value, bool):
+        raise ValueError("boolean is not a temperature")
+    number = float(value)
+    if not math.isfinite(number) or not -130 < number < 160:
+        raise ValueError("invalid index temperature")
+    return number
+
+
+def parse_index(payload: dict, city: str, received: datetime,
+                *, max_age_seconds: int = 10800) -> list[dict]:
+    """Conservatively decode Kalshi's documented canonical-index response.
+
+    Backfilled points may be useful for archive analysis but are NEVER
+    accepted as first-publication evidence for our prospective strategy.
+    """
+    received = _utc(received)
+    if (not isinstance(payload, dict) or city not in CITIES or
+        payload.get("city") != city or payload.get("units") != "fahrenheit"):
+        raise ValueError("INVALID_KALSHI_INDEX_SOURCE")
+    points = payload.get("timeseries")
+    if not isinstance(points, list) or len(points) > 10_000:
+        raise ValueError("INVALID_KALSHI_INDEX_SERIES")
+    config = payload.get("config_version")
+    if not isinstance(config, str) or not config or len(config) > 160:
+        raise ValueError("MISSING_KALSHI_INDEX_CONFIG")
+    result: list[dict] = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        if point.get("status") not in ("normal", "degraded"):
+            continue
+        receipt_basis = str(point.get("receipt_basis", "")).lower()
+        if "backfill" in receipt_basis or "synthetic" in receipt_basis:
+            continue
+        t = point.get("t")
+        if isinstance(t, bool) or not isinstance(t, int):
+            continue
+        event_ms = t
+        now_ms = int(received.timestamp() * 1000)
+        if not 1_600_000_000_000 < event_ms <= now_ms:
+            continue
+        if now_ms - event_ms > max_age_seconds * 1000:
+            continue
+        try:
+            value = _finite(point["v"])
+            if abs(round(value, 2) - value) > 1e-6:
+                continue
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+        contributors = point.get("contributors")
+        if isinstance(contributors, bool) or not isinstance(contributors, int) or contributors <= 0:
+            continue
+        result.append({
+            "event_ms": event_ms, "temp_f": round(value, 2),
+            "status": point["status"], "contributors": contributors,
+            "config_version": config,
+            "raw": point,
+        })
+    return sorted(result, key=lambda x: x["event_ms"])
+
+
+_ABOVE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*°\s*or above\s*$", re.I)
+
+
+def _valid_market(market: dict, city: str, event: str, *,
+                  settled: bool = False) -> dict | None:
+    if not isinstance(market, dict):
+        return None
+    if (not isinstance(market.get("ticker"), str) or
+        not market["ticker"].startswith(event + "-") or
+        market.get("event_ticker") != event):
+        return None
+    if market.get("status") not in (("settled",) if settled else ("active", "open")):
+        return None
+    rules = market.get("rules_primary")
+    if not isinstance(rules, str) or "kalshi weather index" not in rules.lower():
+        # Historical single-station/TWC markets are NOT these HS index contracts.
+        return None
+    title = market.get("yes_sub_title", market.get("subtitle"))
+    match = _ABOVE.fullmatch(title) if isinstance(title, str) else None
+    if not match:
+        return None
+    try:
+        threshold = _finite(float(match.group(1)))
+        raw_strike = market.get("floor_strike")
+        if raw_strike is not None and abs(_finite(raw_strike) - threshold) > .001:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return {"city": city, "event_ticker": event, "ticker": market["ticker"],
+            "threshold_f": threshold, "rules_primary": rules,
+            "source": "KALSHI_WEATHER_INDEX"}
+
+
+def parse_markets(data: dict, city: str, event: str,
+                  *, settled: bool = False) -> list[dict]:
+    if city not in CITIES or not event.startswith(CITIES[city].series + "-"):
+        raise ValueError("HOURLY_MARKET_CITY_MISMATCH")
+    if not isinstance(data, dict) or data.get("cursor") not in ("", None):
+        raise ValueError("INCOMPLETE_HOURLY_MARKET_PAGE")
+    markets = data.get("markets")
+    if not isinstance(markets, list) or len(markets) > 1000:
+        raise ValueError("INVALID_HOURLY_MARKETS")
+    selected = []
+    seen = set()
+    for row in markets:
+        item = _valid_market(row, city, event, settled=settled)
+        if item and item["ticker"] not in seen:
+            item["result"] = row.get("result")
+            item["settlement_ts"] = row.get("settlement_ts")
+            selected.append(item)
+            seen.add(item["ticker"])
+    return sorted(selected, key=lambda x: x["threshold_f"])
+
+
+def _init(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_index(
+        city TEXT NOT NULL, event_ms INTEGER NOT NULL, received_at TEXT NOT NULL,
+        temp_f REAL NOT NULL, status TEXT NOT NULL, config_version TEXT NOT NULL,
+        source_sha TEXT NOT NULL, payload TEXT NOT NULL,
+        PRIMARY KEY(city,event_ms))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_markets(
+        ticker TEXT PRIMARY KEY, city TEXT NOT NULL, event_ticker TEXT NOT NULL,
+        target_utc TEXT NOT NULL, threshold_f REAL NOT NULL,
+        received_at TEXT NOT NULL, metadata TEXT NOT NULL)""")
+    conn.execute("""CREATE INDEX IF NOT EXISTS hourly_markets_event
+        ON weather_hourly_markets(city,event_ticker)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_snapshots(
+        city TEXT NOT NULL, event_ticker TEXT NOT NULL, market_ticker TEXT NOT NULL,
+        asof TEXT NOT NULL, target_utc TEXT NOT NULL, source_reading_ms INTEGER NOT NULL,
+        source_receipt TEXT NOT NULL, forecast_json TEXT NOT NULL, forecast_sha TEXT NOT NULL,
+        PRIMARY KEY(city,event_ticker))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_settlements(
+        city TEXT NOT NULL, event_ticker TEXT NOT NULL, market_ticker TEXT NOT NULL,
+        result TEXT NOT NULL, observed_index_f REAL NOT NULL,
+        observed_event_ms INTEGER NOT NULL, checked_at TEXT NOT NULL,
+        source_index_sha TEXT NOT NULL, market_sha TEXT NOT NULL,
+        source_index_raw TEXT NOT NULL, market_raw TEXT NOT NULL,
+        PRIMARY KEY(city,event_ticker))""")
+
+
+async def collect_hourly_once(
+    db_path: Path, *, client: httpx.AsyncClient | None = None,
+    cities: tuple[str, ...] = tuple(CITIES),
+    clock: Callable[[], datetime] | None = None,
+) -> dict:
+    """Pull Kalshi minute index & NEXT event's actual strike ladder. No orders."""
+    if not cities or any(c not in CITIES for c in cities):
+        raise ValueError("INVALID_CITY_LIST")
+    current_clock = clock or (lambda: datetime.now(timezone.utc))
+    own = client is None
+    if own:
+        client = httpx.AsyncClient(timeout=20, follow_redirects=False,
+            headers={"User-Agent":"KalshiEdge-HourlyWeather-Research/1.0"})
+    assert client is not None
+    results = {}
+    inserts: list[tuple] = []
+    markets: list[tuple] = []
+    try:
+        for city in cities:
+            try:
+                response = await client.get(
+                    f"{API}/live_data/weather/{city}", params={"last_sec":7200})
+                response.raise_for_status()
+                if len(response.content) > MAX_SIZE:
+                    raise ValueError("OVERSIZED_INDEX_RESPONSE")
+                receipt = _utc(current_clock())
+                rows = parse_index(response.json(), city, receipt)
+                source_sha = hashlib.sha256(response.content).hexdigest()
+                for point in rows:
+                    inserts.append((
+                        city, point["event_ms"], receipt.isoformat(),
+                        point["temp_f"], point["status"], point["config_version"],
+                        source_sha, json.dumps(point["raw"], sort_keys=True)))
+                event, target = event_for(city, receipt)
+                reply = await client.get(f"{API}/markets",
+                                         params={"event_ticker":event,"limit":200})
+                reply.raise_for_status()
+                if len(reply.content) > MAX_SIZE:
+                    raise ValueError("OVERSIZED_MARKET_RESPONSE")
+                candidates = parse_markets(reply.json(), city, event)
+                for item in candidates:
+                    markets.append((
+                        item["ticker"], city, event, target.isoformat(),
+                        item["threshold_f"], _utc(current_clock()).isoformat(),
+                        json.dumps(item, sort_keys=True)))
+                results[city] = {
+                    "state": "READY" if rows and candidates else
+                    ("NO_ACTIVE_HOURLY_MARKET" if rows else "NO_INDEX_POINTS"),
+                    "index_points": len(rows), "market_strikes": len(candidates),
+                    "event_ticker": event,
+                }
+            except (ValueError, TypeError, httpx.HTTPError,
+                    KeyError, OverflowError, json.JSONDecodeError) as exc:
+                results[city] = {"state":"UNAVAILABLE",
+                                 "reason": f"{type(exc).__name__}: {exc}"[:190]}
+        if inserts or markets:
+            path = Path(db_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(path, timeout=10)) as conn:
+                _init(conn)
+                for row in inserts:
+                    conn.execute("INSERT OR IGNORE INTO weather_hourly_index "
+                                 "(city,event_ms,received_at,temp_f,status,config_version,"
+                                 "source_sha,payload) VALUES(?,?,?,?,?,?,?,?)", row)
+                for row in markets:
+                    conn.execute("""INSERT INTO weather_hourly_markets
+                      (ticker,city,event_ticker,target_utc,threshold_f,received_at,metadata)
+                      VALUES(?,?,?,?,?,?,?) ON CONFLICT(ticker) DO UPDATE SET
+                      received_at=excluded.received_at,
+                      metadata=excluded.metadata""", row)
+                conn.commit()
+        return {"mode":"HOURLY_PAPER_ONLY","cities":results,"real_orders_enabled":False}
+    finally:
+        if own:
+            await client.aclose()
+
+
+def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
+    event, target = event_for(city, asof)
+    result = {
+        "city": city, "name": CITIES[city].label, "series": CITIES[city].series,
+        "status":"MISSING_INDEX","event_ticker":event,"target_utc":target.isoformat(),
+        "asof":asof.isoformat(),"source":"KALSHI_WEATHER_INDEX",
+        "current_index_f":None,"source_event_ms":None,"source_received_at":None,
+        "predicted_index_f":None,"sigma_f":None,"interval_90_f":None,
+        "model_kind":"UNVALIDATED_HOURLY_INDEX_TREND",
+        "calibration_certified":False,"real_orders_enabled":False,
+        "minutes_to_target":round((target-asof).total_seconds()/60,2),
+        "markets":[],
+    }
+    points = conn.execute("""
+       SELECT event_ms, received_at, temp_f, status FROM weather_hourly_index
+       WHERE city=? AND received_at<=? AND event_ms<=?
+       ORDER BY event_ms DESC LIMIT 100""",
+       (city,asof.isoformat(),int(asof.timestamp()*1000))).fetchall()
+    if not points:
+        return result
+    last = points[0]
+    last_time = datetime.fromtimestamp(last[0]/1000,tz=timezone.utc)
+    result["current_index_f"] = last[2]
+    result["source_event_ms"] = last[0]
+    result["source_received_at"] = last[1]
+    if (asof-last_time).total_seconds() > 20*60:
+        result["status"]="STALE_INDEX"
+        return result
+    # A short-horizon trend in the actual multi-station index. No future
+    # airport high or any single-station settlement substitution.
+    earlier = next((p for p in points[1:] if 10*60<=
+                    (last[0]-p[0])/1000<=50*60), None)
+    slope = 0.0
+    if earlier:
+        hours=(last[0]-earlier[0])/3_600_000
+        slope=max(-5.,min(5.,(last[2]-earlier[2])/hours))
+    hours_ahead=(target-last_time).total_seconds()/3600
+    mean=last[2] + .55*slope*hours_ahead  # assumed damped persistence
+    sigma=0.8 + .85*math.sqrt(max(.0,hours_ahead))
+    if last[3]=="degraded":
+        sigma+=.3
+    result["predicted_index_f"]=round(mean,3)
+    result["sigma_f"]=round(sigma,3)
+    result["interval_90_f"]=[
+        round(mean-1.64485362695*sigma,2),
+        round(mean+1.64485362695*sigma,2)]
+    candidates=conn.execute("""SELECT ticker, threshold_f, received_at, metadata
+       FROM weather_hourly_markets
+       WHERE city=? AND event_ticker=? AND received_at<=?
+       ORDER BY threshold_f""",
+       (city,event,asof.isoformat())).fetchall()
+    strikes=[]
+    for ticker,threshold,receipt,raw in candidates:
+        try:
+            m=json.loads(raw)
+            if m["source"]!="KALSHI_WEATHER_INDEX":
+                continue
+            probability=max(0.,min(1.,1-normal_cdf(threshold,mean,sigma)))
+        except (ValueError,TypeError,KeyError,json.JSONDecodeError):
+            continue
+        strikes.append({"ticker":ticker,"threshold_f":threshold,
+                        "probability_yes":round(probability,6),
+                        "market_metadata_received_at":receipt})
+    if not strikes:
+        result["status"]="NO_VERIFIED_HOURLY_MARKETS"
+        return result
+    result["markets"]=strikes
+    result["status"]="READY_RESEARCH"
+    return result
+
+
+def read_hourly_forecasts(root: Path, *, db_path: Path | None = None,
+                          asof: datetime | None = None,
+                          preview: bool = False) -> dict:
+    asof=_utc(asof or datetime.now(timezone.utc))
+    path=Path(db_path or weather_database_path(root))
+    result={"mode":"HOURLY_PAPER_ONLY","real_orders_enabled":False,
+            "calibration_certified":False,"source":"KALSHI_WEATHER_INDEX",
+            "forecasts":[]}
+    if preview or not path.is_file():
+        for city in CITIES:
+            event,target=event_for(city,asof)
+            result["forecasts"].append({
+                "city":city,"name":CITIES[city].label,"status":"MISSING_INDEX",
+                "event_ticker":event,"target_utc":target.isoformat(),
+                "current_index_f":None,"predicted_index_f":None,
+                "interval_90_f":None,"markets":[],
+                "source":"KALSHI_WEATHER_INDEX","real_orders_enabled":False,
+                "calibration_certified":False})
+        return result
+    try:
+        uri=path.resolve().as_uri()+"?mode=ro"
+        with closing(sqlite3.connect(uri,uri=True,timeout=2)) as conn:
+            conn.execute("PRAGMA query_only=ON")
+            result["forecasts"]=[_forecast(conn,city,asof) for city in CITIES]
+    except (sqlite3.Error,OSError,ValueError) as exc:
+        result["status"]="HOURLY_DATABASE_ERROR"
+        result["reason"]=f"{type(exc).__name__}: {exc}"[:190]
+        return read_hourly_forecasts(root,db_path=path,asof=asof,preview=True)
+    return result
+
+
+def journal_hourly_forecasts(db_path: Path, *, asof: datetime | None = None) -> dict:
+    asof=_utc(asof or datetime.now(timezone.utc))
+    path=Path(db_path)
+    result={"mode":"HOURLY_PAPER_ONLY","inserted":0}
+    if not path.is_file():
+        return result
+    predictions=read_hourly_forecasts(path.parent,db_path=path,asof=asof)
+    eligible=[]
+    for row in predictions["forecasts"]:
+        if row.get("status")!="READY_RESEARCH":
+            continue
+        lead=(datetime.fromisoformat(row["target_utc"])-asof).total_seconds()/60
+        if not 5<=lead<=65 or not row["markets"]:
+            continue
+        # Ex-ante precommit to one nearest-50% threshold, not hindsight choice.
+        chosen=min(row["markets"],key=lambda m:
+            (abs(m["probability_yes"]-.5),m["threshold_f"]))
+        frozen={**row,"selected_market":chosen}
+        serialized=json.dumps(frozen,sort_keys=True,allow_nan=False)
+        eligible.append((row["city"],row["event_ticker"],chosen["ticker"],
+                         asof.isoformat(),row["target_utc"],row["source_event_ms"],
+                         row["source_received_at"],serialized,
+                         hashlib.sha256(serialized.encode()).hexdigest()))
+    if eligible:
+        with closing(sqlite3.connect(path,timeout=5)) as conn:
+            _init(conn)
+            for row in eligible:
+                cursor=conn.execute("""INSERT OR IGNORE INTO weather_hourly_snapshots
+                    (city,event_ticker,market_ticker,asof,target_utc,
+                    source_reading_ms,source_receipt,forecast_json,forecast_sha)
+                    VALUES(?,?,?,?,?,?,?,?,?)""",row)
+                result["inserted"]+=cursor.rowcount
+            conn.commit()
+    return result
+
+
+async def settle_hourly_once(db_path: Path, *, client: httpx.AsyncClient | None = None,
+                             clock: Callable[[], datetime] | None = None) -> dict:
+    """Check matched Kalshi canonical index AND settled directional result."""
+    now=_utc((clock or (lambda:datetime.now(timezone.utc)))())
+    path=Path(db_path)
+    result={"mode":"HOURLY_PAPER_ONLY","verified":0,"unverified":0}
+    if not path.is_file():
+        return result
+    uri=path.resolve().as_uri()+"?mode=ro"
+    with closing(sqlite3.connect(uri,uri=True,timeout=3)) as conn:
+        candidates=conn.execute("""SELECT s.city,s.event_ticker,s.market_ticker,
+               s.target_utc,s.forecast_json
+           FROM weather_hourly_snapshots s
+           LEFT JOIN weather_hourly_settlements o
+             ON o.city=s.city AND o.event_ticker=s.event_ticker
+           WHERE o.event_ticker IS NULL
+           ORDER BY s.target_utc DESC LIMIT 100""").fetchall()
+    own=client is None
+    if own:
+        client=httpx.AsyncClient(timeout=25,follow_redirects=False,
+             headers={"User-Agent":"KalshiEdge-HourlySettlement-Research/1.0"})
+    assert client is not None
+    try:
+        for city,event,ticker,target_raw,frozen_json in candidates:
+            target=_utc(datetime.fromisoformat(target_raw))
+            if not timedelta(minutes=6)<=now-target<=timedelta(days=7):
+                continue
+            try:
+                start_ms=int((target-timedelta(minutes=60)).timestamp()*1000)
+                end_ms=int(target.timestamp()*1000)
+                response=await client.get(f"{API}/live_data/weather/{city}",
+                    params={"from":start_ms,"to":end_ms})
+                response.raise_for_status()
+                if len(response.content)>MAX_SIZE:
+                    raise ValueError("HOURLY_SETTLEMENT_INDEX_TOO_LARGE")
+                index=parse_index(response.json(),city,now,
+                    max_age_seconds=8*24*3600)
+                valid=[p for p in index if start_ms<=p["event_ms"]<=end_ms]
+                if not valid:
+                    raise ValueError("NO_CANONICAL_SETTLEMENT_INDEX")
+                canonical=max(valid,key=lambda p:p["event_ms"])
+                reply=await client.get(f"{API}/markets",
+                    params={"event_ticker":event,"limit":200})
+                reply.raise_for_status()
+                if len(reply.content)>MAX_SIZE:
+                    raise ValueError("HOURLY_SETTLEMENT_MARKETS_TOO_LARGE")
+                markets=parse_markets(reply.json(),city,event,settled=True)
+                matching=next((m for m in markets if m["ticker"]==ticker),None)
+                if not matching or matching.get("result") not in ("yes","no"):
+                    raise ValueError("HOURLY_MARKET_NOT_SETTLED")
+                if not matching.get("settlement_ts"):
+                    raise ValueError("HOURLY_SETTLEMENT_TS_MISSING")
+                predicted_yes=canonical["temp_f"]>=matching["threshold_f"]
+                if (matching["result"]=="yes")!=predicted_yes:
+                    raise ValueError("INDEX_MARKET_OUTCOME_CONFLICT")
+                now_str=now.isoformat()
+                with closing(sqlite3.connect(path,timeout=5)) as conn:
+                    _init(conn)
+                    cursor=conn.execute("""INSERT OR IGNORE INTO weather_hourly_settlements
+                        (city,event_ticker,market_ticker,result,observed_index_f,
+                        observed_event_ms,checked_at,source_index_sha,market_sha,
+                        source_index_raw,market_raw)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                        (city,event,ticker,matching["result"],canonical["temp_f"],
+                         canonical["event_ms"],now_str,
+                         hashlib.sha256(response.content).hexdigest(),
+                         hashlib.sha256(reply.content).hexdigest(),
+                         response.content.decode("utf-8"),
+                         reply.content.decode("utf-8")))
+                    conn.commit()
+                    result["verified"]+=cursor.rowcount
+            except (httpx.HTTPError,ValueError,TypeError,OverflowError,
+                    KeyError,sqlite3.Error,json.JSONDecodeError) as exc:
+                result["unverified"]+=1
+                result.setdefault("errors",[]).append(
+                    {"event":event,"reason":f"{type(exc).__name__}: {exc}"[:170]})
+        return result
+    finally:
+        if own:
+            await client.aclose()
+
+
+def hourly_calibration(root: Path, *, db_path: Path | None = None,
+                       preview: bool = False) -> dict:
+    result={"mode":"HOURLY_PAPER_ONLY","matched_hours":0,
+            "brier":None,"log_loss":None,"empirical_90_coverage":None,
+            "calibration_certified":False,"real_orders_enabled":False,
+            "status":"WAITING_FOR_HOURLY_SETTLEMENTS"}
+    path=Path(db_path or weather_database_path(root))
+    if preview or not path.is_file():
+        return result
+    try:
+        uri=path.resolve().as_uri()+"?mode=ro"
+        with closing(sqlite3.connect(uri,uri=True,timeout=2)) as conn:
+            conn.execute("PRAGMA query_only=ON")
+            rows=conn.execute("""SELECT s.city,s.event_ticker,s.target_utc,
+               s.forecast_json,s.forecast_sha,o.result,o.observed_index_f,
+               o.observed_event_ms,o.market_ticker,s.market_ticker,
+               o.checked_at,o.source_index_raw,o.market_raw,
+               o.source_index_sha,o.market_sha
+               FROM weather_hourly_snapshots s
+               JOIN weather_hourly_settlements o
+               ON o.city=s.city AND o.event_ticker=s.event_ticker""").fetchall()
+        observations=[]
+        for (city,event,target_raw,raw,digest,yes,value,value_ms,
+             settled_ticker,original_ticker,checked_at,index_raw,market_raw,
+             index_sha,market_sha) in rows:
+            if settled_ticker!=original_ticker:
+                raise ValueError("HOURLY_SETTLEMENT_TICKER_CHANGED")
+            if hashlib.sha256(raw.encode()).hexdigest()!=digest:
+                raise ValueError("TAMPERED_HOURLY_FORECAST")
+            if (hashlib.sha256(index_raw.encode()).hexdigest()!=index_sha or
+                hashlib.sha256(market_raw.encode()).hexdigest()!=market_sha):
+                raise ValueError("TAMPERED_HOURLY_SETTLEMENT_SOURCE")
+            target=_utc(datetime.fromisoformat(target_raw))
+            as_checked=_utc(datetime.fromisoformat(checked_at))
+            indexed=parse_index(json.loads(index_raw),city,as_checked,
+                                max_age_seconds=8*24*3600)
+            lower_ms=int((target-timedelta(minutes=60)).timestamp()*1000)
+            upper_ms=int(target.timestamp()*1000)
+            viable=[x for x in indexed if lower_ms<=x["event_ms"]<=upper_ms]
+            if not viable:
+                raise ValueError("NO_RECORDED_CANONICAL_SETTLEMENT_POINT")
+            canonical=max(viable,key=lambda x:x["event_ms"])
+            market_row=next((x for x in parse_markets(json.loads(market_raw),city,
+                            event,settled=True) if x["ticker"]==settled_ticker),None)
+            if (market_row is None or market_row["result"]!=yes or
+                canonical["event_ms"]!=value_ms or
+                abs(canonical["temp_f"]-value)>1e-6 or
+                (canonical["temp_f"]>=market_row["threshold_f"])!=(yes=="yes")):
+                raise ValueError("HOURLY_SETTLEMENT_RECONCILIATION_CHANGED")
+            frozen=json.loads(raw)
+            chosen=frozen["selected_market"]
+            if (chosen["ticker"]!=settled_ticker or
+                abs(chosen["threshold_f"]-market_row["threshold_f"])>1e-6):
+                raise ValueError("HOURLY_SNAPSHOT_MARKET_MISMATCH")
+            p=chosen["probability_yes"]
+            if not isinstance(p,(int,float)) or not 0<=p<=1:
+                raise ValueError("INVALID_FROZEN_HOURLY_PROBABILITY")
+            observations.append((p,1 if yes=="yes" else 0,
+                abs(float(value)-frozen["predicted_index_f"])<=
+                1.64485362695*frozen["sigma_f"]))
+        n=len(observations)
+        result["matched_hours"]=n
+        if n<MIN_SCORE_EVENTS:
+            result["status"]="INSUFFICIENT_HOURLY_EVIDENCE" if n else "WAITING_FOR_HOURLY_SETTLEMENTS"
+            return result
+        result["brier"]=round(sum((p-y)**2 for p,y,_ in observations)/n,6)
+        result["log_loss"]=round(sum(-math.log(max(1e-15,
+            p if y else 1-p)) for p,y,_ in observations)/n,6)
+        count=sum(hit for _,_,hit in observations)
+        result["empirical_90_coverage"]=round(count/n,5)
+        result["status"]="MEASURED_UNCALIBRATED_RESEARCH"
+    except (sqlite3.Error,OSError,ValueError,KeyError,TypeError) as exc:
+        result["status"]="HOURLY_AUDIT_ERROR"
+        result["reason"]=f"{type(exc).__name__}: {exc}"[:180]
+    return result
+
+
+def hourly_status(root: Path, *, db_path: Path | None = None,
+                  preview: bool = False) -> dict:
+    """Hourly-only read-only index source health; legacy daily rows ignored."""
+    from .status import read_collector_health
+    path=Path(db_path or weather_database_path(root))
+    result={"mode":"HOURLY_PAPER_ONLY","real_orders_enabled":False,
+            "status":"NOT_STARTED","sample_count":0,"city_count":0,
+            "last_received_at":None,"cities":[],
+            "collector":read_collector_health(root,preview=preview)}
+    if preview or not path.is_file():
+        return result
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",
+                                    uri=True,timeout=2)) as conn:
+            conn.execute("PRAGMA query_only=ON")
+            rows=conn.execute("""SELECT city,COUNT(*),MAX(received_at)
+                FROM weather_hourly_index GROUP BY city ORDER BY city""").fetchall()
+        result["cities"]=[{"city":city,"points":n,"last_received_at":ts}
+                           for city,n,ts in rows]
+        result["sample_count"]=sum(n for _,n,_ in rows)
+        result["city_count"]=len(rows)
+        dates=[ts for _,_,ts in rows if ts]
+        result["last_received_at"]=max(dates) if dates else None
+        result["status"]="READY" if rows else "COLLECTING_INDEX"
+    except sqlite3.OperationalError as exc:
+        result["status"]="COLLECTING_INDEX" if "no such table" in str(exc) else "DATABASE_ERROR"
+    except (sqlite3.Error,OSError,ValueError):
+        result["status"]="DATABASE_ERROR"
+    return result

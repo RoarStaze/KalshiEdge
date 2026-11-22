@@ -196,9 +196,9 @@ def test_weather_forecast_endpoint_is_read_only(tmp_path):
 def test_weather_page_shows_live_station_forecasting_without_manual_orders():
     from kalshi_edge.weather.research_ui import render_weather_page
     page=render_weather_page("forecast")
-    assert "wx-forecast-station" in page
-    assert "wx-forecast-buckets" in page
-    assert "/api/weather/forecast" in page
+    assert "wx-hourly-city" in page
+    assert "wx-hourly-ladder" in page
+    assert "/api/weather/hourly/forecast" in page
     assert "/api/manual-trade/" not in page
 
 
@@ -240,14 +240,11 @@ def test_no_nwp_inputs_report_individual_source_failures(tmp_path):
 def test_weather_dashboard_explains_missing_model_status_instead_of_blanks():
     from kalshi_edge.weather.research_ui import render_weather_page
     page = render_weather_page("forecast")
-    assert 'id="wx-forecast-source-metar"' in page
-    assert 'id="wx-forecast-source-hrrr"' in page
-    assert 'id="wx-forecast-source-nbm"' in page
-    assert 'id="wx-forecast-diagnostic"' in page
-    assert "kalshiedge start" in page
-    assert "Automatic collection" in page
-    assert "wx-collector-health" in page
-    assert "source_statuses" in page
+    assert 'id="wx-hourly-state"' in page
+    assert 'id="wx-hourly-diagnostic"' in page
+    assert 'id="wx-hourly-health"' in page
+    assert "Automatic hourly" in page
+    assert "/api/weather/hourly/forecast" in page
     assert "/api/manual-trade/" not in page
 
 

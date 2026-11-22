@@ -98,9 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="managed read-only NOAA weather collector (normally run by kalshiedge start)",
     )
     weather_forecast = sub.add_parser(
-        "weather-forecast", help="inspect actual airport proxy probabilities from fresh METAR/HRRR/NBM data"
+        "weather-forecast", help="inspect hourly Kalshi Weather Index target probabilities (paper only)"
     )
-    weather_forecast.add_argument("--station", choices=("KMDW","KORD","KDEN","KATL","KLAX"))
+    weather_forecast.add_argument("--city", choices=("chicago","nyc","miami","la-coastal"))
     weather_forecast.add_argument("--asof", help="timezone-aware historical as-of timestamp for point-in-time audit")
     weather_export = sub.add_parser(
         "weather-export-training", help="join original weather snapshots to documented first-party publisher labels"
@@ -357,10 +357,8 @@ def main(argv: list[str] | None = None) -> int:
         return weather_main()
     if args.command == "weather-forecast":
         from .bootstrap.config import BootstrapSettings
-        from .weather.predictor import read_weather_forecasts, read_station_forecast
-        from .weather.status import weather_database_path
+        from .weather.hourly import read_hourly_forecasts
 
-        root = BootstrapSettings().bootstrap_dir
         asof = None
         if args.asof:
             try:
@@ -369,13 +367,14 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("timestamp lacks UTC offset")
             except ValueError as exc:
                 parser.error(f"--asof must be timezone-aware: {exc}")
-        if args.station:
-            result = read_station_forecast(weather_database_path(root), args.station, asof)
-            print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
-            return 0 if result["status"] == "READY_RESEARCH" else 2
-        result = read_weather_forecasts(root, asof=asof)
+        result = read_hourly_forecasts(BootstrapSettings().bootstrap_dir,asof=asof)
+        if args.city:
+            result["forecasts"]=[
+                item for item in result["forecasts"] if item["city"]==args.city
+            ]
         print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
-        return 0 if any(x["status"] == "READY_RESEARCH" for x in result["forecasts"]) else 2
+        return 0 if any(item.get("status")=="READY_RESEARCH"
+                        for item in result["forecasts"]) else 2
     if args.command == "weather-export-training":
         from .bootstrap.config import BootstrapSettings
         from .weather.dataset import export_labeled_days

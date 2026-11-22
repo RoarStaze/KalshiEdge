@@ -1,3 +1,11 @@
+> **ARCHIVED DAILY-HIGH RESEARCH (November 22, 2026):** The active
+> WeatherEdge app now targets **hourly Kalshi Weather Index markets only**.
+> The daily-high collector, station-high forecaster and daily settlement
+> reconciler are no longer scheduled by `kalshiedge start`. These older
+> instructions are retained for audit/reproducibility, not current operation.
+> See [WEATHEREDGE_HOURLY.md](WEATHEREDGE_HOURLY.md) for current commands,
+> hourly market source definitions and calibration limitations.
+>
 # WeatherEdge AI: point-in-time forecast engine in KalshiEdge
 
 ## What is implemented

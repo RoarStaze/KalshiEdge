@@ -25,6 +25,7 @@ from .collection import collect_metars_once
 from .nwp_collection import collect_recent
 from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
+from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
 from .status import weather_database_path
 
 
@@ -39,6 +40,8 @@ METAR_SECONDS = 300
 NWP_SECONDS = 1800
 FORECAST_JOURNAL_SECONDS = 600
 SETTLEMENT_POLL_SECONDS = 6 * 3600
+HOURLY_INDEX_SECONDS = 120
+HOURLY_SETTLE_SECONDS = 300
 
 
 def _missing_decoder_modules() -> list[str]:
@@ -128,6 +131,8 @@ class WeatherSupervisor:
         ensure_decoder: Callable[[], dict] | None = None,
         forecast_capture: Callable[[Path], dict] = capture_station_snapshots,
         settlement_collect: Callable[[Path], Awaitable[dict]] = poll_settlements,
+        hourly_collect: Callable[[Path], Awaitable[dict]] = collect_hourly_once,
+        hourly_settle: Callable[[Path], Awaitable[dict]] = settle_hourly_once,
     ):
         self.db_path = Path(db_path)
         self.status_path = collector_health_path(self.db_path)
@@ -135,6 +140,11 @@ class WeatherSupervisor:
         self._collect_nwp = nwp_collect
         self._capture_forecasts = forecast_capture
         self._collect_settlement = settlement_collect
+        self._collect_hourly = hourly_collect
+        self._settle_hourly = hourly_settle
+        self._hourly = {city: {"state":"STARTING"} for city in
+                        ("chicago","nyc","la-coastal","miami")}
+        self._hourly_settlement = {"state":"STARTING","verified":0}
         self._settlement = {"state": "STARTING", "crosschecked": 0}
         self._forecast_journal = {"state": "STARTING", "inserted": 0}
         self._ensure_decoder = ensure_decoder or (
@@ -156,6 +166,8 @@ class WeatherSupervisor:
             "decoder": self._decoder_state or {"state": "NOT_CHECKED"},
             "forecast_journal": self._forecast_journal,
             "settlement": self._settlement,
+            "hourly": self._hourly,
+            "hourly_settlement": self._hourly_settlement,
             "real_orders_enabled": False,
         }
         temp_path = None
@@ -300,17 +312,54 @@ class WeatherSupervisor:
             }
         self._persist()
 
+    async def poll_hourly(self) -> None:
+        """Run official Kalshi index collection and frozen hourly predictions.
+
+        This intentionally replaces daily-high foreground collection. Old
+        database tables are retained but not used as hourly market targets.
+        """
+        try:
+            report = await asyncio.wait_for(
+                self._collect_hourly(self.db_path), timeout=120)
+            if not isinstance(report,dict) or report.get("mode")!="HOURLY_PAPER_ONLY":
+                raise ValueError("unexpected hourly index collector response")
+            self._hourly = report.get("cities",{})
+            if not isinstance(self._hourly,dict):
+                raise ValueError("hourly sources missing")
+            frozen = await asyncio.to_thread(journal_hourly_forecasts,self.db_path)
+            self._hourly["journal"]={"state":"READY",
+                                     "new_forecasts":frozen["inserted"]}
+        except Exception as exc:
+            self._hourly={"state":"UNAVAILABLE",
+                          "reason":f"{type(exc).__name__}: {exc}"[:220]}
+        self._persist()
+
+    async def poll_hourly_settlements(self) -> None:
+        try:
+            report=await asyncio.wait_for(
+                self._settle_hourly(self.db_path),timeout=180)
+            if not isinstance(report,dict) or report.get("mode")!="HOURLY_PAPER_ONLY":
+                raise ValueError("unexpected hourly settlement result")
+            self._hourly_settlement={"state":"READY",
+                     "verified":int(report.get("verified",0)),
+                     "unverified":int(report.get("unverified",0)),
+                     "errors":report.get("errors",[])[:8]}
+        except Exception as exc:
+            self._hourly_settlement={"state":"UNAVAILABLE",
+                   "reason":f"{type(exc).__name__}: {exc}"[:220]}
+        self._persist()
+
     async def run_forever(self) -> None:
         async def every(poll, period: int) -> None:
             while True:
                 await poll()
                 await asyncio.sleep(period)
 
+        # Hourly-only product. Legacy daily research code remains importable
+        # for reproducible archives but is NEVER scheduled by kalshiedge start.
         await asyncio.gather(
-            every(self.poll_metar, METAR_SECONDS),
-            every(self.poll_nwp, NWP_SECONDS),
-            every(self.poll_forecasts, FORECAST_JOURNAL_SECONDS),
-            every(self.poll_settlements, SETTLEMENT_POLL_SECONDS),
+            every(self.poll_hourly, HOURLY_INDEX_SECONDS),
+            every(self.poll_hourly_settlements, HOURLY_SETTLE_SECONDS),
         )
 
 
