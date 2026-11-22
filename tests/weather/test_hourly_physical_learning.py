@@ -344,3 +344,12 @@ def test_physical_research_scores_compare_each_model_on_identical_hours():
     assert scores["nbm_mae_f"]<scores["baseline_mae_f"]
     assert scores["equal_blend_crps"]<scores["baseline_crps"]
     assert research_scores(synthetic(4)) is None
+
+
+def test_ui_discloses_actual_completed_index_score_counts_separately_from_pairs():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("forecast","")
+    assert "Completed hourly index outcomes" in html
+    assert "Observed historical MAE" in html
+    assert "physical_adaptive_scored_hours" in html
+    assert "physical_adaptive_research_scores" in html
