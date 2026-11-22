@@ -24,6 +24,8 @@ import httpx
 
 from .predictor import normal_cdf, _utc
 from .hourly_learning import learning_decision, apply_correction
+from .hourly_nowcast import (LEAD_MINUTES, index_nowcast_decision,
+                             nowcast_prediction)
 from .status import weather_database_path
 
 API = "https://external-api.kalshi.com/trade-api/v2"
@@ -422,11 +424,15 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         "learning_status":"WAITING_FOR_INDEX",
         "learning_verified_hours":0,"learning_training_hours":0,
         "learning_validation_hours":0,"learning_validation":None,
+        "index_nowcast_status":"WAITING_FOR_INDEX",
+        "index_nowcast_history_hours":0,
+        "index_nowcast_lead_minutes":None,
+        "index_nowcast_validation":None,
         "minutes_to_target":round((target-asof).total_seconds()/60,2),
         "markets":[],
     }
     points = conn.execute("""
-       SELECT event_ms, received_at, temp_f, status FROM weather_hourly_index
+       SELECT event_ms, received_at, temp_f, status, config_version FROM weather_hourly_index
        WHERE city=? AND received_at<=? AND event_ms<=?
        ORDER BY event_ms DESC LIMIT 100""",
        (city,asof.isoformat(),int(asof.timestamp()*1000))).fetchall()
@@ -470,6 +476,28 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
             "bias_f":decision["fitted_bias_f"],
             "trend_gain":decision["fitted_trend_gain"],
             "sigma_scale":decision["fitted_sigma_scale"]}
+        result["index_nowcast_status"]="VERIFIED_SETTLEMENT_MODEL_PRIORITY"
+    else:
+        # Replay index minutes using their local receipt timestamps. Models
+        # trained for a different lead time or index configuration cannot be
+        # silently substituted; no market settlement label is fabricated.
+        lead=(target-asof).total_seconds()/60
+        if 0<lead<=60:
+            bucket=min(LEAD_MINUTES,key=lambda k:abs(k-lead))
+            nowcast=index_nowcast_decision(conn,city,asof,
+                  lead_minutes=bucket,config_version=last[4])
+            result["index_nowcast_lead_minutes"]=bucket
+            result["index_nowcast_status"]=nowcast["status"]
+            result["index_nowcast_history_hours"]=nowcast["history_hours"]
+            result["index_nowcast_validation"]=nowcast.get("validation")
+            live=nowcast.get("live_slopes")
+            if nowcast["enabled"] and live is not None:
+                mean,sigma=nowcast_prediction(live[2],sigma,live[0],live[1],
+                            hours_ahead,nowcast)
+                result["model_kind"]="HISTORICAL_INDEX_NOWCAST_V2"
+                result["index_nowcast_selected_model"]=nowcast["model"]
+        else:
+            result["index_nowcast_status"]="UNSUPPORTED_LEAD_TIME"
     result["predicted_index_f"]=round(mean,3)
     result["sigma_f"]=round(sigma,3)
     result["interval_90_f"]=[
