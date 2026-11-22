@@ -309,7 +309,7 @@ def _slopes_from_points(points: list[tuple],
     def slope(old):
         value=(newest[2]-old[2])/((newest[0]-old[0])/3600000)
         return max(-5.,min(5.,value))
-    return slope(old10),slope(old30),newest[2]
+    return slope(old10),slope(old30),newest[2],newest[0]
 
 
 def current_slopes(conn: sqlite3.Connection,city: str,asof: datetime,
