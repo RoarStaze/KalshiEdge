@@ -77,6 +77,7 @@ class StratPaperTrader:
         self.settlement_reader = settlement_reader
         self._lock = threading.RLock()
         self._enabled = False   # restart NEVER authorizes new positions
+        self._capture_failed = False
         self._budget = D("1.00")
         self._samples: dict[str, deque[UpQuote]] = {
             side: deque(maxlen=5) for side in ("UP", "DOWN")
@@ -221,6 +222,7 @@ class StratPaperTrader:
                 "quote_tape_samples": tape["snapshots"],
                 "quote_tape_markets": tape["markets"],
                 "quote_tape_path": tape["path"],
+                "quote_tape_healthy": not self._capture_failed,
                 "max_same_market_loss_streak": 3,
                 "fee_mode": "INDICATIVE_STANDARD_TAKER_JULY_2026",
                 "slippage_cents_per_leg": "1.00",
@@ -272,6 +274,7 @@ class StratPaperTrader:
                     or budget > max(D("0"), stats["cash"]) * D("0.05")):
                 raise ValueError("Strat budget must be $0.10–$5 and <=5% paper cash")
             self._budget = budget
+            self._capture_failed = False  # next observation retries tape write
             self._enabled = True
             self._last_signal = "SCANNING_UP_AND_DOWN_MOMENTUM"
             return self.status()
@@ -365,7 +368,10 @@ class StratPaperTrader:
                     self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
                 return self.status()
             if opened is None and not self._enabled:
-                self._last_signal = "DISARMED_OR_PAUSED"
+                self._last_signal = (
+                    "QUOTE_TAPE_WRITE_FAILED" if self._capture_failed
+                    else "DISARMED_OR_PAUSED"
+                )
                 return self.status()
             try:
                 quotes = self._quote(ticker, now)
@@ -414,6 +420,7 @@ class StratPaperTrader:
                 LOG.exception("Strat quote evidence not durable")
                 if opened is None:
                     self._last_signal = "QUOTE_TAPE_WRITE_FAILED"
+                    self._capture_failed = True
                     self._enabled = False
                     return self.status()
 
