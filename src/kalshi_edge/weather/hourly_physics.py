@@ -202,6 +202,32 @@ async def _default_grib_fetch(client: httpx.AsyncClient, model: str,
     return samples,hashlib.sha256(data).hexdigest()
 
 
+def _store_calibration_history(db_path: Path, configs: dict,
+                               responses: dict, now: datetime) -> None:
+    """Append-only versioned Kalshi records, independent of NOAA availability."""
+    path=Path(db_path)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with closing(sqlite3.connect(path,timeout=10)) as conn:
+        _init(conn)
+        for city,(timeline,_) in configs.items():
+            for entry in timeline:
+                serialized=_canonical(entry)
+                row=conn.execute(
+                    "SELECT config_sha256 FROM weather_hourly_physics_calibrations "
+                    "WHERE city=? AND config_version=?",
+                    (city,entry["version"])).fetchone()
+                if row and row[0]!=entry["config_sha256"]:
+                    raise ValueError("IMMUTABLE_KALSHI_CALIBRATION_CHANGED")
+                conn.execute("""INSERT OR IGNORE INTO weather_hourly_physics_calibrations
+                   (city,config_version,effective_at_ms,published_at_ms,
+                   config_json,config_sha256,original_response_sha256,received_at)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                   (city,entry["version"],entry["effective_at_ms"],
+                    entry["published_at_ms"],serialized,entry["config_sha256"],
+                    responses[city],now.isoformat()))
+        conn.commit()
+
+
 async def collect_hourly_physics_once(
     db_path: Path, *,
     client: httpx.AsyncClient | None=None,
@@ -251,6 +277,8 @@ async def collect_hourly_physics_once(
                     "reason":f"{type(exc).__name__}: {exc}"[:190]}
         if not configs:
             return result
+        # Preserve actual Kalshi calibration history even if AWC/NOAA fails.
+        _store_calibration_history(db_path,configs,responses,now)
 
         # One station metadata query and one GRIB decode per model for all
         # active city members, rather than 2*N cities repeated GRIB fetches.
@@ -326,22 +354,6 @@ async def collect_hourly_physics_once(
         path.parent.mkdir(parents=True,exist_ok=True)
         with closing(sqlite3.connect(path,timeout=10)) as conn:
             _init(conn)
-            for city,(timeline,cfg) in configs.items():
-                for entry in timeline:
-                    serialized=_canonical(entry)
-                    row=conn.execute(
-                        "SELECT config_sha256 FROM weather_hourly_physics_calibrations "
-                        "WHERE city=? AND config_version=?",
-                        (city,entry["version"])).fetchone()
-                    if row and row[0]!=entry["config_sha256"]:
-                        raise ValueError("IMMUTABLE_KALSHI_CALIBRATION_CHANGED")
-                    conn.execute("""INSERT OR IGNORE INTO weather_hourly_physics_calibrations
-                       (city,config_version,effective_at_ms,published_at_ms,
-                       config_json,config_sha256,original_response_sha256,received_at)
-                       VALUES(?,?,?,?,?,?,?,?)""",
-                       (city,entry["version"],entry["effective_at_ms"],
-                        entry["published_at_ms"],serialized,entry["config_sha256"],
-                        responses[city],now.isoformat()))
             conn.executemany("""INSERT OR IGNORE INTO weather_hourly_physics_forecasts
                (city,target_utc,model,model_run_at,received_at,config_version,
                config_sha256,index_f,nwp_field_sha256,sampled_station_kelvin_json,
@@ -364,6 +376,15 @@ def read_hourly_physics(conn: sqlite3.Connection, city: str,
     target=_utc(target)
     asof=_utc(asof)
     try:
+        # A later published configuration effective at this target makes
+        # even a previously valid physical projection obsolete.
+        active=conn.execute("""SELECT config_version,config_sha256
+            FROM weather_hourly_physics_calibrations
+            WHERE city=? AND effective_at_ms<=? AND published_at_ms<=?
+            ORDER BY effective_at_ms DESC LIMIT 1""",
+            (city,int(target.timestamp()*1000),int(asof.timestamp()*1000))).fetchone()
+        if active is None:
+            return output
         _init_read_rows=conn.execute("""SELECT model,index_f,config_version,
               config_sha256,received_at,model_run_at FROM weather_hourly_physics_forecasts
               WHERE city=? AND target_utc=? AND received_at<=? AND received_at<?
@@ -388,7 +409,7 @@ def read_hourly_physics(conn: sqlite3.Connection, city: str,
                 continue
             if version is None:
                 version,digest=cfg,sha
-            if cfg!=version or sha!=digest:
+            if cfg!=version or sha!=digest or (cfg,sha)!=tuple(active):
                 continue
             if not (isinstance(value,(int,float)) and math.isfinite(value)):
                 continue
