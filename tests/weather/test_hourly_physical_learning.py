@@ -322,3 +322,15 @@ def test_approved_locked_model_changes_probability_but_cannot_enable_orders(monk
     assert candidate["markets"][0]["probability_yes"]>.5
     assert candidate["real_orders_enabled"] is False
     assert candidate["calibration_certified"] is False
+
+
+def test_missing_early_prospective_hour_cannot_be_replaced_by_later_hour():
+    locked={"locked_at":synthetic(88)[-1]["target_utc"],
+            **select_candidate(synthetic(88))}
+    future=synthetic(121)[88:]
+    # One of the first 32 chronological hours is missing; appending hour
+    # number 33 must not change the lockbox into a cherry-picked window.
+    missing_first=future[1:]
+    outcome=evaluate_lockbox(locked,missing_first)
+    assert outcome["enabled"] is False
+    assert outcome["status"]=="INCOMPLETE_FIXED_LOCKBOX_WINDOW"
