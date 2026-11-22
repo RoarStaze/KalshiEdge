@@ -411,6 +411,12 @@ def read_hourly_physics(conn: sqlite3.Connection, city: str,
             if not config:
                 continue
             effective=json.loads(config[0])
+            # Verify stored source-derived configuration bytes before using
+            # them to label a NOAA forecast as Kalshi-calibrated.
+            embedded_sha=effective.pop("config_sha256",None)
+            if (embedded_sha!=sha or
+                hashlib.sha256(_canonical(effective).encode()).hexdigest()!=sha):
+                continue
             if (effective["effective_at_ms"]>int(target.timestamp()*1000) or
                 effective["published_at_ms"]>int(_utc(received).timestamp()*1000)):
                 continue
