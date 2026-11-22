@@ -218,14 +218,22 @@ class StratPaperTrader:
             return "NOT_ARMED"
         if self._ticker is None:
             return "WAITING_FOR_FRESH_MARKET"
-        if self._market_loss_streak(self._ticker) >= 3:
-            return "THREE_SAME_MARKET_PAPER_LOSSES"
-        if stats["loss"] >= DAILY_LOSS_LIMIT:
-            return "DAILY_PAPER_LOSS_CIRCUIT"
+        market = self._market(now)
+        if market is None or market[0] != self._ticker:
+            return "WAITING_FOR_FRESH_MARKET"
+        remain = (market[1] - now) / NS
+        if remain < 120:
+            return "OUTSIDE_2_MINUTE_BUY_WINDOW"
         if self.ledger.ticker_count(self._ticker) >= MAX_CYCLES:
             return "MAX_MARKET_CYCLES"
         if now - self._last_exit_ns < COOLDOWN_NS:
             return "REENTRY_COOLDOWN"
+        if self._last_ask_cents is None or self._last_down_ask_cents is None:
+            return "WAITING_FOR_EXECUTABLE_QUOTES"
+        up = D(self._last_ask_cents) / D("100")
+        down = D(self._last_down_ask_cents) / D("100")
+        if not any(D("0.65") <= ask <= D("0.85") for ask in (up, down)):
+            return "BOTH_SIDE_ASKS_OUTSIDE_65_85"
         return None
 
     def status(self) -> dict:
@@ -250,7 +258,7 @@ class StratPaperTrader:
                 "quote_tape_markets": tape["markets"],
                 "quote_tape_path": tape["path"],
                 "quote_tape_healthy": not self._capture_failed,
-                "max_same_market_loss_streak": 3,
+                "max_same_market_loss_streak": None,
                 "fee_mode": "INDICATIVE_STANDARD_TAKER_JULY_2026",
                 "slippage_cents_per_leg": "1.00",
                 "break_even_up_cents": self._breakeven_cents["UP"],
@@ -281,7 +289,9 @@ class StratPaperTrader:
                 },
                 "warning": ("Signal has no verified positive expectancy. "
                             "Cross-market loss streak is informational only; "
-                            "per-market and daily paper limits remain enforced. "
+                            "Historical paper loss streaks and daily losses are "
+                            "informational; no paper loss-streak or daily-dollar "
+                            "halt prevents research entries. " 
                             "Paper only: top-of-book hypothetical fills with 1c "
                             "slippage per leg and indicative standard taker fees. "
                             "Market-specific fees and actual fills are unverified. "
@@ -480,10 +490,6 @@ class StratPaperTrader:
                     self._last_signal = signals[held].reason
             elif self._market(observed_ns) != (ticker, close):
                 self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
-            elif self._market_loss_streak(ticker) >= 3:
-                self._last_signal = "THREE_SAME_MARKET_PAPER_LOSSES"
-            elif stats["loss"] >= DAILY_LOSS_LIMIT:
-                self._last_signal = "DAILY_PAPER_LOSS_CIRCUIT"
             elif self.ledger.ticker_count(ticker) >= MAX_CYCLES:
                 self._last_signal = "MAX_MARKET_CYCLES"
             elif now - self._last_exit_ns < COOLDOWN_NS:
