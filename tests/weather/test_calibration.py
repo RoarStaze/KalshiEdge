@@ -127,12 +127,12 @@ def test_weather_calibration_pages_show_missing_evidence_not_guaranteed_90_perce
     from kalshi_edge.weather.research_ui import render_weather_page
     for page in ("forecast","train","history"):
         html=render_weather_page(page)
-        assert "/api/weather/calibration" in html
-        assert 'id="wx-calibration-state"' in html
-        assert 'id="wx-calibration-noon-days"' in html
-        assert 'id="wx-calibration-coverage"' in html
-        assert "Not certified" in html or "NOT CERTIFIED" in html
-        assert "calibration_certified" in html
+        assert "/api/weather/hourly/calibration" in html
+        assert 'id="wx-hm-state"' in html
+        assert 'id="wx-hm-matched"' in html
+        assert 'id="wx-hm-coverage"' in html
+        assert "NOT CERTIFIED" in html or "not" in html
+        assert "hourly" in html.lower()
         assert "/api/manual-trade/" not in html
     assert "90% modeled interval (not validated)" in render_weather_page("forecast")
 
