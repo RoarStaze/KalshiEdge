@@ -217,3 +217,19 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 **Expected test count: 115** (106 previously passed + 9 new; six new CUDA-dependent). The hardware GPU path requires the RTX 4050 run; local CPU-side arithmetic checks passed. All demo factors are synthetic, with no real Gemma checkpoint or text generation.
+
+
+## Six-block synthetic Gemma 3 token generation pipeline
+
+See [GEMMA3_TINY_TOKEN_LM.md](GEMMA3_TINY_TOKEN_LM.md) for a tiny *token-ID only* pipeline with six decoder blocks, a 5-local/1-global attention pattern, scaled and tied input/output embeddings, final RMSNorm, greedy token scheduling and per-layer K/V caches. The CPU backend passed local tests. The RTX 4050 CUDA backend must still be verified on your laptop.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\gemma3_tiny_lm.py --backend cuda
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+The expected suite count is **129 tests** (115 existing + 14 new). This is not trained Gemma 3 27B, real language generation, or a checkpoint conversion. No new packages or model weights are downloaded.
