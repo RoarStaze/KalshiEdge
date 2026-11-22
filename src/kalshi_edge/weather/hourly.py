@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .predictor import normal_cdf, _utc
+from .hourly_learning import learning_decision, apply_correction
 from .status import weather_database_path
 
 API = "https://external-api.kalshi.com/trade-api/v2"
@@ -418,6 +419,9 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         "predicted_index_f":None,"sigma_f":None,"interval_90_f":None,
         "model_kind":"UNVALIDATED_HOURLY_INDEX_TREND",
         "calibration_certified":False,"real_orders_enabled":False,
+        "learning_status":"WAITING_FOR_INDEX",
+        "learning_verified_hours":0,"learning_training_hours":0,
+        "learning_validation_hours":0,"learning_validation":None,
         "minutes_to_target":round((target-asof).total_seconds()/60,2),
         "markets":[],
     }
@@ -449,6 +453,23 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
     sigma=0.8 + .85*math.sqrt(max(.0,hours_ahead))
     if last[3]=="degraded":
         sigma+=.3
+    result["raw_predicted_index_f"]=round(mean,6)
+    result["raw_sigma_f"]=round(sigma,6)
+    # Learning only from frozen, source-audited, already-published historical
+    # outcomes. Never use future labels or unvalidated station-level data.
+    decision=learning_decision(conn,city,asof)
+    result["learning_status"]=decision["status"]
+    result["learning_verified_hours"]=decision["verified_hours"]
+    result["learning_training_hours"]=decision["training_hours"]
+    result["learning_validation_hours"]=decision["validation_hours"]
+    result["learning_validation"]=decision.get("validation")
+    if decision["enabled"]:
+        mean,sigma=apply_correction(mean,sigma,last[2],decision)
+        result["model_kind"]="HISTORICAL_HOLDOUT_RESIDUAL_V1"
+        result["learning_adjustment"]={
+            "bias_f":decision["fitted_bias_f"],
+            "trend_gain":decision["fitted_trend_gain"],
+            "sigma_scale":decision["fitted_sigma_scale"]}
     result["predicted_index_f"]=round(mean,3)
     result["sigma_f"]=round(sigma,3)
     result["interval_90_f"]=[

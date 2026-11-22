@@ -70,11 +70,14 @@ MAIN = """
     <small>Latest published index value, not the prediction</small>
    </div>
   </div>
-  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi prices or proof of a profitable bet. No automatic weather trading.</p>
+  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi prices or proof of a profitable bet. Not a verified accuracy claim. No automatic weather trading.</p>
   <details class="wx-hourly-details"><summary>Forecast uncertainty and technical details</summary>
    <div class="wx-rows">
     <div class="wx-row"><span>90% modeled interval (not validated)</span><strong id="wx-hourly-interval">—</strong></div>
     <div class="wx-row"><span>Prediction status</span><strong id="wx-hourly-state">WAITING</strong></div>
+    <div class="wx-row"><span>Learning evidence</span><strong id="wx-hourly-learning">WAITING</strong></div>
+    <div class="wx-row"><span>Verified learning hours</span><strong id="wx-hourly-learning-hours">0</strong></div>
+    <div class="wx-row"><span>Historical holdout scores</span><strong id="wx-hourly-learning-scores">NOT AVAILABLE</strong></div>
     <div class="wx-row"><span>Prediction target (Eastern Time)</span><strong id="wx-hourly-et">—</strong></div>
     <div class="wx-row"><span>Target UTC</span><strong id="wx-hourly-utc">—</strong></div>
     <div class="wx-row"><span>Hourly Kalshi event</span><strong id="wx-hourly-event">—</strong></div>
@@ -203,6 +206,14 @@ SCRIPT = r"""<script>
     if(!card)return;
     const row=forecasts[card.value]||{};
     put("wx-hourly-state",row.status||"WAITING");
+    put("wx-hourly-learning",row.learning_status||"WAITING FOR EVIDENCE");
+    put("wx-hourly-learning-hours",row.learning_verified_hours??0);
+    const validation=row.learning_validation;
+    put("wx-hourly-learning-scores",validation?
+        "Brier "+validation.baseline_brier+" → "+validation.candidate_brier+
+        " · MAE "+validation.baseline_mae_f+" → "+validation.candidate_mae_f+" °F"+
+        " · 90% coverage "+Math.round(100*validation.candidate_90_coverage)+"% (historical)":
+        "Not enough verified settled hours");
     put("wx-hourly-current",f(row.current_index_f));
     put("wx-hourly-mean",f(row.predicted_index_f));
     put("wx-hourly-interval",Array.isArray(row.interval_90_f)?
