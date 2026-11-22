@@ -74,7 +74,7 @@ def listed_event_target(city: str, event: str) -> datetime | None:
     if not isinstance(event, str) or not event.startswith(prefix):
         return None
     suffix = event[len(prefix):]
-    if not re.fullmatch(r"\\d{2}[A-Z]{3}\\d{2}\\d{2}", suffix):
+    if not re.fullmatch(r"\d{2}[A-Z]{3}\d{2}\d{2}", suffix):
         return None
     try:
         local = datetime.strptime(suffix, "%y%b%d%H").replace(tzinfo=EASTERN, fold=0)
