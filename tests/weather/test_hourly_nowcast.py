@@ -145,3 +145,28 @@ def test_out_of_range_lead_times_fail_closed():
                                       config_version=CONFIG)
     assert result["enabled"] is False
     assert result["status"]=="UNSUPPORTED_LEAD_TIME"
+
+
+def test_hourly_forecast_exposes_point_in_time_nowcast_evidence():
+    from kalshi_edge.weather.hourly import _forecast
+    conn,asof=populated()
+    with conn:
+        result=_forecast(conn,CITY,asof)
+    assert result["index_nowcast_status"] in (
+        "INSUFFICIENT_INDEX_HOURS",
+        "INDEX_HOLDOUT_NOT_IMPROVED",
+        "HISTORICAL_INDEX_HOLDOUT_IMPROVED_UNCERTIFIED",
+    )
+    assert result["index_nowcast_lead_minutes"] in (5,15,30,45,60)
+    assert result["index_nowcast_history_hours"]>=72
+    assert result["calibration_certified"] is False
+    assert result["real_orders_enabled"] is False
+
+
+def test_hourly_dashboard_shows_historical_index_evidence_without_claiming_certification():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("forecast","")
+    assert "Index nowcast evidence" in html
+    assert "Historical index hours" in html
+    assert "index_nowcast_validation" in html
+    assert "Research only; not independently certified" in html
