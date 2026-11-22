@@ -211,7 +211,8 @@ SCRIPT = r"""<script>
     const validation=row.learning_validation;
     put("wx-hourly-learning-scores",validation?
         "Brier "+validation.baseline_brier+" → "+validation.candidate_brier+
-        " · MAE "+validation.baseline_mae_f+" → "+validation.candidate_mae_f+" °F":
+        " · MAE "+validation.baseline_mae_f+" → "+validation.candidate_mae_f+" °F"+
+        " · 90% coverage "+Math.round(100*validation.candidate_90_coverage)+"% (historical)":
         "Not enough verified settled hours");
     put("wx-hourly-current",f(row.current_index_f));
     put("wx-hourly-mean",f(row.predicted_index_f));
