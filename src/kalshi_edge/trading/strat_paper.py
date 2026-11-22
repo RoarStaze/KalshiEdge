@@ -76,6 +76,7 @@ class StratPaperTrader:
         self.settlement_reader = settlement_reader
         self._lock = threading.RLock()
         self._enabled = False   # restart NEVER authorizes new positions
+        self._paper_exploration_override = False  # explicit session-only opt-in
         self._capture_failed = False
         self._budget = D("1.00")
         self._samples: dict[str, deque[UpQuote]] = {
@@ -233,8 +234,22 @@ class StratPaperTrader:
             return "WAITING_FOR_EXECUTABLE_QUOTES"
         up = D(self._last_ask_cents) / D("100")
         down = D(self._last_down_ask_cents) / D("100")
-        if not any(D("0.65") <= ask <= D("0.85") for ask in (up, down)):
+        qualifying = [
+            side for side, ask in (("UP", up), ("DOWN", down))
+            if D("0.65") <= ask <= D("0.85")
+        ]
+        if not qualifying:
             return "BOTH_SIDE_ASKS_OUTSIDE_65_85"
+        if not self._paper_exploration_override:
+            assessed = (self._entry_evidence or {}).get("sides", {})
+            blocked = [
+                side for side in qualifying
+                if assessed.get(side, {}).get("entry_veto") is True
+            ]
+            if len(blocked) == len(qualifying):
+                if len(qualifying) == 1:
+                    return f"NEGATIVE_HISTORICAL_{qualifying[0]}_TAKER_MARKOUT"
+                return "NEGATIVE_HISTORICAL_BOTH_ELIGIBLE_SIDES"
         return None
 
     def status(self) -> dict:
@@ -247,6 +262,7 @@ class StratPaperTrader:
             return {
                 "mode": "EXPERIMENTAL_PAPER_ONLY",
                 "enabled": self._enabled,
+                "paper_exploration_override": self._paper_exploration_override,
                 "live_orders_enabled": False,
                 "budget_dollars": _cash(self._budget),
                 "virtual_cash_dollars": _cash(stats["cash"]),
@@ -293,7 +309,9 @@ class StratPaperTrader:
                             "Cross-market loss streak is informational only; "
                             "Historical paper loss streaks and daily losses are "
                             "informational; no paper loss-streak or daily-dollar "
-                            "halt prevents research entries. " 
+                            "halt prevents research entries. "
+                            "Historical negative taker entry gate is bypassed "
+                            "ONLY when explicitly selected for PAPER research. " 
                             "Paper only: top-of-book hypothetical fills with 1c "
                             "slippage per leg and indicative standard taker fees. "
                             "Market-specific fees and actual fills are unverified. "
@@ -306,8 +324,13 @@ class StratPaperTrader:
         from .strat_replay import analyze_causal_markouts
         return analyze_causal_markouts(self.tape.path)
 
-    def arm(self, amount: str) -> dict:
+    def arm(
+        self, amount: str, *,
+        exploratory_ignore_negative_evidence: bool = False,
+    ) -> dict:
         with self._lock:
+            if type(exploratory_ignore_negative_evidence) is not bool:
+                raise ValueError("Paper exploration override must be a boolean")
             try:
                 budget = D(amount)
             except Exception as exc:
@@ -318,6 +341,10 @@ class StratPaperTrader:
                     or budget > max(D("0"), stats["cash"]) * D("0.05")):
                 raise ValueError("Strat budget must be $0.10–$5 and <=5% paper cash")
             self._budget = budget
+            # Never persisted; each new session requires explicit opt-in.
+            # This only skips the historical paper entry veto. Time, price,
+            # model freshness, budget and position rules remain unchanged.
+            self._paper_exploration_override = exploratory_ignore_negative_evidence
             self._capture_failed = False  # next observation retries tape write
             self._enabled = True
             self._last_signal = "SCANNING_UP_AND_DOWN_MOMENTUM"
@@ -326,6 +353,7 @@ class StratPaperTrader:
     def pause(self) -> dict:
         with self._lock:
             self._enabled = False
+            self._paper_exploration_override = False
             self._last_signal = (
                 "ENTRIES_PAUSED_STILL_MONITORING_POSITION"
                 if self.ledger.open_position() else "PAUSED")
@@ -519,7 +547,8 @@ class StratPaperTrader:
                     evidence = (self._entry_evidence or {}).get("sides", {}).get(
                         selected, {}
                     )
-                    if evidence.get("entry_veto") is True:
+                    if (evidence.get("entry_veto") is True
+                            and not self._paper_exploration_override):
                         self._last_signal = (
                             f"NEGATIVE_HISTORICAL_{selected}_TAKER_MARKOUT"
                         )
