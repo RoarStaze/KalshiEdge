@@ -264,6 +264,24 @@ def test_weather_forecast_is_plain_english_and_counts_down_real_close():
     assert "Calibration not verified" in markup
 
 
+def test_hourly_dashboard_javascript_is_syntactically_valid_when_node_available():
+    import shutil
+    import subprocess
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js not installed")
+    page = render_hourly_page("forecast", "")
+    script = page.split("<script>", 1)[1].split("</script>", 1)[0]
+    result = subprocess.run(
+        [node, "--check"], input=script, text=True, capture_output=True,
+        timeout=10, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+
 def test_hourly_settlement_raw_evidence_tamper_fails_closed(tmp_path):
     db=tmp_path/"weatheredge.sqlite3"
     async def setup():
