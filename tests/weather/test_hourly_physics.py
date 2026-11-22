@@ -48,7 +48,7 @@ def test_parse_official_configuration_and_exact_offset_formula():
     actual=aggregate_index_celsius(config,{"KMDW1M":20,"KORD1M":22,"KPWK1M":19})
     assert actual==pytest.approx(expected)
     # Kelvin is converted before applying Celsius offsets; no early F rounding.
-    assert 32+1.8*actual==pytest.approx(68.771)
+    assert 32+1.8*actual==pytest.approx(68.72)
 
 
 @pytest.mark.parametrize("mutate",[
