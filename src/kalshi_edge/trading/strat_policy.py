@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Sequence
 
 D = Decimal
-MIN_REMAINING = 420
+MIN_REMAINING = 120
 MIN_UP_ASK = D("0.65")
 MAX_UP_ASK = D("0.85")
 MAX_SPREAD = D("0.03")
@@ -93,7 +93,7 @@ def evaluate_side_momentum(
             return MomentumResult("SELL", f"{side}_MOMENTUM_DECELERATED", speed, ratio)
         return idle(f"{side}_MOMENTUM_ACTIVE", speed, ratio)
     if seconds_remaining < MIN_REMAINING or seconds_remaining > 900:
-        return idle("OUTSIDE_7_MINUTE_BUY_WINDOW", speed, ratio)
+        return idle("OUTSIDE_2_MINUTE_BUY_WINDOW", speed, ratio)
     if not MIN_UP_ASK <= last.ask <= MAX_UP_ASK:
         return idle(f"{side}_ASK_OUTSIDE_65_85", speed, ratio)
     if last.ask - last.bid > MAX_SPREAD:
