@@ -102,10 +102,11 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="kv"><span>Simulated P&amp;L</span><strong id="pnl">—</strong></div>
 <div class="kv"><span>Virtual cash</span><span id="cash">—</span></div>
 <div class="kv"><span>Loss streak this market</span><strong id="lossStreak">0 / 3</strong></div>
-<div class="kv"><span>Cross-market loss streak</span><strong id="globalLossStreak">0 / 3</strong></div>
+<div class="kv"><span>Informational daily loss streak</span><strong id="globalLossStreak">0</strong></div>
+<div class="kv"><span>Entry restriction</span><strong id="entryBlock">—</strong></div>
 <div class="kv"><span>Captured book snapshots</span><strong id="quoteTapeSamples">0</strong></div>
 <div class="kv"><span>Markets captured</span><strong id="quoteTapeMarkets">0</strong></div>
-<p class="sub">Quote evidence is stored locally with both executable order books and causal signals. Three consecutive losses across any markets on the same UTC day stop new paper entries, without suppressing the quote recorder or closing an existing position.</p>
+<p class="sub">Cross-market loss streak is shown for analysis, not used to block paper entries. Per-market risk checks and the $2 daily simulated loss cap still apply. Quote evidence remains recorded locally while Strat is armed.</p>
 </section>
 <section class="card span"><h2>Exactly four strategy rules</h2><div class="rules">
 <div class="rule"><small>BUY TIME</small><strong>≥ 2:00</strong><small>Never open a new UP or DOWN position below two minutes remaining.</small></div>
@@ -131,7 +132,7 @@ async function refresh(){
   const [s,l]=await Promise.all([
    fetch("/api/strat/status",{cache:"no-store"}).then(r=>{if(!r.ok)throw Error("Strat API offline");return r.json()}),
    fetch("/api/live",{cache:"no-store"}).then(r=>r.json())]);
-  set("enabled",s.global_loss_circuit_active?"LOSS CIRCUIT · PAPER":s.enabled?"ARMED · PAPER":"DISABLED");
+  set("enabled",s.enabled?"ARMED · PAPER":"DISABLED");
   set("signal",s.last_signal);set("samples",s.samples+" / 5");
   set("speed",Number(s.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("ratio",s.acceleration_ratio==null?"—":Number(s.acceleration_ratio).toFixed(2)+"×");
@@ -139,7 +140,8 @@ async function refresh(){
   set("downSpeed",s.side_momentum?.DOWN==null?"—":Number(s.side_momentum.DOWN.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("pnl",money(s.paper_net_pnl_dollars));set("cash",money(s.virtual_cash_dollars));
   set("lossStreak",(s.market_loss_streak??0)+" / "+(s.max_same_market_loss_streak??3));
-  set("globalLossStreak",(s.global_loss_streak??0)+" / 3");
+  set("globalLossStreak",s.global_loss_streak??0);
+  set("entryBlock",s.entry_block_reason==null?"NONE — MONITORING":s.entry_block_reason.replace(/_/g," "));
   set("quoteTapeSamples",s.quote_tape_samples??0);
   set("quoteTapeMarkets",s.quote_tape_markets??0);
   set("held",s.open_position?"LONG "+s.open_position.side+" · "+s.open_position.quantity+" shares":"FLAT");
