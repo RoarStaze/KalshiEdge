@@ -26,6 +26,7 @@ from .predictor import normal_cdf, _utc
 from .hourly_learning import learning_decision, apply_correction
 from .hourly_nowcast import (LEAD_MINUTES, index_nowcast_decision,
                              nowcast_prediction)
+from .hourly_physics import read_hourly_physics
 from .status import weather_database_path
 
 API = "https://external-api.kalshi.com/trade-api/v2"
@@ -430,6 +431,8 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         "index_nowcast_validation":None,
         "minutes_to_target":round((target-asof).total_seconds()/60,2),
         "markets":[],
+        # NOAA physical research is always independent of live Kalshi orders.
+        "physical_ensemble":read_hourly_physics(conn,city,target,asof),
     }
     points = conn.execute("""
        SELECT event_ms, received_at, temp_f, status, config_version FROM weather_hourly_index
