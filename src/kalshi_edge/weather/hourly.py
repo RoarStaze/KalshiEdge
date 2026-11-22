@@ -27,6 +27,9 @@ from .hourly_learning import learning_decision, apply_correction
 from .hourly_nowcast import (LEAD_MINUTES, index_nowcast_decision,
                              nowcast_prediction)
 from .hourly_physics import read_hourly_physics
+from .hourly_physical_learning import (
+    physical_live_decision, apply_locked_blend,
+)
 from .status import weather_database_path
 
 API = "https://external-api.kalshi.com/trade-api/v2"
@@ -433,6 +436,13 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         "markets":[],
         # NOAA physical research is always independent of live Kalshi orders.
         "physical_ensemble":read_hourly_physics(conn,city,target,asof),
+        "source_config_version":None,
+        "pre_physical_mean_f":None,"pre_physical_sigma_f":None,
+        "physical_adaptive_status":"WAITING_FOR_MATCHED_EVIDENCE",
+        "physical_adaptive_paired_hours":0,
+        "physical_adaptive_lockbox_hours":0,
+        "physical_adaptive_market_hours":0,
+        "physical_adaptive_metrics":None,
     }
     points = conn.execute("""
        SELECT event_ms, received_at, temp_f, status, config_version FROM weather_hourly_index
@@ -446,6 +456,7 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
     result["current_index_f"] = last[2]
     result["source_event_ms"] = last[0]
     result["source_received_at"] = last[1]
+    result["source_config_version"] = last[4]
     if (asof-last_time).total_seconds() > 20*60:
         result["status"]="STALE_INDEX"
         return result
@@ -503,6 +514,23 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
                 result["index_nowcast_selected_model"]=nowcast["model"]
         else:
             result["index_nowcast_status"]="UNSUPPORTED_LEAD_TIME"
+    # Freeze the exact current-model estimate for prospective paired scores.
+    # Never use an already blended prediction as the baseline label.
+    result["pre_physical_mean_f"]=round(mean,6)
+    result["pre_physical_sigma_f"]=round(sigma,6)
+    physical=physical_live_decision(
+        conn,city,last[4],target,asof,result["physical_ensemble"])
+    result["physical_adaptive_status"]=physical["status"]
+    result["physical_adaptive_paired_hours"]=physical.get("paired_hours",0)
+    result["physical_adaptive_lockbox_hours"]=physical.get("lockbox_hours",0)
+    result["physical_adaptive_market_hours"]=physical.get("market_verified_hours",0)
+    result["physical_adaptive_metrics"]=physical.get("metrics")
+    if physical.get("enabled"):
+        mean,sigma=apply_locked_blend(
+            mean,sigma,result["physical_ensemble"]["hrrr_index_f"],
+            result["physical_ensemble"]["nbm_index_f"],physical)
+        result["model_kind"]="PROSPECTIVE_LOCKBOX_PHYSICAL_INDEX_V4"
+        result["physical_adaptive_weights"]=physical["weights"]
     result["predicted_index_f"]=round(mean,3)
     result["sigma_f"]=round(sigma,3)
     result["interval_90_f"]=[
