@@ -543,11 +543,11 @@ def test_no_entry_on_quote_recorder_failure(tmp_path):
     trader.close()
 
 
-def test_quote_tape_and_global_circuit_are_visible_in_dashboard():
+def test_quote_tape_and_informational_loss_streak_are_visible_in_dashboard():
     from kalshi_edge.bootstrap.strat_ui import render_strat_page
     html = render_strat_page()
     assert "Captured book snapshots" in html
-    assert "Cross-market loss streak" in html
+    assert "Informational daily loss streak" in html
     assert "quote_tape_samples" in html
     assert "global_loss_streak" in html
 
