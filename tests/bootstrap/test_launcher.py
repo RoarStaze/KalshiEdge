@@ -309,3 +309,23 @@ def test_launcher_version_changes_when_paper_source_changes_without_git_commit(t
     second=source_build_id([x,y])
     assert len(first) == len(second) == 16
     assert first != second
+
+
+def test_storage_command_does_not_launch_trading_or_training(tmp_path, monkeypatch, capsys):
+    """The storage command is standalone, offline and read-only by default."""
+    preserved = tmp_path / "data" / "bootstrap" / "derived" / "features.parquet"
+    preserved.parent.mkdir(parents=True)
+    preserved.write_bytes(b"training evidence")
+    disposable = tmp_path / "src" / "__pycache__" / "file.pyc"
+    disposable.parent.mkdir(parents=True)
+    disposable.write_bytes(b"cache")
+    monkeypatch.setattr(launcher, "start",
+                        Mock(side_effect=AssertionError("must not start live service")))
+    monkeypatch.setattr(launcher, "_request_training_shutdown",
+                        Mock(side_effect=AssertionError("must not touch training workers")))
+    assert launcher.main(["storage", "scan", "--root", str(tmp_path), "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["cache_bytes"] == len(b"cache")
+    assert report["total_bytes"] == len(b"cache") + len(b"training evidence")
+    assert preserved.exists()
+    assert disposable.exists()
