@@ -80,12 +80,40 @@ orderbook snapshots.
 
 No change authorizes real-money orders.
 
+## Historical negative-taker evidence gate
+
+The current fast momentum BUY signal has repeatedly shown negative *modeled
+taker* markouts. Strat now compares each side (UP and DOWN) against only
+**previously completed markets** at the start of each new market. The
+side-specific paper entry veto is activated when the recorded 20-second
+forward markouts contain at least **60 matched candidates** from at least
+**10 earlier closed markets**, with at least **80% quote coverage**, at most
+**30% positive modeled taker markouts**, and average after-cost return of
+**−2¢ per contract or worse**. The current market never contributes to
+its own gate. Incomplete history keeps the previous exploratory paper
+behavior; it is **not** positive evidence. Exits for existing positions
+continue regardless of the gate.
+
+These fixed thresholds are deliberately conservative *negative-evidence
+heuristics*, not significance tests, optimized settings or an automatic
+profitability filter. Correlated events, exact fill availability, contract
+fees and maker queue positions are unresolved. No real orders are enabled.
+
+The replay panel also reports an **optimistic, explicitly unverified maker
+entry scenario**: it assumes an immediate fill at the contemporaneous
+best bid, zero maker entry fee, then the same future taker liquidation as
+before. This assumes fillability without any proof and can greatly
+overstate attainable returns. A positive optimistic result is NOT a
+profitable strategy or evidence that a resting order would have filled.
+The baseline displayed taker markouts remain unchanged.
+
 ## Architecture and safety
 
 - Signal: `src/kalshi_edge/trading/strat_policy.py` (pure deterministic decision; no network).
 - Paper executor + durable ledger: `src/kalshi_edge/trading/strat_paper.py`.
 - Causal timestamped quote store: `src/kalshi_edge/trading/strat_tape.py`.
 - Read-only forward-quote audit: `src/kalshi_edge/trading/strat_replay.py`.
+- Prior-closed-market negative-taker entry guard: `src/kalshi_edge/trading/strat_evidence.py`.
 - Local dashboard: `src/kalshi_edge/bootstrap/strat_ui.py` at `/strat`.
 - Localhost-only read endpoints: `/api/strat/status` and `/api/strat/replay`; same-origin action endpoints: `/api/strat/arm` and `/api/strat/pause`.
 - Regression coverage: `tests/trading/test_strat.py`.
