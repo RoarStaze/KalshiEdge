@@ -406,14 +406,14 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
             self.end_headers()
             self.wfile.write(content)
 
-        def _strat_get(self) -> None:
+        def _strat_get(self, replay: bool = False) -> None:
             if self.headers.get("Host") != f"127.0.0.1:{self.server.server_port}":
                 self._json(403, {"error": "Local host required"})
                 return
             if strat is None:
                 self._json(503, {"error": "Strat experimental worker unavailable"})
                 return
-            self._json(200, strat.status())
+            self._json(200, strat.replay_audit() if replay else strat.status())
 
         def _strat_post(self) -> None:
             origin = f"http://127.0.0.1:{self.server.server_port}"
@@ -766,6 +766,9 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
         def do_GET(self) -> None:
             if self.path == "/api/strat/status":
                 self._strat_get()
+                return
+            if self.path == "/api/strat/replay":
+                self._strat_get(replay=True)
                 return
             if self.path == "/api/paper-scalp/status":
                 self._paper_scalp_get()

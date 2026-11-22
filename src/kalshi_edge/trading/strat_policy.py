@@ -90,12 +90,25 @@ def evaluate_side_momentum(
             return MomentumResult("SELL", "MOMENTUM_SLOWED_LATCHED", speed, ratio)
         if recent < 0:
             return MomentumResult("SELL", f"{side}_BID_REVERSAL", speed, ratio)
-        # The last tick is the earliest available sign of slowdown; comparing
-        # only 2-second averages can miss a peak and sell after a reversal.
+        # Public REST books can repeat a price between trades. One unchanged
+        # snapshot is not proof that active momentum has slowed. Exiting on
+        # the very first flat poll mechanically pays both sides' spread and
+        # slippage, even if the underlying executable quotes never decline.
         previous_tick = window[-2].bid - window[-3].bid
         latest_tick = last.bid - window[-2].bid
+        if latest_tick < 0:
+            return MomentumResult("SELL", f"{side}_BID_REVERSAL", speed, ratio)
+        if latest_tick == 0:
+            # Three consecutive unchanged bid intervals spanning >=2 sec
+            # represent confirmed inactivity; no arbitrary clock-only exit.
+            flat = all(window[i].bid == last.bid for i in (-4, -3, -2))
+            duration_ns = last.observed_ns - window[-4].observed_ns
+            if flat and duration_ns >= 2 * NS:
+                return MomentumResult(
+                    "SELL", f"{side}_MOMENTUM_FLAT_CONFIRMED", speed, ratio)
+            return idle(f"{side}_FLAT_QUOTE_UNCONFIRMED", speed, ratio)
         if previous_tick > 0 and latest_tick <= previous_tick * D("0.5"):
-            return MomentumResult("SELL", f"{side}_LATEST_BID_STALLED", speed, ratio)
+            return MomentumResult("SELL", f"{side}_LATEST_RISE_SLOWED", speed, ratio)
         if prior > 0 and recent <= prior * D("0.25"):
             return MomentumResult("SELL", f"{side}_MOMENTUM_DECELERATED", speed, ratio)
         return idle(f"{side}_MOMENTUM_ACTIVE", speed, ratio)
