@@ -308,8 +308,9 @@ option if your priorities include retaining complete raw trade provenance.
 
 The command does **not** walk the 156 GiB installation or hash the 129 GiB of
 raw trades. It verifies the approximately 0.17 GiB existing derived training
-snapshot and its provenance, then removes exactly the historical raw trade
-directory and matching manifest directory, using a durable marker to prevent
+snapshot and its provenance, then removes only paired historical raw trade JSON files and matching manifest
+files. Unrecognized sidecars, nested directories, links, and unpaired records
+are preserved. A durable marker prevents
 subsequent training from silently rebuilding an incomplete dataset.
 
 Close the KalshiEdge dashboard, collectors, and training processes first:
