@@ -439,6 +439,7 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
         "physical_ensemble":read_hourly_physics(conn,city,target,asof),
         "source_config_version":None,
         "pre_physical_mean_f":None,"pre_physical_sigma_f":None,
+        "pre_physical_model_kind":None,
         "physical_adaptive_status":"WAITING_FOR_MATCHED_EVIDENCE",
         "physical_adaptive_paired_hours":0,
         "physical_adaptive_scored_hours":0,
@@ -521,8 +522,10 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
     # Never use an already blended prediction as the baseline label.
     result["pre_physical_mean_f"]=round(mean,6)
     result["pre_physical_sigma_f"]=round(sigma,6)
+    result["pre_physical_model_kind"]=result["model_kind"]
     physical=physical_live_decision(
-        conn,city,last[4],target,asof,result["physical_ensemble"])
+        conn,city,last[4],target,asof,result["physical_ensemble"],
+        baseline_kind=result["pre_physical_model_kind"])
     result["physical_adaptive_status"]=physical["status"]
     result["physical_adaptive_paired_hours"]=physical.get("paired_hours",0)
     result["physical_adaptive_scored_hours"]=physical.get("scored_hours",0)
