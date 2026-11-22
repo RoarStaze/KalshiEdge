@@ -17,19 +17,52 @@ The detector samples approximately every 0.75 seconds via public REST requests. 
 
 - Exactly one paper UP or DOWN position may be open at a time. UP and DOWN are never bought together by this experiment.
 - After selling, the scanner may open a new UP or DOWN position when fresh acceleration in that side again satisfies all four rules and the 2:00 or more buy window still remains open.
-- A **6-second cooldown** after an exit, **12 paper cycles per market**, a **$2 daily simulated loss circuit breaker**, a **three-consecutive-loss new-entry brake scoped to the current market**, and a maximum per-entry simulated spend of **$0.10–$5.00**, capped at **5% of virtual cash**, prevent runaway simulations. These are risk vetoes, not extra directional trade triggers.
+- A **6-second cooldown** after an exit, **12 paper cycles per market**, a **$2 daily simulated loss circuit breaker**, a **three-consecutive-loss entry brake across all tickers in the current UTC day**, and the existing **three-consecutive-loss brake scoped to the current market**, and a maximum per-entry simulated spend of **$0.10–$5.00**, capped at **5% of virtual cash**, prevent runaway simulations. These are risk vetoes, not extra directional trade triggers.
 - Every simulated fill/exit, side (UP/DOWN), quantity, cost basis, fee estimate, and hypothetical P&L is stored separately from existing auto trader history in `data/bootstrap/trading/strat_up_paper.sqlite3`. The original file path is intentionally retained so earlier UP-only paper history is preserved.
 - Entry prices incorporate **one cent of per-contract slippage**, and exits lose an additional cent. New trades use the **indicative standard Kalshi taker fee formula** rather than the conservative `taker_fee_reserve` safety buffer that had added an unsupported $0.01 per leg. The new estimate rounds cost-plus-fee up to the next **$0.0001** (centicent), using the general 7% fee schedule effective July 7, 2026. This assumes the standard multiplier and a single fill; no individual market/account fee is verified by the simulated book.
 - The dashboard displays one-contract **illustrative break-even move**, gross simulated trade-price P&L, estimated entry/exit fees, and net paper P&L independently. The break-even illustration accounts for spread and two one-cent slippage assumptions and is **not a short-term price forecast**.
-- **Existing ledger entries are never backfilled or rewritten**. The UI shows old and new trades together with their original fees. For an apples-to-apples historical comparison, export/analyze them by implementation version and fee assumption.
+- **Existing ledger entries are never backfilled or rewritten**. New cross-market risk checks inspect the already recorded local paper history (including earlier fee assumptions); they do not retroactively change any simulated P&L. The UI shows old and new trades together with their original fees. For an apples-to-apples historical comparison, export/analyze them by implementation version and fee assumption.
 - These changes are improvements to signal timing and accounting transparency, **not empirical proof of positive expectancy**. Testing with real captured quote streams, timestamp-correct replay, and observed manual fill evidence is still required.
 - Stop/slowdown signals are not execution guarantees. If liquidity is absent, the paper position stays open; if the market expires it can only settle using the application's **verified official settlement** helper.
 - Pausing disables new entries but keeps observing open paper positions. A restart always disables new entries until the user re-arms.
+
+## Audit capture and limitations
+
+**The current four-rule signal has not demonstrated a positive after-fee edge.**
+Repeated losing simulated trades indicate that reacting to an already-observed
+2c burst often fails to produce enough *future* continuation to pay for the
+round trip. Tightening the entry rule, changing fees or holding losers longer
+cannot establish a profitable strategy without timestamp-correct evidence.
+
+While the paper experiment is armed, every validated market poll writes one
+immutable row with simultaneous UP/DOWN executable bids, asks, displayed depth,
+the market and close timestamp, time remaining, held side and the reason for
+each directional signal. The local file is
+`data/bootstrap/trading/strat_quote_tape.sqlite3`.
+The quote recorder **continues when the global loss gate blocks entries**, so
+candidate signals can be reviewed without creating additional losses.
+New entries are blocked if evidence cannot be written to disk; open positions
+remain monitored. Pausing entries intentionally stops quote polling when flat,
+and restarting the app still requires manually rearming paper Strat.
+
+The loss circuit counts consecutive simulated losses **across tickers** in
+the current **UTC calendar day** and resets only when a new UTC day begins or
+a non-losing closed paper cycle breaks the streak. Arming again during a
+tripped circuit does **not** bypass it. The UI displays the global streak,
+recorded snapshot count and market count. No feature forecasts wins from this
+new tape; the next milestone is timestamp-correct replay of pre-entry quote
+conditions and subsequent executable bids, using the same estimated fees and
+a holdout period to avoid overfitting. Reconstructing actual maker fills
+requires independent trade and order-queue evidence not contained in REST
+orderbook snapshots.
+
+No change authorizes real-money orders.
 
 ## Architecture and safety
 
 - Signal: `src/kalshi_edge/trading/strat_policy.py` (pure deterministic decision; no network).
 - Paper executor + durable ledger: `src/kalshi_edge/trading/strat_paper.py`.
+- Causal timestamped quote store: `src/kalshi_edge/trading/strat_tape.py`.
 - Local dashboard: `src/kalshi_edge/bootstrap/strat_ui.py` at `/strat`.
 - Same-origin, localhost-only HTTP controls: `/api/strat/status`, `/api/strat/arm`, and `/api/strat/pause`.
 - Regression coverage: `tests/trading/test_strat.py`.
