@@ -64,6 +64,8 @@ def read_collector_health(bootstrap_root: Path, *, preview: bool = False) -> dic
                        if isinstance(data.get("hourly"),dict) else {}),
             "hourly_settlement": (data.get("hourly_settlement",{})
                        if isinstance(data.get("hourly_settlement"),dict) else {}),
+            "hourly_physics": (data.get("hourly_physics",{})
+                       if isinstance(data.get("hourly_physics"),dict) else {}),
             "feeds": {
                 source: value for source, value in feeds.items()
                 if source in ("METAR", "HRRR", "NBM") and isinstance(value, dict)
