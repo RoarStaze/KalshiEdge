@@ -78,6 +78,11 @@ MAIN = """
     <div class="wx-row"><span>Learning evidence</span><strong id="wx-hourly-learning">WAITING</strong></div>
     <div class="wx-row"><span>Verified learning hours</span><strong id="wx-hourly-learning-hours">0</strong></div>
     <div class="wx-row"><span>Historical holdout scores</span><strong id="wx-hourly-learning-scores">NOT AVAILABLE</strong></div>
+    <div class="wx-row"><span>Index nowcast evidence</span><strong id="wx-hourly-nowcast-state">WAITING</strong></div>
+    <div class="wx-row"><span>Historical index hours</span><strong id="wx-hourly-nowcast-hours">0</strong></div>
+    <div class="wx-row"><span>Nowcast lead-time model</span><strong id="wx-hourly-nowcast-lead">—</strong></div>
+    <div class="wx-row"><span>Nowcast holdout (MAE / CRPS / interval coverage)</span><strong id="wx-hourly-nowcast-scores">NOT MEASURED</strong></div>
+    <p>Research only; not independently certified. Historical holdout improvement does not guarantee live accuracy or trading profitability.</p>
     <div class="wx-row"><span>Prediction target (Eastern Time)</span><strong id="wx-hourly-et">—</strong></div>
     <div class="wx-row"><span>Target UTC</span><strong id="wx-hourly-utc">—</strong></div>
     <div class="wx-row"><span>Hourly Kalshi event</span><strong id="wx-hourly-event">—</strong></div>
@@ -208,6 +213,19 @@ SCRIPT = r"""<script>
     put("wx-hourly-state",row.status||"WAITING");
     put("wx-hourly-learning",row.learning_status||"WAITING FOR EVIDENCE");
     put("wx-hourly-learning-hours",row.learning_verified_hours??0);
+    put("wx-hourly-nowcast-state",row.index_nowcast_status||"WAITING FOR INDEX");
+    put("wx-hourly-nowcast-hours",row.index_nowcast_history_hours??0);
+    put("wx-hourly-nowcast-lead",row.index_nowcast_lead_minutes!=null?
+        row.index_nowcast_lead_minutes+" minutes":"—");
+    const index_nowcast_validation=row.index_nowcast_validation;
+    put("wx-hourly-nowcast-scores",index_nowcast_validation?
+        "MAE "+index_nowcast_validation.baseline_mae_f+" → "+
+                   index_nowcast_validation.candidate_mae_f+" °F"+
+        " · CRPS "+index_nowcast_validation.baseline_crps+" → "+
+                   index_nowcast_validation.candidate_crps+
+        " · 90% coverage "+
+                   Math.round(index_nowcast_validation.candidate_90_coverage*100)+"% (historical)":
+        "Insufficient point-in-time hourly index cases");
     const validation=row.learning_validation;
     put("wx-hourly-learning-scores",validation?
         "Brier "+validation.baseline_brier+" → "+validation.candidate_brier+
