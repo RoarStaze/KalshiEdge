@@ -6,7 +6,7 @@ the exact contemporaneous two-sided quotes with recorded signal decisions.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from contextlib import contextmanager
 from pathlib import Path
 import math
 import sqlite3
@@ -48,8 +48,14 @@ class StratQuoteTape:
                 row[0] for row in db.execute("SELECT DISTINCT ticker FROM quotes")
             }
 
+    @contextmanager
     def _db(self):
-        return sqlite3.connect(str(self.path), timeout=5)
+        db = sqlite3.connect(str(self.path), timeout=5)
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def append(self, *, observed_ns: int, ticker: str, close_ns: int,
                remaining_seconds: float, quotes: dict[str, UpQuote],
