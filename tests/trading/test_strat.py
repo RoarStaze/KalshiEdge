@@ -365,7 +365,7 @@ def test_fee_model_has_no_unsupported_extra_one_cent_per_leg():
     assert standard_taker_fee_estimate(D("0.70"), D("0")) == D("0")
 
 
-def test_same_market_three_losses_block_fourth_entry(tmp_path):
+def test_same_market_loss_streak_is_informational_and_fourth_paper_cycle_allowed(tmp_path):
     import sqlite3
     now = [BASE]
     close = BASE + 700 * NS
@@ -407,11 +407,11 @@ def test_same_market_three_losses_block_fourth_entry(tmp_path):
         now[0] = BASE + i * NS
         trader.tick(now[0])
     history = trader.ledger.recent()
-    assert len(history) == 3
+    assert len(history) == 4
     assert all(r["status"] == "CLOSED" and D(r["paper_net_pnl"]) < 0
                for r in history)
-    assert trader.status()["market_loss_streak"] == 3
-    assert trader.status()["last_signal"] == "THREE_SAME_MARKET_PAPER_LOSSES"
+    assert trader.status()["market_loss_streak"] == 4
+    assert trader.status()["entry_block_reason"] is None
     trader.close()
 
 
@@ -594,8 +594,8 @@ def test_market_close_gate_uses_post_response_quote_receipt_time(tmp_path):
 
 
 
-def test_daily_paper_loss_limit_still_blocks_new_entry(tmp_path):
-    """Removing global streak gate must not bypass the $2 daily risk cap."""
+def test_daily_paper_loss_is_informational_and_does_not_block_new_entries(tmp_path):
+    """Paper research should retain the $2 loss statistic without halting."""
     now = [BASE]
     close = BASE + 600 * NS
 
@@ -632,9 +632,9 @@ def test_daily_paper_loss_limit_still_blocks_new_entry(tmp_path):
     for i in range(5):
         now[0] = BASE + i * NS
         trader.tick(now[0])
-    assert trader.ledger.open_position() is None
-    assert trader.status()["entry_block_reason"] == "DAILY_PAPER_LOSS_CIRCUIT"
-    assert trader.status()["last_signal"] == "DAILY_PAPER_LOSS_CIRCUIT"
+    assert trader.ledger.open_position() is not None
+    assert D(trader.status()["daily_paper_loss_dollars"]) >= D("2")
+    assert trader.status()["entry_block_reason"] == "POSITION_OPEN"
     assert trader.status()["quote_tape_samples"] == 5
     trader.close()
 
@@ -758,3 +758,52 @@ def test_strat_dashboard_can_show_on_demand_causal_markout_audit():
     assert "/api/strat/replay" in page
     assert "NO VERIFIED EDGE" in page
     assert 'id="replayResult"' in page
+
+
+
+def test_entry_restriction_reports_clock_then_price_not_old_loss_streak(tmp_path):
+    now = [BASE]
+    close = BASE + 600 * NS
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0]
+            },
+        }
+    high = [(D("0.96"), D("0.98"))] * 5
+    trader = StratPaperTrader(
+        tmp_path, live, client=FakeMarketClient(high),
+        clock=lambda: now[0],
+    )
+    for n in range(3):
+        stamp = BASE - (30-n)*NS
+        trader.ledger.insert(
+            ticker=TICKER, side="UP", quantity=D("1"), price=D("0.70"),
+            fee=D("0.02"), paid=D("0.72"), now_ns=stamp, close_ns=close,
+        )
+        prev = trader.ledger.open_position()
+        trader.ledger.close(
+            prev["id"], price=D("0.65"), fee=D("0.02"),
+            now_ns=stamp + NS, reason="UP_MOMENTUM_SLOWED",
+            pnl=D("-0.09"),
+        )
+    trader.arm("1.00")
+    for i in range(5):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.status()["market_loss_streak"] == 3
+    assert trader.status()["entry_block_reason"] == "BOTH_SIDE_ASKS_OUTSIDE_65_85"
+    close = BASE + 60*NS
+    assert trader.status()["entry_block_reason"] == "OUTSIDE_2_MINUTE_BUY_WINDOW"
+    trader.close()
+
+
+def test_dashboard_no_longer_describes_paper_loss_circuits_as_entry_stops():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    page = render_strat_page()
+    assert "Loss streak this market" in page
+    assert "Informational daily loss" in page
+    assert "No paper-loss circuit" in page
+    assert "THREE_SAME_MARKET_PAPER_LOSSES" not in page
+    assert "DAILY_PAPER_LOSS_CIRCUIT" not in page
