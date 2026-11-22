@@ -49,18 +49,25 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(bytes_written, dest.stat().st_size)
             self.assertTrue(all(s.checkpoint == dest for s in steps))
             self.assertTrue(all(s.prefix == f'synthetic.layers.{i}.linear' for i, s in enumerate(steps)))
-            from safetensors import safe_open
-            with safe_open(str(dest), framework='np') as file:
-                self.assertEqual(len(list(file.keys())), 3 * 9)
-                for i in range(3):
-                    key = f'synthetic.layers.{i}.linear.'
-                    self.assertEqual(file.get_tensor(key + 'U_packed').shape, (33, 1))
-                    self.assertEqual(file.get_tensor(key + 'V_packed').shape, (7, 2))
-                    self.assertEqual(file.get_tensor(key + 'U_shape').tolist(), [33, 7])
-                    self.assertEqual(file.get_tensor(key + 'V_shape').tolist(), [7, 33])
-                    self.assertEqual(file.get_tensor(key + 'u1').shape, (1, 33))
-                    self.assertEqual(file.get_tensor(key + 'v2').shape, (1, 33))
-                    self.assertTrue((file.get_tensor(key + 'V_packed')[:, -1] & ~1 == 0).all())
+            import struct
+            import numpy as np
+            raw = dest.read_bytes()
+            headlen = struct.unpack('<Q', raw[:8])[0]
+            header = json.loads(raw[8:8 + headlen])
+            self.assertEqual(len(header), 3 * 9)
+            for i in range(3):
+                key = f'synthetic.layers.{i}.linear.'
+                self.assertEqual(header[key + 'U_packed']['shape'], [33, 1])
+                self.assertEqual(header[key + 'V_packed']['shape'], [7, 2])
+                self.assertEqual(header[key + 'U_shape']['shape'], [2])
+                self.assertEqual(header[key + 'V_shape']['shape'], [2])
+                self.assertEqual(header[key + 'u1']['shape'], [1, 33])
+                self.assertEqual(header[key + 'v2']['shape'], [1, 33])
+                entry = header[key + 'V_packed']
+                start, end = entry['data_offsets']
+                words = np.frombuffer(raw[8 + headlen + start:8 + headlen + end], dtype='<u4').reshape(7, 2)
+                # Last packed word contains only column 33; padding bits are clear.
+                self.assertTrue((words[:, -1] & np.uint32(0xfffffffe) == 0).all())
 
     def test_deterministic_payload_for_same_config(self):
         with tempfile.TemporaryDirectory() as tmp:
