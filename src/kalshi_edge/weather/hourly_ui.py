@@ -90,7 +90,7 @@ CALIBRATION = """
  </div>
  <div class="wx-rows">
   <div class="wx-row"><span>Evidence status</span><strong id="wx-hm-state">WAITING</strong></div>
-  <div class="wx-row"><span>Independently certified</span><strong>NO</strong></div>
+  <div class="wx-row"><span>Independently certified</span><strong>NOT CERTIFIED</strong></div>
   <div class="wx-row"><span>Live trading enabled</span><strong>NO</strong></div>
  </div>
 </article>
