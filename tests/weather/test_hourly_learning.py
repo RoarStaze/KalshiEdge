@@ -156,3 +156,11 @@ def test_future_data_does_not_leak_into_hourly_forecast():
         assert result["learning_status"]=="INSUFFICIENT_VERIFIED_HOURS"
         assert result["model_kind"]=="UNVALIDATED_HOURLY_INDEX_TREND"
         assert result["calibration_certified"] is False
+
+
+def test_weather_ui_reports_learning_evidence_without_claiming_proven_accuracy():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("forecast", "")
+    assert "Verified learning hours" in html
+    assert "Learning evidence" in html
+    assert "Not a verified accuracy claim" in html
