@@ -4,6 +4,19 @@ Isolated research prototype. **Not a working 70B inference engine.** No trading 
 
 Hardware target: Windows 11, RTX 4050 Laptop GPU (6 GB VRAM), 16 GB system RAM.
 
+## First executable engineering milestone: packed LittleBit factor inference
+
+A **dependency-free CPU reference layer** now computes directly from Samsung-compatible row-major packed binary factors, without expanding dense binary matrices. This uses **synthetic weights only** and is **not** a trained Gemma 3 27B model or an optimized inference engine. See [PACKED_ENGINE.md](PACKED_ENGINE.md) for the math, tests, and limitations.
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+python experiments\littlebit70b\packed_linear.py
+python -m unittest discover -s experiments\littlebit70b\tests -v
+```
+
+The model target remains **Gemma 3 27B + LittleBit-2, free-only, no Qwen**. These commands do not install dependencies or download weights.
+
 ## Gate before downloading weights
 
 A checkpoint must be a *trained, packed* 70B LittleBit-compatible model, not an untrained projection or a filename claiming 0.1 BPW. Its model card must document architecture, quantized tensor coverage, effective bits per parameter, evaluation results, and the exact runtime/kernel.
