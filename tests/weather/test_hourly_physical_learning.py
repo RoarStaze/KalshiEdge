@@ -353,3 +353,40 @@ def test_ui_discloses_actual_completed_index_score_counts_separately_from_pairs(
     assert "Observed historical MAE" in html
     assert "physical_adaptive_scored_hours" in html
     assert "physical_adaptive_research_scores" in html
+
+
+def test_model_training_uses_only_latest_contiguous_baseline_version():
+    examples=synthetic(100)
+    for idx,row in enumerate(examples):
+        row["baseline_kind"]="old-v1" if idx<12 else "current-v2"
+    choice=select_candidate(examples)
+    assert choice["candidate_ready"] is True
+    assert choice["baseline_kind"]=="current-v2"
+    assert choice["history_hours"]==88
+    assert choice["train_hours"]==64
+
+
+def test_approved_weights_do_not_apply_to_different_baseline_model(monkeypatch):
+    from kalshi_edge.weather.hourly_physical_learning import physical_live_decision
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    _init(conn)
+    now=START-timedelta(minutes=30)
+    selected={"city":"chicago","config_version":CONFIG,"lead_minutes":30,
+              "baseline_kind":"older-baseline",
+              "locked_at":(now-timedelta(days=1)).isoformat(),
+              "candidate_ready":True,"status":"HISTORICAL_POINT_HOLDOUT_IMPROVED",
+              "train_hours":64,"validation_hours":24,
+              "weights":[0.,.5,.5],"bias_f":0.,"sigma_scale":1.}
+    from kalshi_edge.weather.hourly_physical_learning import _sha
+    raw=json.dumps(selected,sort_keys=True)
+    conn.execute("""INSERT INTO weather_hourly_physical_locks
+        (city,config_version,lead_minutes,locked_at,params_json,params_sha)
+        VALUES(?,?,?,?,?,?)""",
+        ("chicago",CONFIG,30,selected["locked_at"],raw,_sha(raw)))
+    guidance={"status":"RESEARCH_ONLY_NOT_PROMOTED",
+              "calibration_version":CONFIG}
+    result=physical_live_decision(conn,"chicago",CONFIG,START,now,guidance,
+                                  baseline_kind="newer-baseline")
+    assert result["enabled"] is False
+    assert result["status"]=="BASELINE_MODEL_CHANGED"
