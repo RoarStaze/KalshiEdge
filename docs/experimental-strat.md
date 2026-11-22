@@ -9,7 +9,7 @@ This strategy makes **multiple separate UP or DOWN purchases and sales per KXBTC
 1. **Only buy when 2:00 or more remains** in the current 15-minute contract. Selling an existing holding remains permissible at any time the market is open.
 2. **Only buy UP or DOWN at 65¢–85¢.** Each entry uses that chosen side's executable ask reconstructed from Kalshi's YES/NO order book, not the last completed trade. The paper simulator also refuses any modeled entry fill above 85¢.
 3. **Buy on newly accelerating fast momentum in the chosen side.** The same deterministic detector evaluates five consecutive orderbook snapshots covering 2–12 seconds for either UP or DOWN. Both that side's executable bid and ask must rise, each gaining at least 2¢ over the latest two-sample segment, and the bid's recent increase per second must be at least 1.5 times its earlier rate when that earlier rate was positive. **The newest snapshot must also show a fresh bid AND ask increase over the immediately preceding snapshot**: prior-window bursts that have already stalled are rejected. Simultaneous conflicting buy signals cause a skip.
-4. **Sell when momentum slows in the side actually held.** A held-side bid reversal or a recent positive held-side bid rate at most 25% of the previous rate triggers an exit. A new faster exit trigger also recognizes when the most recent tick's bid increase falls to half or less of the previous tick's increase, without waiting for the full window to roll over. The exit remains latched through temporary lack of liquidity.
+4. **Sell when momentum slows in the side actually held.** A held-side bid reversal or declining positive bid speed triggers an exit. **One flat public REST quote no longer triggers an immediate exit**: an unchanged bid requires three consecutive flat intervals across at least two seconds to confirm that momentum has stalled. A positive latest bid rise that falls to half or less of the prior positive rise can still trigger a faster exit. Once triggered, exits remain latched through temporary lack of liquidity. This debounce reduces mechanical spread-churn but does not guarantee profits or prevent losses.
 
 The detector samples approximately every 0.75 seconds via public REST requests. This polling scheme is not an exchange-tick or low-latency momentum feed; missed moves and stale quotes are material limitations.
 
@@ -58,10 +58,19 @@ The existing three-loss brake **within the same market**, the **$2 daily
 simulated dollar loss limit**, the 12-cycle market cap and re-entry cooldown
 still apply. The UI distinguishes the actual entry restriction from
 nonqualifying momentum, and separately shows the informational global streak,
-recorded snapshot count and market count. No feature forecasts wins from this
-new tape; the next milestone is timestamp-correct replay of pre-entry quote
-conditions and subsequent executable bids, using the same estimated fees and
-a holdout period to avoid overfitting. Reconstructing actual maker fills
+recorded snapshot count and market count. The Strat page has an **Analyze captured momentum** button. It opens a local,
+read-only endpoint (`/api/strat/replay`) and compares prior unheld BUY signals
+with strictly subsequent executable best bids at 2, 5, 10 and 20 seconds
+(allowing at most three seconds of quote collection jitter). The report assumes
+one-contract taker entry at ask+1c and liquidation at bid-1c with the same
+indicative standard fee estimate used by the paper engine. Missing future
+quotes, insufficient candidates (fewer than 30), and a truncated sample
+(first 5000 historical candidate records) are identified explicitly. Overlap
+between time horizons or repeated candidate signals makes estimates correlated.
+No replay result is evidence of a predictive trading edge: there is **no
+holdout-tested conditional return estimator, real fill reconciliation, or
+verified maker execution**. Re-evaluate on subsequent untampered data rather
+than optimizing against the same known losses. Reconstructing actual maker fills
 requires independent trade and order-queue evidence not contained in REST
 orderbook snapshots.
 
@@ -72,8 +81,9 @@ No change authorizes real-money orders.
 - Signal: `src/kalshi_edge/trading/strat_policy.py` (pure deterministic decision; no network).
 - Paper executor + durable ledger: `src/kalshi_edge/trading/strat_paper.py`.
 - Causal timestamped quote store: `src/kalshi_edge/trading/strat_tape.py`.
+- Read-only forward-quote audit: `src/kalshi_edge/trading/strat_replay.py`.
 - Local dashboard: `src/kalshi_edge/bootstrap/strat_ui.py` at `/strat`.
-- Same-origin, localhost-only HTTP controls: `/api/strat/status`, `/api/strat/arm`, and `/api/strat/pause`.
+- Localhost-only read endpoints: `/api/strat/status` and `/api/strat/replay`; same-origin action endpoints: `/api/strat/arm` and `/api/strat/pause`.
 - Regression coverage: `tests/trading/test_strat.py`.
 
 **Important:** No signed client, account balance, authenticated positions, or live order POST is used by Strat. The separate preexisting manual trading and final-forecast AutoTrade routes are not modified by the experiment. Before authorizing real-money mode, validate representative live orderbook capture, actual maker/taker execution, partial fills, order reconciliation on unknown outcomes, and net after-fee P&L. Simulated price paths are not evidence of profitability.
