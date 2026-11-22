@@ -69,19 +69,22 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <a href="/trade">Trade</a><a href="/train">Train</a>
 <a href="/history">History</a><a href="/strat" class="current" aria-current="page">Strat</a>
 <a href="/api">API</a></nav></header>
-<h1>UP Momentum · Strat</h1>
-<p class="sub">15-minute BTC · repeated UP entries and momentum-slowdown exits ·
+<h1>UP / DOWN Momentum · Strat</h1>
+<p class="sub">15-minute BTC · repeated UP or DOWN entries and held-side momentum-slowdown exits ·
 <strong>PAPER SIMULATION ONLY</strong>. No real orders are submitted.</p>
 <div class="grid">
 <section class="card"><h2>Current Market</h2>
 <div id="remain" class="metric">—</div><div class="caption">Time until market close</div>
 <div class="kv"><span>Market</span><span id="ticker">Waiting for feed</span></div>
 <div class="kv"><span>Executable UP ask</span><strong id="upAsk">—</strong></div>
+<div class="kv"><span>Executable DOWN ask</span><strong id="downAsk">—</strong></div>
 <div class="kv"><span>Entry window</span><span id="window">—</span></div>
 <div class="kv"><span>Sample count</span><span id="samples">0 / 5</span></div>
 </section>
 <section class="card"><h2>Live Momentum</h2>
-<div id="speed" class="metric">—</div><div class="caption">UP bid change · cents per second</div>
+<div id="speed" class="metric">—</div><div class="caption">Held-side / leading bid change · cents per second</div>
+<div class="kv"><span>UP bid momentum</span><strong id="upSpeed">—</strong></div>
+<div class="kv"><span>DOWN bid momentum</span><strong id="downSpeed">—</strong></div>
 <div class="kv"><span>Acceleration ratio</span><strong id="ratio">—</strong></div>
 <div class="kv"><span>Decision</span><strong id="signal">DISARMED</strong></div>
 <div class="kv"><span>Paper position</span><span id="held">FLAT</span></div>
@@ -99,14 +102,14 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="kv"><span>Virtual cash</span><span id="cash">—</span></div>
 </section>
 <section class="card span"><h2>Exactly four strategy rules</h2><div class="rules">
-<div class="rule"><small>BUY TIME</small><strong>≥ 7:00</strong><small>Never open a new UP position below seven minutes remaining.</small></div>
-<div class="rule"><small>UP PRICE</small><strong>65¢–85¢</strong><small>Entry is based on the executable UP ask, not the last trade.</small></div>
-<div class="rule"><small>BUY TRIGGER</small><strong>UP speed ↑</strong><small>Fresh simultaneous bid/ask burst, faster than the preceding samples.</small></div>
-<div class="rule"><small>SELL TRIGGER</small><strong>UP speed ↓</strong><small>Bid momentum slows materially or reverses. Exits remain allowed below 7:00.</small></div>
+<div class="rule"><small>BUY TIME</small><strong>≥ 2:00</strong><small>Never open a new UP or DOWN position below two minutes remaining.</small></div>
+<div class="rule"><small>SIDE PRICE</small><strong>65¢–85¢</strong><small>Buy only when the chosen UP or DOWN executable ask qualifies.</small></div>
+<div class="rule"><small>BUY TRIGGER</small><strong>Side speed ↑</strong><small>Fresh UP or DOWN bid/ask acceleration, measured on that side.</small></div>
+<div class="rule"><small>SELL TRIGGER</small><strong>Side speed ↓</strong><small>Held-side bid momentum slows or reverses. Exits continue below 2:00.</small></div>
 </div></section>
 <section class="card span"><h2>Experimental round trips · persistent local ledger</h2>
-<div class="scroll"><table><thead><tr><th>Market</th><th>State</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Net hypothetical P&amp;L</th></tr></thead>
-<tbody id="rounds"><tr><td colspan="6">No simulated rounds yet</td></tr></tbody></table></div>
+<div class="scroll"><table><thead><tr><th>Market</th><th>Side</th><th>State</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Net hypothetical P&amp;L</th></tr></thead>
+<tbody id="rounds"><tr><td colspan="7">No simulated rounds yet</td></tr></tbody></table></div>
 <p class="sub">Simulated entry/exit includes one cent slippage on each leg and fee estimates. Paper fills are not evidence of fillability or profitability.</p>
 </section></div></main>
 <script>
@@ -126,20 +129,23 @@ async function refresh(){
   set("signal",s.last_signal);set("samples",s.samples+" / 5");
   set("speed",Number(s.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("ratio",s.acceleration_ratio==null?"—":Number(s.acceleration_ratio).toFixed(2)+"×");
+  set("upSpeed",s.side_momentum?.UP==null?"—":Number(s.side_momentum.UP.speed_cents_per_second).toFixed(2)+" ¢/s");
+  set("downSpeed",s.side_momentum?.DOWN==null?"—":Number(s.side_momentum.DOWN.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("pnl",money(s.paper_net_pnl_dollars));set("cash",money(s.virtual_cash_dollars));
-  set("held",s.open_position?"LONG UP · "+s.open_position.quantity+" shares":"FLAT");
+  set("held",s.open_position?"LONG "+s.open_position.side+" · "+s.open_position.quantity+" shares":"FLAT");
   const ticker=l.market_ticker||s.market_ticker;set("ticker",ticker||"Waiting");
   const sec=Number(l.seconds_remaining);const valid=Number.isFinite(sec)&&sec>0;
   set("remain",valid?Math.floor(sec/60)+":"+String(Math.floor(sec%60)).padStart(2,"0"):"—");
-  set("window",valid?(sec>=420?"7-minute window open":"NEW BUYS CLOSED"):"WAIT");
+  set("window",valid?(sec>=120?"2-minute window open":"NEW BUYS CLOSED"):"WAIT");
   const b=s.round_trips||[];set("cycles",b.filter(r=>r.ticker===ticker).length);
   const tb=el("rounds");tb.replaceChildren();
-  if(!b.length){row(tb,["No simulated rounds yet","","","","",""]);}else{
-   b.forEach(r=>row(tb,[r.ticker,r.status,Number(r.entry_price)*100+"¢",
+  if(!b.length){row(tb,["No simulated rounds yet","","","","","",""]);}else{
+   b.forEach(r=>row(tb,[r.ticker,r.side,r.status,Number(r.entry_price)*100+"¢",
      r.exit_price==null?"—":Number(r.exit_price)*100+"¢",
      r.quantity,r.paper_net_pnl==null?"OPEN":money(r.paper_net_pnl)]))}
   el("arm").disabled=s.enabled;el("pause").disabled=!s.enabled;
   set("upAsk",s.up_ask_cents==null?"—":s.up_ask_cents+"¢");
+  set("downAsk",s.down_ask_cents==null?"—":s.down_ask_cents+"¢");
  }catch(e){set("feedback","Status unavailable: "+e.message)}
 }
 async function action(kind){

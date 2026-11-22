@@ -5,7 +5,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 from kalshi_edge.trading.strat_policy import (
-    UpQuote, evaluate_up_momentum,
+    UpQuote, evaluate_up_momentum, evaluate_side_momentum,
 )
 from kalshi_edge.trading.strat_paper import StratPaperTrader
 
@@ -24,31 +24,31 @@ def quotes(bids, asks=None, *, base=BASE, ticker=TICKER):
     ]
 
 
-def test_entry_requires_7_minutes_and_65_85_and_new_acceleration():
+def test_entry_requires_2_minutes_and_65_85_and_new_acceleration():
     series = quotes(list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"])))
-    assert evaluate_up_momentum(series, 420, holding=False).action == "BUY"
-    assert evaluate_up_momentum(series, 419.999, holding=False).action == "WAIT"
+    assert evaluate_up_momentum(series, 120, holding=False).action == "BUY"
+    assert evaluate_up_momentum(series, 119.999, holding=False).action == "WAIT"
     assert evaluate_up_momentum(series, 901, holding=False).action == "WAIT"
     assert evaluate_up_momentum(
-        quotes([q.bid - D("0.06") for q in series]), 420, holding=False
+        quotes([q.bid - D("0.06") for q in series]), 120, holding=False
     ).reason == "UP_ASK_OUTSIDE_65_85"
     assert evaluate_up_momentum(
-        quotes([q.bid + D("0.18") for q in series]), 420, holding=False
+        quotes([q.bid + D("0.18") for q in series]), 120, holding=False
     ).reason == "UP_ASK_OUTSIDE_65_85"
     assert evaluate_up_momentum(
         quotes(list(map(D, ["0.64", "0.65", "0.66", "0.67", "0.68"]))),
-        420, holding=False,
+        120, holding=False,
     ).action == "WAIT"
 
 
-def test_exit_remains_enabled_after_seven_minute_cutoff():
+def test_exit_remains_enabled_after_two_minute_cutoff():
     series = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
-    signal = evaluate_up_momentum(series, 200, holding=True)
+    signal = evaluate_up_momentum(series, 80, holding=True)
     assert signal.action == "SELL"
     assert signal.reason == "UP_MOMENTUM_DECELERATED"
     assert evaluate_up_momentum(
         quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"]))),
-        100, holding=True,
+        60, holding=True,
     ).action == "SELL"
 
 
@@ -135,3 +135,193 @@ def test_budget_rejects_oversize_or_malformed(tmp_path: Path):
         with pytest.raises(ValueError):
             trader.arm(amount)
     trader.close()
+
+
+
+def test_down_entry_obeys_identical_time_price_acceleration_rules():
+    # These are executable DOWN bids/asks, not inverted BTC spot returns.
+    down = quotes(list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"])))
+    assert evaluate_side_momentum(down, 120, side="DOWN", holding=False).action == "BUY"
+    assert evaluate_side_momentum(down, 119.999, side="DOWN", holding=False).action == "WAIT"
+    assert evaluate_side_momentum(
+        quotes([q.bid - D("0.06") for q in down]), 600, side="DOWN",
+        holding=False).action == "WAIT"
+    assert evaluate_side_momentum(
+        quotes([q.bid + D("0.18") for q in down]), 600, side="DOWN",
+        holding=False).action == "WAIT"
+    assert evaluate_side_momentum(down, 600, side="SIDEWAYS", holding=False).action == "WAIT"
+
+
+def test_down_exit_when_down_bid_slows_even_after_buy_cutoff():
+    down = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
+    outcome = evaluate_side_momentum(down, 80, side="DOWN", holding=True)
+    assert outcome.action == "SELL"
+    assert outcome.reason == "DOWN_MOMENTUM_DECELERATED"
+    down_reversal = quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"])))
+    assert evaluate_side_momentum(
+        down_reversal, 60, side="DOWN", holding=True
+    ).reason == "DOWN_BID_REVERSAL"
+
+
+class FakeDownClient:
+    def __init__(self, down_quotes):
+        self.values = iter(down_quotes)
+        self.calls = 0
+
+    def quote(self, ticker):
+        self.calls += 1
+        bid, ask = next(self.values)
+        return {"market": {"ticker": ticker, "status": "active"}}, {
+            "orderbook_fp": {
+                "yes_dollars": [[str(D("1") - ask), "100"]],
+                "no_dollars": [[str(bid), "100"]],
+            }
+        }
+
+    def close(self):
+        pass
+
+
+def test_bidirectional_trader_paper_buys_and_sells_down(tmp_path):
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    client = FakeDownClient([(x, x + D("0.02")) for x in values])
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(tmp_path, live, client=client, clock=lambda: now[0])
+    assert trader.status()["enabled"] is False
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE + i * NS
+        trader.tick(now[0])
+    history = trader.ledger.recent()
+    assert len(history) == 1
+    assert history[0]["side"] == "DOWN"
+    assert history[0]["status"] == "CLOSED"
+    assert history[0]["exit_reason"] == "DOWN_MOMENTUM_SLOWED"
+    assert client.calls == len(values)
+    assert D(history[0]["paper_net_pnl"]) < D("0")
+    assert trader.status()["down_ask_cents"] is not None
+    assert trader.status()["open_position"] is None
+    trader.close()
+
+
+def test_down_official_settlement_and_single_inventory(tmp_path):
+    values = list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"]))
+    client = FakeDownClient([(x, x + D("0.02")) for x in values])
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(
+        tmp_path, live, client=client, clock=lambda: now[0],
+        settlement_reader=lambda ticker: "no",
+    )
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE + i * NS
+        trader.tick(now[0])
+    open_pos = trader.ledger.open_position()
+    assert open_pos is not None and open_pos["side"] == "DOWN"
+    assert len(trader.ledger.recent()) == 1
+    now[0] = close + 1
+    trader.tick(now[0])
+    result = trader.ledger.recent()[0]
+    assert result["status"] == "SETTLED"
+    assert D(result["paper_net_pnl"]) == D(result["quantity"]) - D(result["total_paid"])
+    assert trader.ledger.open_position() is None
+    trader.close()
+
+
+
+def test_one_inventory_can_switch_from_up_to_down_after_prior_exit(tmp_path):
+    """Alternating momentum is allowed, simultaneous UP and DOWN is not."""
+    up = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    down = list(map(D, [
+        "0.64", "0.64", "0.64", "0.64", "0.64",
+        "0.64", "0.64", "0.64", "0.64", "0.64",
+        "0.64", "0.64", "0.64", "0.65", "0.66", "0.68",
+    ]))
+    prices = [("UP", value) for value in up] + [
+        ("DOWN", value) for value in down
+    ]
+
+    class Feed:
+        def __init__(self):
+            self.records = iter(prices)
+
+        def quote(self, ticker):
+            side, bid = next(self.records)
+            ask = bid + D("0.02")
+            if side == "UP":
+                yes_bid, no_bid = bid, D("1") - ask
+            else:
+                yes_bid, no_bid = D("1") - ask, bid
+            return {"market": {"ticker": ticker, "status": "open"}}, {
+                "orderbook_fp": {
+                    "yes_dollars": [[str(yes_bid), "100"]],
+                    "no_dollars": [[str(no_bid), "100"]],
+                }
+            }
+
+        def close(self):
+            pass
+
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER,
+            "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(tmp_path, live, client=Feed(), clock=lambda: now[0])
+    trader.arm("1.00")
+    for index in range(len(prices)):
+        now[0] = BASE + index * NS
+        trader.tick(now[0])
+        assert len([r for r in trader.ledger.recent()
+                    if r["status"] == "OPEN"]) <= 1
+    history = trader.ledger.recent()
+    assert len(history) == 2
+    assert history[0]["side"] == "DOWN" and history[0]["status"] == "OPEN"
+    assert history[1]["side"] == "UP" and history[1]["status"] == "CLOSED"
+    assert history[0]["entered_at_ns"] > history[1]["exit_ns"]
+    trader.close()
+
+
+def test_strat_page_shows_both_sides_and_two_minute_buy_gate():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    html = render_strat_page()
+    assert "UP / DOWN Momentum" in html
+    assert "Executable DOWN ask" in html
+    assert 'id="downSpeed"' in html
+    assert "≥ 2:00" in html
+    assert "sec>=120" in html
+    assert 'r.side,r.status' in html
+    assert "≥ 7:00" not in html
