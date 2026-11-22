@@ -232,3 +232,38 @@ def test_hourly_api_routes_are_read_only_in_live_and_preview(tmp_path):
                     assert client.post(uri,json={}).status_code in (403,404)
         finally:
             server.shutdown();server.server_close();worker.join(timeout=3)
+
+
+
+def test_hourly_settlement_raw_evidence_tamper_fails_closed(tmp_path):
+    db=tmp_path/"weatheredge.sqlite3"
+    async def setup():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            await collect_hourly_once(db,client=client,cities=("chicago",),clock=lambda:NOW)
+    asyncio.run(setup())
+    journal_hourly_forecasts(db,asof=NOW)
+    after=TARGET+timedelta(minutes=12)
+    def settle_response(request):
+        if "/live_data/weather/" in request.url.path:
+            p=points(after)
+            p["timeseries"]=[{"t":int(TARGET.timestamp()*1000),"v":56.1,
+                               "status":"normal","contributors":5}]
+            return httpx.Response(200,json=p)
+        return httpx.Response(200,json={"markets":[market(status="settled",result="yes")],"cursor":""})
+    async def finish():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(settle_response)) as client:
+            return await settle_hourly_once(db,client=client,clock=lambda:after)
+    assert asyncio.run(finish())["verified"]==1
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE weather_hourly_settlements SET source_index_raw='{}'")
+    report=hourly_calibration(tmp_path/"bootstrap",db_path=db)
+    assert report["matched_hours"]==0
+    assert report["status"]=="HOURLY_AUDIT_ERROR"
+
+
+def test_fall_dst_repeated_eastern_hour_never_duplicates_ambiguous_event():
+    # November 1, 2026 at 06:00Z is the *second* 01:00 Eastern; contract
+    # methodology chooses the first occurrence of a repeated local hour.
+    event,target=event_for("chicago",datetime(2026,11,1,5,40,tzinfo=timezone.utc))
+    assert target==datetime(2026,11,1,7,0,tzinfo=timezone.utc)
+    assert event=="KXTEMPCHIHS-26NOV0102"
