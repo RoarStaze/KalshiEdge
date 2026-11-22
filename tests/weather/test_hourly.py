@@ -31,7 +31,10 @@ def index_data(city="chicago", when=None, value=61.25, status="normal"):
 
 def test_only_official_index_cities_and_next_utc_hour():
     assert tuple(CITIES)==("chicago","nyc","miami","la-coastal")
-    assert all("HS" in CITIES[c]["series"] for c in CITIES)
+    assert CITIES["chicago"]["series"] == "KXTEMPCHIHS"
+    assert CITIES["nyc"]["series"] == "KXTEMPNYCHS"
+    assert CITIES["miami"]["series"] == "KXTEMPMIAH"
+    assert CITIES["la-coastal"]["series"] == "KXTEMPLAXHS"
     assert next_settlement_hour(datetime(2026,11,22,17,25,tzinfo=timezone.utc)) == datetime(
         2026,11,22,18,0,tzinfo=timezone.utc)
     assert next_settlement_hour(datetime(2026,11,22,17,0,tzinfo=timezone.utc)) == datetime(
