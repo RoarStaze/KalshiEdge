@@ -21,6 +21,7 @@ _DASHBOARD_FILES = (
     "bootstrap/strat_ui.py",
     "trading/strat_policy.py",
     "trading/strat_paper.py",
+    "trading/strat_tape.py",
     "bootstrap/scalp_paper_ui.py",
     "trading/paper_scalper.py",
     "trading/scalp_policy.py",

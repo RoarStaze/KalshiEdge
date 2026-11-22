@@ -20,6 +20,7 @@ from .paper import PublicMarketClient
 from .paper_scalper import PaperScalpLedger
 from .scalp_policy import quote_from_kalshi
 from .strat_policy import UpQuote, evaluate_side_momentum
+from .strat_tape import StratQuoteTape
 
 D = Decimal
 NS = 1_000_000_000
@@ -67,12 +68,16 @@ class StratPaperTrader:
             Path(root).resolve() / "trading" / "strat_up_paper.sqlite3",
             INITIAL_CAPITAL,
         )
+        self.tape = StratQuoteTape(
+            Path(root).resolve() / "trading" / "strat_quote_tape.sqlite3"
+        )
         self.read_live = read_live
         self.client = client if client is not None else PublicMarketClient()
         self.clock = clock
         self.settlement_reader = settlement_reader
         self._lock = threading.RLock()
         self._enabled = False   # restart NEVER authorizes new positions
+        self._capture_failed = False
         self._budget = D("1.00")
         self._samples: dict[str, deque[UpQuote]] = {
             side: deque(maxlen=5) for side in ("UP", "DOWN")
@@ -118,10 +123,13 @@ class StratPaperTrader:
             raise ValueError("Unverified public market identity")
         if info.get("status") not in ("active", "open"):
             raise ValueError("Public market is no longer tradable")
+        # REST responses can arrive after the decision loop timestamp. Use
+        # client receipt time for both sides; never claim exchange event time.
+        received_ns = self.clock()
         quotes = {}
         for side in ("UP", "DOWN"):
-            q = quote_from_kalshi(book, side, timestamp_ns=now)
-            quotes[side] = UpQuote(ticker, now, q.bid, q.ask,
+            q = quote_from_kalshi(book, side, timestamp_ns=received_ns)
+            quotes[side] = UpQuote(ticker, received_ns, q.bid, q.ask,
                                    q.bid_available, q.ask_available)
         return quotes
 
@@ -177,11 +185,32 @@ class StratPaperTrader:
             streak += 1
         return streak
 
+    def _global_loss_streak(self, now: int) -> int:
+        """Today-UTC loss streak across ALL market tickers, not per ticker.
+
+        Persisted closed fills are the source of truth. Restarts and the
+        market's 15m boundary cannot reset a bad trading session.
+        """
+        day = datetime.fromtimestamp(now / NS, timezone.utc).date()
+        streak = 0
+        for row in self.ledger.recent(100000):
+            if row["status"] == "OPEN":
+                continue
+            if datetime.fromtimestamp(
+                    row["exit_ns"] / NS, timezone.utc).date() != day:
+                break
+            if D(row["paper_net_pnl"]) >= 0:
+                break
+            streak += 1
+        return streak
+
     def status(self) -> dict:
         with self._lock:
             now = self.clock()
             stats = self._stats(now)
             position = stats["open"]
+            tape = self.tape.summary()
+            streak = self._global_loss_streak(now)
             return {
                 "mode": "EXPERIMENTAL_PAPER_ONLY",
                 "enabled": self._enabled,
@@ -191,6 +220,12 @@ class StratPaperTrader:
                 "paper_net_pnl_dollars": _cash(stats["pnl"]),
                 "daily_paper_loss_dollars": _cash(stats["loss"]),
                 "market_loss_streak": self._market_loss_streak(self._ticker),
+                "global_loss_streak": streak,
+                "global_loss_circuit_active": streak >= 3,
+                "quote_tape_samples": tape["snapshots"],
+                "quote_tape_markets": tape["markets"],
+                "quote_tape_path": tape["path"],
+                "quote_tape_healthy": not self._capture_failed,
                 "max_same_market_loss_streak": 3,
                 "fee_mode": "INDICATIVE_STANDARD_TAKER_JULY_2026",
                 "slippage_cents_per_leg": "1.00",
@@ -220,7 +255,10 @@ class StratPaperTrader:
                     "entry": "NEW_EXECUTABLE_SIDE_ACCELERATION",
                     "exit": "HELD_SIDE_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
                 },
-                "warning": ("Paper only: top-of-book hypothetical fills with 1c "
+                "warning": ("Signal has no verified positive expectancy. "
+                            "Three same-day consecutive losses across markets "
+                            "block new paper entries while quotes keep recording. "
+                            "Paper only: top-of-book hypothetical fills with 1c "
                             "slippage per leg and indicative standard taker fees. "
                             "Market-specific fees and actual fills are unverified. "
                             "No demonstrated positive after-fee expectancy; "
@@ -239,6 +277,7 @@ class StratPaperTrader:
                     or budget > max(D("0"), stats["cash"]) * D("0.05")):
                 raise ValueError("Strat budget must be $0.10–$5 and <=5% paper cash")
             self._budget = budget
+            self._capture_failed = False  # next observation retries tape write
             self._enabled = True
             self._last_signal = "SCANNING_UP_AND_DOWN_MOMENTUM"
             return self.status()
@@ -332,7 +371,10 @@ class StratPaperTrader:
                     self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
                 return self.status()
             if opened is None and not self._enabled:
-                self._last_signal = "DISARMED_OR_PAUSED"
+                self._last_signal = (
+                    "QUOTE_TAPE_WRITE_FAILED" if self._capture_failed
+                    else "DISARMED_OR_PAUSED"
+                )
                 return self.status()
             try:
                 quotes = self._quote(ticker, now)
@@ -340,6 +382,10 @@ class StratPaperTrader:
                 self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
                 return self.status()
 
+            observed_ns = quotes["UP"].observed_ns
+            if observed_ns >= close:
+                self._last_signal = "MARKET_CLOSED_DURING_QUOTE"
+                return self.status()
             for side in ("UP", "DOWN"):
                 self._samples[side].append(quotes[side])
             self._last_ask_cents = format(quotes["UP"].ask * 100, ".2f")
@@ -356,7 +402,7 @@ class StratPaperTrader:
                     self._breakeven_cents[side] = format(drag * 100, ".2f")
                 else:
                     self._breakeven_cents[side] = None
-            remain = (close - now) / NS
+            remain = (close - observed_ns) / NS
             signals = {
                 side: evaluate_side_momentum(
                     list(self._samples[side]), remain, side=side,
@@ -366,6 +412,25 @@ class StratPaperTrader:
                 )
                 for side in ("UP", "DOWN")
             }
+            # Persist contemporaneous UP+DOWN quotes and causal decisions.
+            # If writing fails, do not create a new hypothetical position:
+            # otherwise there is no timestamp-correct evidence to audit it.
+            try:
+                self.tape.append(
+                    observed_ns=observed_ns, ticker=ticker, close_ns=close,
+                    remaining_seconds=remain,
+                    quotes=quotes,
+                    signals={side: signals[side].reason for side in ("UP", "DOWN")},
+                    position_side=opened["side"] if opened is not None else None,
+                )
+            except Exception:
+                LOG.exception("Strat quote evidence not durable")
+                if opened is None:
+                    self._last_signal = "QUOTE_TAPE_WRITE_FAILED"
+                    self._capture_failed = True
+                    self._enabled = False
+                    return self.status()
+
             for side in ("UP", "DOWN"):
                 self._side_speeds[side] = signals[side].speed_cents_per_second
                 self._side_reasons[side] = signals[side].reason
@@ -381,17 +446,19 @@ class StratPaperTrader:
                     self._last_signal = "INVALID_OPEN_POSITION_SIDE"
                 elif signals[held].action == "SELL" or self._exit_latched:
                     self._exit_latched = True
-                    self._exit(opened, quotes[held], now)
+                    self._exit(opened, quotes[held], observed_ns)
                 else:
                     self._last_signal = signals[held].reason
-            elif market_info != (ticker, close):
+            elif self._market(observed_ns) != (ticker, close):
                 self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
+            elif self._market_loss_streak(ticker) >= 3:
+                self._last_signal = "THREE_SAME_MARKET_PAPER_LOSSES"
+            elif self._global_loss_streak(observed_ns) >= 3:
+                self._last_signal = "GLOBAL_LOSS_CIRCUIT_ACTIVE"
             elif stats["loss"] >= DAILY_LOSS_LIMIT:
                 self._last_signal = "DAILY_PAPER_LOSS_CIRCUIT"
             elif self.ledger.ticker_count(ticker) >= MAX_CYCLES:
                 self._last_signal = "MAX_MARKET_CYCLES"
-            elif self._market_loss_streak(ticker) >= 3:
-                self._last_signal = "THREE_SAME_MARKET_PAPER_LOSSES"
             elif now - self._last_exit_ns < COOLDOWN_NS:
                 self._last_signal = "REENTRY_COOLDOWN"
             else:
@@ -400,7 +467,7 @@ class StratPaperTrader:
                 ]
                 if len(candidates) == 1:
                     selected = candidates[0]
-                    self._enter(quotes[selected], selected, close, now, stats)
+                    self._enter(quotes[selected], selected, close, observed_ns, stats)
                 elif len(candidates) > 1:
                     self._last_signal = "AMBIGUOUS_BIDIRECTIONAL_ACCELERATION"
                 else:

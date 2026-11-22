@@ -421,3 +421,169 @@ def test_strat_dashboard_shows_fee_and_price_components():
     assert "Fee estimate" in page
     assert "Gross price P&amp;L" in page
     assert "Break-even move" in page
+
+
+
+def test_quote_tape_preserves_two_sided_causal_observations(tmp_path):
+    from kalshi_edge.trading.strat_tape import StratQuoteTape
+    path = tmp_path / "strat_quotes.sqlite3"
+    tape = StratQuoteTape(path)
+    up, down = (quotes([D("0.68")])[0],
+                quotes([D("0.28")], asks=[D("0.30")])[0])
+    tape.append(
+        observed_ns=BASE, ticker=TICKER, close_ns=BASE + 600*NS,
+        remaining_seconds=600.0,
+        quotes={"UP": up, "DOWN": down},
+        signals={"UP": "NEW_FAST_UP_MOMENTUM", "DOWN": "WAIT"},
+        position_side=None,
+    )
+    tape.append(
+        observed_ns=BASE, ticker=TICKER, close_ns=BASE + 600*NS,
+        remaining_seconds=600.0,
+        quotes={"UP": up, "DOWN": down},
+        signals={"UP": "CHANGED", "DOWN": "CHANGED"},
+        position_side=None,
+    )
+    assert tape.summary()["snapshots"] == 1
+    assert tape.summary()["markets"] == 1
+    tape_reopened = StratQuoteTape(path)
+    rows = tape_reopened.recent(3)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["up_bid"] == "0.68"
+    assert row["up_ask"] == "0.70"
+    assert row["down_bid"] == "0.28"
+    assert row["down_ask"] == "0.30"
+    assert row["up_signal"] == "NEW_FAST_UP_MOMENTUM"
+    assert row["remaining_seconds"] == 600.0
+
+
+def test_global_consecutive_loss_brake_persists_across_tickers(tmp_path):
+    from kalshi_edge.trading.strat_tape import StratQuoteTape
+    now = [BASE]
+    ticker = "KXBTC15M-NEWMARKET"
+    end = BASE + 650 * NS
+
+    def live():
+        return {
+            "market_ticker": ticker, "market_close_ts_ns": end,
+            "latest_prediction": {
+                "market_ticker": ticker, "prediction_ts_ns": now[0],
+            }
+        }
+
+    bids = list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"]))
+    trader = StratPaperTrader(
+        tmp_path, live, client=FakeMarketClient(
+            [(bid, bid+D("0.02")) for bid in bids]),
+        clock=lambda: now[0],
+    )
+    for n in range(3):
+        opened_at = BASE - (30-n)*NS
+        trader.ledger.insert(
+            ticker=f"KXBTC15M-PREV{n}", side="UP", quantity=D("1"),
+            price=D("0.70"), fee=D("0.02"), paid=D("0.72"),
+            now_ns=opened_at, close_ns=BASE + 600*NS,
+        )
+        row = trader.ledger.open_position()
+        trader.ledger.close(
+            row["id"], price=D("0.65"), fee=D("0.02"),
+            now_ns=opened_at+NS, reason="UP_MOMENTUM_SLOWED",
+            pnl=D("-0.09"),
+        )
+    assert trader.status()["global_loss_streak"] == 3
+    trader.arm("1.00")
+    for i in range(5):
+        now[0] = BASE + i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is None
+    assert len(trader.ledger.recent()) == 3
+    assert trader.status()["last_signal"] == "GLOBAL_LOSS_CIRCUIT_ACTIVE"
+    assert trader.status()["quote_tape_samples"] == 5
+    tape = StratQuoteTape(tmp_path/"trading"/"strat_quote_tape.sqlite3")
+    assert tape.summary()["markets"] == 1
+    assert tape.recent(1)[0]["up_signal"] == "NEW_FAST_UP_MOMENTUM"
+    # A new UTC session starts a fresh global entry-risk streak.
+    assert trader._global_loss_streak(BASE + 24*3600*NS) == 0
+    trader.close()
+
+
+def test_no_entry_on_quote_recorder_failure(tmp_path):
+    now = [BASE]
+    close = BASE+600*NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            },
+        }
+
+    trader = StratPaperTrader(
+        tmp_path, live, client=FakeMarketClient(
+            [(bid, bid+D("0.02")) for bid in map(D, [
+                "0.64", "0.64", "0.65", "0.66", "0.68"
+            ])]),
+        clock=lambda: now[0],
+    )
+    trader.arm("1.00")
+    def fail(*args, **kwargs):
+        raise OSError("Disk full")
+    trader.tape.append = fail
+    for i in range(5):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is None
+    assert trader.status()["last_signal"] == "QUOTE_TAPE_WRITE_FAILED"
+    trader.close()
+
+
+def test_quote_tape_and_global_circuit_are_visible_in_dashboard():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    html = render_strat_page()
+    assert "Captured book snapshots" in html
+    assert "Cross-market loss streak" in html
+    assert "quote_tape_samples" in html
+    assert "global_loss_streak" in html
+
+
+
+def test_market_close_gate_uses_post_response_quote_receipt_time(tmp_path):
+    """Network request time must not turn 1:59 into a legal 2:00 entry."""
+    start = [BASE]
+    close = BASE + 124*NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": start[0],
+            },
+        }
+
+    class SlowClient(FakeMarketClient):
+        def quote(self, ticker):
+            market, book = super().quote(ticker)
+            start[0] += NS  # REST response took one second
+            return market, book
+
+    prices = [
+        (bid, bid+D("0.02")) for bid in map(D, [
+            "0.64", "0.64", "0.65", "0.66", "0.68"
+        ])
+    ]
+    trader = StratPaperTrader(
+        tmp_path, live, client=SlowClient(prices), clock=lambda: start[0],
+    )
+    trader.arm("1.00")
+    for i in range(5):
+        start[0] = BASE+i*NS
+        trader.tick(BASE+i*NS)
+    assert trader.ledger.open_position() is None
+    assert trader.ledger.recent() == []
+    captured = trader.tape.recent(1)[0]
+    assert captured["observed_ns"] == BASE+5*NS
+    assert captured["remaining_seconds"] == 119.0
+    assert captured["up_signal"] == "OUTSIDE_2_MINUTE_BUY_WINDOW"
+    trader.close()
