@@ -266,15 +266,25 @@ class StratPaperTrader:
             elif market_info is not None:
                 ticker, close = market_info
             else:
-                self._samples.clear()
+                for history in self._samples.values():
+                    history.clear()
                 self._ticker = None
                 self._last_signal = "WAITING_FOR_FRESH_MARKET"
                 return self.status()
+
             if self._ticker != ticker:
+                for history in self._samples.values():
+                    history.clear()
                 self._last_ask_cents = None
-                self._samples.clear()
+                self._last_down_ask_cents = None
+                self._side_speeds = {"UP": 0.0, "DOWN": 0.0}
+                self._side_reasons = {"UP": "WARMING_UP", "DOWN": "WARMING_UP"}
                 self._ticker = ticker
-                self._exit_latched = False
+                # Do not discard a latched liquidation on a market switch if
+                # an existing inventory is still open in its old market.
+                if opened is None:
+                    self._exit_latched = False
+
             if close <= now:
                 if opened is not None and not self._settle(opened, now):
                     self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
@@ -283,28 +293,43 @@ class StratPaperTrader:
                 self._last_signal = "DISARMED_OR_PAUSED"
                 return self.status()
             try:
-                quote = self._quote(ticker, now)
+                quotes = self._quote(ticker, now)
             except Exception as exc:
                 self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
                 return self.status()
-            self._samples.append(quote)
-            self._last_ask_cents = format(quote.ask * 100, ".2f")
+
+            for side in ("UP", "DOWN"):
+                self._samples[side].append(quotes[side])
+            self._last_ask_cents = format(quotes["UP"].ask * 100, ".2f")
+            self._last_down_ask_cents = format(quotes["DOWN"].ask * 100, ".2f")
             remain = (close - now) / NS
-            signal = evaluate_up_momentum(
-                list(self._samples), remain,
-                holding=opened is not None,
-                exit_latched=self._exit_latched,
-            )
-            self._last_speed = signal.speed_cents_per_second
-            self._last_ratio = signal.acceleration_ratio
+            signals = {
+                side: evaluate_side_momentum(
+                    list(self._samples[side]), remain, side=side,
+                    holding=opened is not None and opened["side"] == side,
+                    exit_latched=self._exit_latched if opened is not None
+                    and opened["side"] == side else False,
+                )
+                for side in ("UP", "DOWN")
+            }
+            for side in ("UP", "DOWN"):
+                self._side_speeds[side] = signals[side].speed_cents_per_second
+                self._side_reasons[side] = signals[side].reason
+            leader = max(("UP", "DOWN"), key=lambda s: self._side_speeds[s])
             if opened is not None:
-                if signal.action == "SELL":
+                leader = opened["side"]
+            self._last_speed = self._side_speeds[leader]
+            self._last_ratio = signals[leader].acceleration_ratio
+
+            if opened is not None:
+                held = opened["side"]
+                if held not in ("UP", "DOWN"):
+                    self._last_signal = "INVALID_OPEN_POSITION_SIDE"
+                elif signals[held].action == "SELL" or self._exit_latched:
                     self._exit_latched = True
-                    self._exit(opened, quote, now)
+                    self._exit(opened, quotes[held], now)
                 else:
-                    self._last_signal = signal.reason
-            elif not self._enabled:
-                self._last_signal = "DISARMED_OR_PAUSED"
+                    self._last_signal = signals[held].reason
             elif market_info != (ticker, close):
                 self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
             elif stats["loss"] >= DAILY_LOSS_LIMIT:
@@ -313,10 +338,20 @@ class StratPaperTrader:
                 self._last_signal = "MAX_MARKET_CYCLES"
             elif now - self._last_exit_ns < COOLDOWN_NS:
                 self._last_signal = "REENTRY_COOLDOWN"
-            elif signal.action == "BUY":
-                self._enter(quote, close, now, stats)
             else:
-                self._last_signal = signal.reason
+                candidates = [
+                    side for side in ("UP", "DOWN") if signals[side].action == "BUY"
+                ]
+                if len(candidates) == 1:
+                    selected = candidates[0]
+                    self._enter(quotes[selected], selected, close, now, stats)
+                elif len(candidates) > 1:
+                    self._last_signal = "AMBIGUOUS_BIDIRECTIONAL_ACCELERATION"
+                else:
+                    self._last_signal = (
+                        "UP:" + signals["UP"].reason
+                        + " | DOWN:" + signals["DOWN"].reason
+                    )
             return self.status()
 
     def run_forever(self, stop: threading.Event) -> None:
