@@ -19,10 +19,30 @@ NAV = (
     ("history","History","/weather/history"),
     ("data","Feeds","/weather/data"),
 )
+HOURLY_STYLE = """
+.wx-hourly-overview{grid-template-columns:repeat(2,minmax(0,1fr))}
+.wx-hourly-overview .wx-stat{min-width:0;display:flex;flex-direction:column;gap:4px}
+.wx-hourly-overview .wx-stat strong{margin-top:4px;line-height:1.2;overflow-wrap:anywhere}
+.wx-hourly-overview .wx-stat small{color:#9fbcc9;font-size:11px;line-height:1.5;font-weight:500}
+.wx-hourly-primary strong{font-size:clamp(32px,4vw,45px)!important;color:#e6faff!important}
+.wx-hourly-clock strong{font-size:clamp(32px,4vw,45px)!important;font-variant-numeric:tabular-nums;color:#e6faff!important}
+.wx-hourly-contract strong{font-size:22px!important}
+.wx-hourly-contract b{font-size:16px;color:#b5eaff}
+.wx-hourly-caution{padding:10px 13px;background:#0c2837a0;border-left:3px solid #77b3c8;border-radius:7px}
+.wx-hourly-details{padding:10px 0;color:#bddce9;font-size:12px}
+.wx-hourly-details summary{cursor:pointer;color:#cce5ef;font-weight:650}
+.wx-hourly-ladder .wx-bucket{display:grid;grid-template-columns:minmax(115px,1fr) auto auto;gap:10px;padding:11px 10px;border:1px solid #567c8d6b;border-radius:10px;min-width:0}
+.wx-hourly-ladder .wx-bucket.is-focus{border-color:#81d5f2;background:#173e5080}
+.wx-hourly-ladder .wx-bucket-label{font-size:12px}
+.wx-hourly-yes,.wx-hourly-no{font-size:12px;font-weight:750;font-variant-numeric:tabular-nums}
+.wx-hourly-yes{color:#a8eada}.wx-hourly-no{color:#efc3c3}
+@media(max-width:650px){.wx-hourly-overview{grid-template-columns:1fr}.wx-hourly-ladder .wx-bucket{gap:6px}}
+"""
+
 MAIN = """
 <div class="wx-grid">
  <article class="wx-panel">
-  <div class="wx-prediction-heading"><h2>Next-hour Kalshi Weather Index</h2>
+  <div class="wx-prediction-heading"><h2>Hourly weather prediction</h2>
    <label class="wx-picker-label" for="wx-hourly-city">City
     <select id="wx-hourly-city" aria-label="Hourly index city">
      <option value="chicago">Chicago Metro · KXTEMPCHIHS</option>
@@ -30,49 +50,58 @@ MAIN = """
      <option value="miami">Miami · KXTEMPMIAH</option>
      <option value="la-coastal">Coastal Los Angeles · KXTEMPLAXHS</option>
     </select></label></div>
-  <div class="wx-notice">HOURLY ONLY · The settlement underlying is
-   Kalshi's minute-resolution multi-station Weather Index, not any airport's
-   daily high or a METAR reading. Probabilities are experimental Gaussian
-   extrapolations, NOT demonstrated calibration or tradeable expected value.
-   WeatherEdge never submits orders.</div>
-  <div class="wx-stats">
-   <div class="wx-stat"><span>Latest official index</span>
-    <strong id="wx-hourly-current">—</strong></div>
-   <div class="wx-stat"><span>Predicted index at target hour</span>
-    <strong id="wx-hourly-mean">—</strong></div>
-   <div class="wx-stat"><span>90% modeled interval (not validated)</span>
-    <strong id="wx-hourly-interval">—</strong></div>
-   <div class="wx-stat"><span>Minutes to target</span>
-    <strong id="wx-hourly-minutes">—</strong></div>
+  <div class="wx-stats wx-hourly-overview">
+   <div class="wx-stat wx-hourly-primary">
+    <span>Predicted temperature</span><strong id="wx-hourly-mean">—</strong>
+    <small>Forecast for the selected hour · Kalshi Weather Index</small>
+   </div>
+   <div class="wx-stat wx-hourly-clock">
+    <span>Market closes in</span><strong id="wx-hourly-close-clock" aria-live="off">—:—</strong>
+    <small id="wx-hourly-close-note">Actual Kalshi close time for the highlighted contract</small>
+   </div>
+   <div class="wx-stat wx-hourly-contract">
+    <span>Closest Kalshi contract</span><strong id="wx-hourly-contract">—</strong>
+    <b id="wx-hourly-lean">Model leans —</b>
+    <small id="wx-hourly-model-chance">Waiting for an open matching Kalshi market</small>
+    <small id="wx-hourly-focus-ticker"></small>
+   </div>
+   <div class="wx-stat wx-hourly-current-stat">
+    <span>Current official index</span><strong id="wx-hourly-current">—</strong>
+    <small>Latest published index value, not the prediction</small>
+   </div>
   </div>
-  <div class="wx-rows">
-   <div class="wx-row"><span>Prediction readiness</span><strong id="wx-hourly-state">WAITING</strong></div>
-   <div class="wx-row"><span>Target hour (Eastern Time)</span><strong id="wx-hourly-et">—</strong></div>
-   <div class="wx-row"><span>Target UTC</span><strong id="wx-hourly-utc">—</strong></div>
-   <div class="wx-row"><span>Hourly Kalshi event</span><strong id="wx-hourly-event">—</strong></div>
-   <div class="wx-row"><span>Last canonical minute (UTC)</span><strong id="wx-hourly-event-time">—</strong></div>
-   <div class="wx-row"><span>Locally received (UTC)</span><strong id="wx-hourly-receipt">—</strong></div>
-   <div class="wx-row"><span>Official data publisher</span><strong>Kalshi Weather Index</strong></div>
-  </div>
-  <p id="wx-hourly-diagnostic" role="status">Waiting for the official hourly index and open contract ladder.</p>
-  <div id="wx-hourly-health" class="wx-notice" role="status">Automatic hourly collectors initializing…</div>
+  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi prices or proof of a profitable bet. No automatic weather trading.</p>
+  <details class="wx-hourly-details"><summary>Forecast uncertainty and technical details</summary>
+   <div class="wx-rows">
+    <div class="wx-row"><span>Estimated 90% range (unvalidated)</span><strong id="wx-hourly-interval">—</strong></div>
+    <div class="wx-row"><span>Prediction status</span><strong id="wx-hourly-state">WAITING</strong></div>
+    <div class="wx-row"><span>Prediction target (Eastern Time)</span><strong id="wx-hourly-et">—</strong></div>
+    <div class="wx-row"><span>Target UTC</span><strong id="wx-hourly-utc">—</strong></div>
+    <div class="wx-row"><span>Hourly Kalshi event</span><strong id="wx-hourly-event">—</strong></div>
+    <div class="wx-row"><span>Last canonical minute (UTC)</span><strong id="wx-hourly-event-time">—</strong></div>
+    <div class="wx-row"><span>Locally received (UTC)</span><strong id="wx-hourly-receipt">—</strong></div>
+    <div class="wx-row"><span>Official index publisher</span><strong>Kalshi Weather Index</strong></div>
+   </div>
+  </details>
+  <p id="wx-hourly-diagnostic" role="status">Waiting for fresh index data and matching hourly contracts.</p>
+  <details class="wx-hourly-details"><summary>Data feed status</summary>
+   <div id="wx-hourly-health" class="wx-notice" role="status">Automatic collectors initializing…</div>
+  </details>
  </article>
  <article class="wx-panel">
-  <h2>Hourly threshold probabilities · YES</h2>
-  <p>Each threshold is a separate directional contract, for example
-   “55°F or above.” The plotted percentage is a model estimate, not a
-   price or an EV recommendation.</p>
-  <div id="wx-hourly-ladder" class="wx-buckets" aria-live="polite">
-   <div class="wx-empty">No eligible current-hour contracts or index data yet.</div>
+  <h2>Kalshi hourly markets · model chances</h2>
+  <p>Each row is one listed Kalshi YES/NO contract. See which outcome the model favors, then compare with the actual price on Kalshi. These chances are not validated.</p>
+  <div id="wx-hourly-ladder" class="wx-buckets wx-hourly-ladder" aria-live="polite">
+   <div class="wx-empty">Waiting for matching hourly contracts.</div>
   </div>
   <div class="wx-rows">
-   <div class="wx-row"><span>Temperature precision</span><strong>0.01°F index</strong></div>
-   <div class="wx-row"><span>Probability calibration</span><strong>NOT CERTIFIED</strong></div>
-   <div class="wx-row"><span>Real weather order submission</span><strong>DISABLED</strong></div>
+   <div class="wx-row"><span>Confidence evidence</span><strong>NOT VALIDATED</strong></div>
+   <div class="wx-row"><span>Live weather orders</span><strong>DISABLED</strong></div>
   </div>
  </article>
 </div>
 """
+
 CALIBRATION = """
 <article class="wx-panel">
  <h2>Hourly calibration · prospective evidence</h2>
@@ -117,7 +146,7 @@ DATA = """
 SCRIPT = r"""<script>
 (() => {
  "use strict";
- const el = id=>document.getElementById(id);
+ const el=id=>document.getElementById(id);
  const put=(id,value)=>{const node=el(id);if(node)node.textContent=String(value);};
  const f=value=>Number.isFinite(value)?value.toFixed(2)+" °F":"—";
  const t=value=>{if(!value)return "—";const d=new Date(value);
@@ -127,27 +156,47 @@ SCRIPT = r"""<script>
  const iso=value=>value||"—";
  const card=el("wx-hourly-city");
  let forecasts={};
- function drawLadder(rows){
+ let activeCloseMs=null, serverClockBiasMs=0, activeLean="Model leans —";
+ function tickMarketClose(){
+    if(!Number.isFinite(activeCloseMs)){
+       put("wx-hourly-close-clock","UNAVAILABLE");
+       put("wx-hourly-close-note","Kalshi did not provide a verified contract close time");
+       put("wx-hourly-lean",activeLean);
+       return;
+    }
+    const remaining=Math.max(0,Math.ceil((activeCloseMs-(Date.now()-serverClockBiasMs))/1000));
+    if(remaining===0){
+       put("wx-hourly-close-clock","CLOSED");
+       put("wx-hourly-close-note","Highlighted contract is no longer open for trading");
+       put("wx-hourly-lean","Market closed — no current side");
+       return;
+    }
+    const minutes=Math.floor(remaining/60);
+    const seconds=String(remaining%60).padStart(2,"0");
+    put("wx-hourly-close-clock",minutes+":"+seconds);
+    put("wx-hourly-close-note","Actual Kalshi close time for the highlighted contract");
+    put("wx-hourly-lean",activeLean);
+ }
+ function drawLadder(rows,focusTicker){
     const target=el("wx-hourly-ladder");if(!target)return;
     target.replaceChildren();
     if(!Array.isArray(rows)||rows.length===0){
        const div=document.createElement("div");div.className="wx-empty";
-       div.textContent="Hourly market ladder or fresh index unavailable. Automatic collection retries.";
+       div.textContent="No matching open hourly contracts available. Waiting for Kalshi.";
        target.append(div);return;
     }
     for(const x of rows){
        const p=Number(x.probability_yes);
        if(!Number.isFinite(p)||p<0||p>1)continue;
-       const div=document.createElement("div");div.className="wx-bucket";
+       const div=document.createElement("div");
+       div.className="wx-bucket"+(x.ticker===focusTicker?" is-focus":"");
        const title=document.createElement("span");title.className="wx-bucket-label";
-       title.textContent="≥ "+x.threshold_f+" °F";
-       const track=document.createElement("div");track.className="wx-bucket-track";
-       const bar=document.createElement("div");bar.className="wx-bucket-fill";
-       bar.style.width=(p*100).toFixed(3)+"%";
-       track.append(bar);
-       const pct=document.createElement("span");pct.className="wx-bucket-prob";
-       pct.textContent=(p*100).toFixed(1)+"%";
-       div.append(title,track,pct);target.append(div);
+       title.textContent=x.threshold_f+" °F or above";
+       const yes=document.createElement("span");yes.className="wx-hourly-yes";
+       yes.textContent="YES "+(p*100).toFixed(1)+"%";
+       const no=document.createElement("span");no.className="wx-hourly-no";
+       no.textContent="NO "+((1-p)*100).toFixed(1)+"%";
+       div.append(title,yes,no);target.append(div);
     }
  }
  function draw(){
@@ -158,21 +207,51 @@ SCRIPT = r"""<script>
     put("wx-hourly-mean",f(row.predicted_index_f));
     put("wx-hourly-interval",Array.isArray(row.interval_90_f)?
         row.interval_90_f.map(f).join(" – "):"NOT MEASURED");
-    put("wx-hourly-minutes",Number.isFinite(row.minutes_to_target)?
-        row.minutes_to_target.toFixed(0):"—");
     put("wx-hourly-utc",iso(row.target_utc));
     put("wx-hourly-et",t(row.target_utc));
     put("wx-hourly-event",iso(row.event_ticker));
     put("wx-hourly-event-time",Number.isFinite(row.source_event_ms)?
         new Date(row.source_event_ms).toISOString():"—");
     put("wx-hourly-receipt",iso(row.source_received_at));
+    const serverTime=Date.parse(row.asof||"");
+    serverClockBiasMs=Number.isFinite(serverTime)?Date.now()-serverTime:0;
+    const ready=row.status==="READY_RESEARCH" && Number.isFinite(row.predicted_index_f);
+    const strikes=ready && Array.isArray(row.markets)?row.markets.filter(x=>
+        Number.isFinite(x.threshold_f) && Number.isFinite(x.probability_yes) &&
+        x.probability_yes>=0 && x.probability_yes<=1):[];
+    // Choose the nearest actual listed threshold, not a fabricated price or strike.
+    // Prefer a contract with a published close time for a usable countdown.
+    const ordered=strikes.slice().sort((a,b)=>{
+       const da=Math.abs(a.threshold_f-row.predicted_index_f);
+       const db=Math.abs(b.threshold_f-row.predicted_index_f);
+       if(da!==db)return da-db;
+       const ac=Number.isFinite(Date.parse(a.close_time_utc||""));
+       const bc=Number.isFinite(Date.parse(b.close_time_utc||""));
+       return Number(bc)-Number(ac);
+    });
+    const focus=ordered[0];
+    activeCloseMs=focus && focus.close_time_utc?Date.parse(focus.close_time_utc):null;
+    if(!Number.isFinite(activeCloseMs))activeCloseMs=null;
+    activeLean="Model leans —";
+    put("wx-hourly-contract",focus?focus.threshold_f+" °F or above":"No open contract");
+    put("wx-hourly-focus-ticker",focus?"Kalshi ticker: "+focus.ticker:"");
+    if(focus){
+       const yesPct=100*focus.probability_yes, noPct=100-yesPct;
+       activeLean="Model leans "+(yesPct>=noPct?"YES":"NO");
+       put("wx-hourly-model-chance","Estimated YES "+yesPct.toFixed(1)+
+          "% · NO "+noPct.toFixed(1)+"% (unvalidated)");
+    }else{
+       put("wx-hourly-model-chance","No matching contract / prediction currently ready");
+    }
+    tickMarketClose();
     put("wx-hourly-diagnostic",row.status==="READY_RESEARCH"?
-       "Published Kalshi index is available. The index extrapolation is uncalibrated and paper-only.":
+       "Model view only. Match the exact ticker on Kalshi and check its live price before making any decision.":
        row.status==="NO_VERIFIED_HOURLY_MARKETS"?
-       "Index is available; no verified open hourly Kalshi Weather Index threshold ladder for this target. No odds are fabricated.":
-       row.status==="STALE_INDEX"?"Official index data are stale; automatic collection will retry.":
-       "Waiting for fresh official index readings and matching hourly contracts. No daily-high substitute is used.");
-    drawLadder(row.markets);
+       "Index is available, but no verified open Kalshi hourly contract ladder was found.":
+       row.status==="STALE_INDEX"?
+       "Official index data are stale; prediction and contract side are withheld.":
+       "Waiting for fresh official readings and matching hourly contracts.");
+    drawLadder(strikes,focus?focus.ticker:null);
  }
  async function update(){
    try{
@@ -216,7 +295,7 @@ SCRIPT = r"""<script>
    }
  }
  if(card)card.addEventListener("change",draw);
- update();setInterval(update,15000);
+ update();setInterval(update,15000);setInterval(tickMarketClose,1000);
 })();
 </script>"""
 
@@ -225,7 +304,7 @@ def render_hourly_page(section: str, weather_style: str) -> str:
     if section not in PAGES:
         raise ValueError("Unknown WeatherEdge hourly page")
     base_css = PAGE.split("<style>",1)[1].split("</style>",1)[0]
-    css = "\n".join((base_css,STYLE,MOTION_STYLE,MARKET_SELECTOR_STYLE,weather_style))
+    css = "\n".join((base_css,STYLE,MOTION_STYLE,MARKET_SELECTOR_STYLE,weather_style,HOURLY_STYLE))
     links=[]
     for key,label,url in NAV:
         selected = " is-active" if key==section else ""
