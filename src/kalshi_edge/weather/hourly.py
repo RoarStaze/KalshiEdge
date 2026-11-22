@@ -290,23 +290,86 @@ async def collect_hourly_once(
                         city, point["event_ms"], receipt.isoformat(),
                         point["temp_f"], point["status"], point["config_version"],
                         source_sha, json.dumps(point["raw"], sort_keys=True)))
+                # Discover *listed* contracts by the official index series.
+                # A guessed event_ticker can point to an unlisted hour.
+                listed: list[dict] = []
+                seen_tickers: set[str] = set()
+                cursor = ""
+                for page in range(4):
+                    params = {"series_ticker": CITIES[city].series,
+                              "status": "open", "limit": 200}
+                    if cursor:
+                        params["cursor"] = cursor
+                    reply = await client.get(f"{API}/markets", params=params)
+                    reply.raise_for_status()
+                    if len(reply.content) > MAX_SIZE:
+                        raise ValueError("OVERSIZED_MARKET_RESPONSE")
+                    payload = reply.json()
+                    if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
+                        raise ValueError("INVALID_HOURLY_MARKETS")
+                    for raw in payload["markets"]:
+                        if not isinstance(raw, dict):
+                            continue
+                        ticker = raw.get("ticker")
+                        if isinstance(ticker, str) and ticker not in seen_tickers:
+                            listed.append(raw)
+                            seen_tickers.add(ticker)
+                    cursor = payload.get("cursor") or ""
+                    if not isinstance(cursor, str) or len(cursor) > 2048:
+                        raise ValueError("INVALID_HOURLY_CURSOR")
+                    if not cursor:
+                        break
+                else:
+                    raise ValueError("INCOMPLETE_HOURLY_SERIES_LISTING")
+
+                candidates_by_event: dict[str, list[dict]] = {}
+                targets: dict[str, datetime] = {}
+                for raw in listed:
+                    event_name = raw.get("event_ticker")
+                    target_time = listed_event_target(city, event_name)
+                    if (target_time is None or not receipt < target_time <=
+                            receipt + timedelta(hours=3)):
+                        continue
+                    targets[event_name] = target_time
+                    candidates_by_event.setdefault(event_name, []).append(raw)
+
+                selected: list[dict] = []
                 event, target = event_for(city, receipt)
-                reply = await client.get(f"{API}/markets",
-                                         params={"event_ticker":event,"limit":200})
-                reply.raise_for_status()
-                if len(reply.content) > MAX_SIZE:
-                    raise ValueError("OVERSIZED_MARKET_RESPONSE")
-                candidates = parse_markets(reply.json(), city, event)
-                for item in candidates:
+                for candidate_event in sorted(targets, key=lambda x: targets[x]):
+                    parsed = parse_markets(
+                        {"markets": candidates_by_event[candidate_event], "cursor": ""},
+                        city, candidate_event)
+                    # Even an API listing cached as 'open' may already be closed.
+                    valid = [item for item in parsed
+                             if item["close_time_utc"] is None or
+                             datetime.fromisoformat(item["close_time_utc"]) > receipt]
+                    if valid:
+                        event = candidate_event
+                        target = targets[event]
+                        selected = valid
+                        break
+
+                for item in selected:
                     markets.append((
                         item["ticker"], city, event, target.isoformat(),
-                        item["threshold_f"], _utc(current_clock()).isoformat(),
+                        item["threshold_f"], receipt.isoformat(),
                         json.dumps(item, sort_keys=True)))
+                reason = None
+                if not selected:
+                    reason = (
+                        "Kalshi returned no open contracts for this index series"
+                        if not listed else
+                        "Kalshi returned open contracts, but none matched a "
+                        "future HS index event and accepted threshold")
                 results[city] = {
-                    "state": "READY" if rows and candidates else
+                    "state": "READY" if rows and selected else
                     ("NO_ACTIVE_HOURLY_MARKET" if rows else "NO_INDEX_POINTS"),
-                    "index_points": len(rows), "market_strikes": len(candidates),
-                    "event_ticker": event,
+                    "index_points": len(rows), "market_strikes": len(selected),
+                    "source_market_count": len(listed),
+                    "future_event_count": len(candidates_by_event),
+                    "listed_event_tickers": list(dict.fromkeys(
+                        str(x.get("event_ticker", "")) for x in listed))[:4],
+                    "event_ticker": event, "reason": reason,
                 }
             except (ValueError, TypeError, httpx.HTTPError,
                     KeyError, OverflowError, json.JSONDecodeError) as exc:
