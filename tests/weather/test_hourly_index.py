@@ -31,10 +31,10 @@ def points(now=NOW):
 
 
 def market(event=EVENT,status="active",result="",strike=55):
-    return {"ticker":event+"-T55","event_ticker":event,
+    return {"ticker":event+f"-T{strike-.01:.2f}","event_ticker":event,
             "status":status,"result":result,
             "close_time":(NOW+timedelta(minutes=13)).isoformat(),
-            "yes_sub_title":f"{strike}° or above","floor_strike":strike,
+            "yes_sub_title":f"{strike}° or above","floor_strike":round(strike-.01,2),
             "rules_primary":"Resolves Yes if the Kalshi Weather Index for Chicago Metro at 1pm ET is at least 55 degrees fahrenheit",
             "settlement_ts":TARGET.isoformat() if status=="settled" else ""}
 
@@ -81,6 +81,22 @@ def test_market_rules_source_and_real_threshold_required():
         {**market(),"yes_sub_title":"55° to 56°"},
     ]:
         assert parse_markets({"markets":[bad],"cursor":""},"chicago",EVENT)==[]
+
+
+
+def test_real_hourly_market_floor_strike_is_one_cent_below_displayed_temperature():
+    """An observed Kalshi listing displays 55°F or above with floor=54.99."""
+    row=market(strike=55)
+    assert row["ticker"].endswith("-T54.99")
+    accepted=parse_markets({"markets":[row],"cursor":""},"chicago",EVENT)
+    assert len(accepted)==1
+    assert accepted[0]["threshold_f"]==55
+    assert accepted[0]["ticker"]==row["ticker"]
+    for wrong_floor in (54.98, 55.01, 60):
+        rejected=parse_markets({"markets":[{**row,"floor_strike":wrong_floor}],"cursor":""},
+                               "chicago",EVENT)
+        assert rejected==[]
+
 
 
 def test_hourly_collection_and_prospective_forecast_one_command_compatible(tmp_path):

@@ -154,8 +154,15 @@ def _valid_market(market: dict, city: str, event: str, *,
     try:
         threshold = _finite(float(match.group(1)))
         raw_strike = market.get("floor_strike")
-        if raw_strike is not None and abs(_finite(raw_strike) - threshold) > .001:
-            return None
+        if raw_strike is not None:
+            # Kalshi's "55° or above" index market is commonly listed as
+            # "above 54.99°" with floor_strike=54.99 (ticker -T54.99).
+            # Index resolution is 0.01°F. Preserve either exact or
+            # one-cent-below representations, rejecting all other strikes.
+            floor = _finite(raw_strike)
+            if (abs(floor - threshold) > .001 and
+                    abs(floor - (threshold - .01)) > .001):
+                return None
     except (TypeError, ValueError, OverflowError):
         return None
     # The trading deadline belongs to the individual Kalshi contract.
