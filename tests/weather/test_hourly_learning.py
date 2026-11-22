@@ -56,6 +56,8 @@ def test_learned_bias_and_trend_need_to_beat_existing_model_on_held_out_hours():
     assert decision["validation"]["candidate_brier"]<decision["validation"]["baseline_brier"]
     assert decision["validation"]["candidate_mae_f"]<decision["validation"]["baseline_mae_f"]
     assert decision["validation"]["candidate_logloss"]<decision["validation"]["baseline_logloss"]
+    assert decision["validation"]["candidate_90_coverage"]>=.75
+    assert 0<=decision["validation"]["baseline_90_coverage"]<=1
     new_mean,new_sigma=apply_correction(57,1.3,55,decision)
     assert new_mean>57 and new_sigma>0
 
