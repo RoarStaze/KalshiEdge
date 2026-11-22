@@ -220,13 +220,13 @@ class SafetensorsLittleBitLayer:
         return self.primary.binary_factor_bytes + (self.residual.binary_factor_bytes if self.residual else 0)
 
     @classmethod
-    def from_file(cls, path, prefix, *, max_layer_bytes=64 * 1024 * 1024):
+    def from_file(cls, path, prefix, *, max_layer_bytes=64 * 1024 * 1024, _shard_group=None):
         if type(max_layer_bytes) is not int or max_layer_bytes < 1:
             raise ValueError('max_layer_bytes must be a positive integer')
         prefix = prefix.rstrip('.') + '.'
         if prefix == '.' or '\x00' in prefix:
             raise CheckpointFormatError('Invalid module prefix')
-        shard = _ShardGroup(path)
+        shard = _shard_group if _shard_group is not None else _ShardGroup(path)
         main = [prefix + name for name in REQUIRED]
         residual = [prefix + name for name in RESIDUAL_NAMES]
         has_residual = any(shard.contains(name) for name in residual)
