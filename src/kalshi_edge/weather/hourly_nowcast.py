@@ -156,6 +156,11 @@ def index_cases(conn: sqlite3.Connection, city: str, asof: datetime,
     points,error=_load_points(conn,city,asof,config_version)
     if error:
         raise ValueError(error)
+    return _cases_from_points(points,asof,lead_minutes)
+
+
+def _cases_from_points(points: list[tuple], asof: datetime,
+                       lead_minutes: int) -> list[dict]:
     if not points:
         return []
     times=[r[0] for r in points]
@@ -260,33 +265,36 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
 def index_nowcast_decision(conn: sqlite3.Connection, city: str,
                            asof: datetime, *, lead_minutes: int,
                            config_version: str) -> dict:
+    fail={"enabled":False,"status":"UNSUPPORTED_LEAD_TIME",
+          "history_hours":0,"training_hours":0,"validation_hours":0,
+          "model":None,"sigma_scale":1.,"validation":None,
+          "live_slopes":None}
     if lead_minutes not in LEAD_MINUTES:
-        return {"enabled":False,"status":"UNSUPPORTED_LEAD_TIME",
-                "history_hours":0,"training_hours":0,"validation_hours":0,
-                "model":None,"sigma_scale":1.,"validation":None}
+        return fail
     try:
-        samples=index_cases(conn,city,asof,lead_minutes=lead_minutes,
-                            config_version=config_version)
+        now=_utc(asof)
+        points,error=_load_points(conn,city,now,config_version)
+        if error:
+            return {**fail,"status":error}
+        samples=_cases_from_points(points,now,lead_minutes)
+        decision=choose_index_nowcast(samples)
+        decision["live_slopes"]=_slopes_from_points(points,now)
+        return decision
     except (ValueError,sqlite3.Error):
-        return {"enabled":False,"status":"INVALID_INDEX_EVIDENCE",
-                "history_hours":0,"training_hours":0,"validation_hours":0,
-                "model":None,"sigma_scale":1.,"validation":None}
-    return choose_index_nowcast(samples)
+        return {**fail,"status":"INVALID_INDEX_EVIDENCE"}
 
 
-def current_slopes(conn: sqlite3.Connection,city: str,asof: datetime,
-                   *, config_version: str) -> tuple[float,float,float] | None:
-    """Calculate the live slopes under the same receipt and QC rules as training."""
-    now=_utc(asof)
-    points,error=_load_points(conn,city,now,config_version)
-    if error or not points:
+def _slopes_from_points(points: list[tuple],
+                        asof: datetime) -> tuple[float,float,float] | None:
+    """Live features follow exactly the historical local-receipt cutoff."""
+    if not points:
         return None
     times=[r[0] for r in points]
-    past=_select_before(points,times,int(now.timestamp()*1000))
+    past=_select_before(points,times,int(asof.timestamp()*1000))
     if not past:
         return None
     newest=past[0]
-    if (now.timestamp()*1000-newest[0])/60000>10:
+    if (asof.timestamp()*1000-newest[0])/60000>10:
         return None
     def pick(gap,min_gap,max_gap):
         candidates=[r for r in past[1:]
@@ -302,3 +310,10 @@ def current_slopes(conn: sqlite3.Connection,city: str,asof: datetime,
         value=(newest[2]-old[2])/((newest[0]-old[0])/3600000)
         return max(-5.,min(5.,value))
     return slope(old10),slope(old30),newest[2]
+
+
+def current_slopes(conn: sqlite3.Connection,city: str,asof: datetime,
+                   *, config_version: str) -> tuple[float,float,float] | None:
+    now=_utc(asof)
+    points,error=_load_points(conn,city,now,config_version)
+    return None if error else _slopes_from_points(points,now)
