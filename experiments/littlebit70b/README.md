@@ -233,3 +233,20 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 The expected suite count is **129 tests** (115 existing + 14 new). This is not trained Gemma 3 27B, real language generation, or a checkpoint conversion. No new packages or model weights are downloaded.
+
+
+## Gemma 3 model checkpoint-backed block streaming (experimental)
+
+See [GEMMA3_CHECKPOINT_STREAM.md](GEMMA3_CHECKPOINT_STREAM.md). Unlike the previous six-block in-memory synthetic token pipeline, this milestone reads actual Hugging Face Gemma 3 tensor paths and Samsung LittleBit packed-factor fields from a Safetensors file or sharded manifest, loads **one complete packed decoder block at a time** onto CUDA, keeps per-layer K/V states in a separate GPU pool, and releases the GPU decoder weight allocations after each block. Dense .weight projection files are rejected; they are **not** trained LittleBit checkpoints.
+
+Run the synthetic demo and complete experiment tests in the already installed isolated environment:
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\gemma3_checkpoint_stream.py --backend cuda
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+Expected total: **144 tests** (129 previously passed, plus 15 new). The CUDA streaming path is **not** verified until the three new CUDA-dependent tests execute on the RTX 4050. This is still a small synthetic model with no pretrained weights, no tokenizer and no real Gemma 3 27B inference.
