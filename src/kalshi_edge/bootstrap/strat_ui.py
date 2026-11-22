@@ -42,6 +42,13 @@ padding:12px 0;font-size:13px}
 label{display:block;font-size:12px;color:#a6c5bf;margin-bottom:8px}
 input{width:100%;background:#08181c;border:1px solid #3b7068;border-radius:10px;
 padding:12px;color:var(--fg);font:inherit}
+.explore-control{display:flex;align-items:flex-start;gap:11px;margin-top:16px;
+border:1px solid #556552;border-radius:10px;background:#26312b66;padding:12px;
+cursor:pointer;line-height:1.5}
+.explore-control input{flex:none;width:19px;height:19px;margin:3px 0 0;
+accent-color:#44e4b6}
+.explore-control span{display:block}
+.explore-control small{display:block;font-size:11px;line-height:1.5;margin-top:5px}
 button{border:1px solid #4eab91;border-radius:11px;background:#164b3f;color:#e4fff4;
 font-weight:700;padding:13px 18px;cursor:pointer}
 button:disabled{opacity:.45;cursor:not-allowed}
@@ -98,6 +105,15 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="kv"><span>State</span><strong id="enabled">Disabled</strong></div>
 <label for="amount">Maximum simulated budget per entry (USD)</label>
 <input id="amount" type="number" min="0.10" max="5" step="0.01" value="1.00">
+<label class="explore-control" for="paperExplore">
+<input id="paperExplore" type="checkbox">
+<span><strong>Paper exploration — optional negative-evidence override</strong>
+<small>Allow paper BUYs even when historical taker markouts are negative.
+No verified profit edge. Losses may continue. The 2:00 and 65–85¢ rules
+still apply. This setting resets after pause/restart; it never enables real orders.</small>
+</span></label>
+<div class="kv"><span>Historical taker evidence enforcement</span>
+<strong id="exploreState">ENFORCED</strong></div>
 <div class="actions"><button id="arm" type="button">Arm paper Strat</button>
 <button id="pause" class="secondary" type="button">Pause entries</button></div>
 <p class="status" id="feedback" role="status">Arming is required after each restart. Existing simulated holdings remain monitored when paused.</p>
@@ -143,6 +159,11 @@ async function refresh(){
    fetch("/api/strat/status",{cache:"no-store"}).then(r=>{if(!r.ok)throw Error("Strat API offline");return r.json()}),
    fetch("/api/live",{cache:"no-store"}).then(r=>r.json())]);
   set("enabled",s.enabled?"ARMED · PAPER":"DISABLED");
+  const exploreInput=el("paperExplore");
+  exploreInput.disabled=!!s.enabled;
+  if(s.enabled)exploreInput.checked=!!s.paper_exploration_override;
+  set("exploreState",s.paper_exploration_override?
+    "BYPASSED · PAPER ONLY":"ENFORCED");
   set("signal",s.last_signal);set("samples",s.samples+" / 5");
   set("speed",Number(s.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("ratio",s.acceleration_ratio==null?"—":Number(s.acceleration_ratio).toFixed(2)+"×");
@@ -157,7 +178,7 @@ async function refresh(){
   set("evidenceGate",ev?
     ["UP","DOWN"].map(side=>{
       const e=ev[side];if(!e)return side+": no history";
-      return side+": "+(e.entry_veto?"BLOCKED NEGATIVE":"unvalidated / observing")+
+      return side+": "+(e.entry_veto?(s.paper_exploration_override?"NEGATIVE · PAPER BYPASS ON":"BLOCKED NEGATIVE"):"unvalidated / observing")+
        " ("+e.observed+" observations, "+e.market_count+" markets, "+
        (e.mean_net_cents_per_contract==null?"—":Number(e.mean_net_cents_per_contract).toFixed(2)+"¢")+" mean)";
     }).join(" | "):"Not yet assessed");
@@ -219,12 +240,20 @@ async function auditQuotes(){
 async function action(kind){
  el("arm").disabled=true;el("pause").disabled=true;
  try{
-  const payload=kind==="arm"?{amount:Number(el("amount").value).toFixed(2)}:{};
+  const payload=kind==="arm"?{
+    amount:Number(el("amount").value).toFixed(2),
+    exploratory_ignore_negative_evidence:el("paperExplore").checked
+  }:{};
   const r=await fetch("/api/strat/"+kind,{
    method:"POST",headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"strat"},
    body:JSON.stringify(payload)});
   const data=await r.json();if(!r.ok)throw Error(data.error||"Action rejected");
-  set("feedback",kind==="arm"?"Paper Strat armed · no real orders":"Entries paused; any open paper position remains monitored");
+  set("feedback",kind==="arm"?
+    (data.paper_exploration_override?
+     "Paper exploration ON · negative historical evidence does not veto entries; time, price and momentum still apply. No real orders.":
+     "Paper Strat armed · historical evidence enforced · no real orders"):
+    "Entries paused; any open paper position remains monitored");
+  if(kind==="pause")el("paperExplore").checked=false;
   await refresh();
  }catch(e){set("feedback",e.message);await refresh()}
 }
