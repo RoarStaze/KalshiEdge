@@ -242,3 +242,52 @@ are not used to place real orders. This release has **no live order
 submission** and makes no profit guarantees.
 
 See [AutoTrader design, safeguards, and limitations](docs/autotrader-paper.md).
+
+
+## Storage audit and safe cache cleanup
+
+KalshiEdge retains large historical inputs and reproducible training artifacts in
+`data/` and `artifacts/`. **Do not delete these directories to free disk space.**
+The app also keeps model promotion and resume state there. The `.venv/`
+directory contains required Python dependencies.
+
+After updating, stop `kalshiedge start` and any training or collectors, then run:
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+kalshiedge storage
+```
+
+`kalshiedge storage` is **read-only**. It scans the installation without
+following symbolic links or Windows junctions and reports total apparent
+bytes, largest top-level/second-level folders, largest individual files,
+and total disposable Python-cache bytes. It is designed for large local
+installations and does not load file contents into RAM.
+
+Only recognized Python bytecode and test/lint cache directories can be
+removed by the built-in cleaner. Preview first:
+
+```powershell
+kalshiedge storage clean
+# After inspecting the preview and confirming all KalshiEdge processes stopped:
+kalshiedge storage clean --apply
+# Re-measure the installation:
+kalshiedge storage
+```
+
+`clean` without `--apply` never deletes anything. `--apply` removes
+only `__pycache__`, `.pytest_cache`, `.mypy_cache`, and `.ruff_cache`
+directories within the selected installation (not inside `.git`). These
+caches may regenerate. It never intentionally deletes historical ZIPs,
+raw event evidence, Parquet datasets, databases, fitted models, active
+or resumable training state, logs, credentials or Git history. The audit
+measures *apparent* file sizes; actual filesystem space freed can differ
+due to block allocation, hardlinks, and compression.
+
+If `data/` or `artifacts/` accounts for most of your disk use, use the
+read-only report to determine which specific datasets or artifacts can
+later be relocated or deduplicated **only after dependency, hash,
+manifest and training-resume checks**. Do not delete or deduplicate them
+blindly. For more details use `kalshiedge storage --top 50` or
+`kalshiedge storage --json`.
