@@ -115,6 +115,25 @@ def _metrics(rows: list[dict], weights: tuple | list | None = None,
     }
 
 
+def research_scores(rows: list[dict]) -> dict | None:
+    """Descriptive same-hour scores; NEVER a prospective promotion test."""
+    if len(rows)<10:
+        return None
+    baseline=_metrics(rows)
+    hrrr=_metrics(rows,(0.,1.,0.))
+    nbm=_metrics(rows,(0.,0.,1.))
+    simple=_metrics(rows,(0.,.5,.5))
+    return {"hours":len(rows),
+            "baseline_mae_f":baseline["mae_f"],
+            "hrrr_mae_f":hrrr["mae_f"],
+            "nbm_mae_f":nbm["mae_f"],
+            "equal_blend_mae_f":simple["mae_f"],
+            "baseline_crps":baseline["crps"],
+            "hrrr_crps":hrrr["crps"],
+            "nbm_crps":nbm["crps"],
+            "equal_blend_crps":simple["crps"]}
+
+
 def _fit(rows: list[dict]) -> tuple[tuple[float,float,float],float,float]:
     """Small, predeclared convex grid, selected *only* on training CRPS."""
     proposals=[]
@@ -483,8 +502,8 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
                            asof: datetime,physics: dict) -> dict:
     """Read-only eligibility: no recalibration or candidate mutation in UI path."""
     output={"enabled":False,"status":"COLLECTING_PAIRED_HOURS",
-            "paired_hours":0,"lockbox_hours":0,
-            "market_verified_hours":0,"metrics":None}
+            "paired_hours":0,"scored_hours":0,"research_scores":None,
+            "lockbox_hours":0,"market_verified_hours":0,"metrics":None}
     now=_utc(asof)
     lead=lead_bucket((_utc(target)-now).total_seconds()/60)
     if lead is None:
@@ -495,15 +514,18 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
         output["status"]="NO_MATCHING_PHYSICAL_GUIDANCE"
         return output
     try:
+        count=conn.execute("""SELECT COUNT(*) FROM weather_hourly_physical_pairs
+              WHERE city=? AND config_version=? AND lead_minutes=?""",
+              (city,config_version,lead)).fetchone()
+        output["paired_hours"]=count[0] if count else 0
+        completed=collect_cases(conn,city,config_version,lead,now)
+        output["scored_hours"]=len(completed)
+        output["research_scores"]=research_scores(completed)
         row=conn.execute("""SELECT locked_at,params_json,params_sha
              FROM weather_hourly_physical_locks
              WHERE city=? AND config_version=? AND lead_minutes=?""",
              (city,config_version,lead)).fetchone()
         if row is None:
-            count=conn.execute("""SELECT COUNT(*) FROM weather_hourly_physical_pairs
-              WHERE city=? AND config_version=? AND lead_minutes=?""",
-              (city,config_version,lead)).fetchone()
-            output["paired_hours"]=count[0] if count else 0
             return output
         locked_at,raw,digest=row
         if _sha(raw)!=digest:
@@ -531,10 +553,8 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
             not .75<=model["sigma_scale"]<=1.8):
             output["status"]="INVALID_PHYSICAL_MODEL_LOCK"
             return output
-        cases=collect_cases(conn,city,config_version,lead,now)
-        score=evaluate_lockbox(model,cases)
+        score=evaluate_lockbox(model,completed)
         output.update(score)
-        output["paired_hours"]=len(cases)
         output["lead_minutes"]=lead
         return output
     except (sqlite3.Error,ValueError,TypeError,KeyError,
