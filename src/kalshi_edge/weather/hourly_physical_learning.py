@@ -188,21 +188,30 @@ def evaluate_lockbox(lock: dict, cases: list[dict]) -> dict:
         return output
     try:
         locked_at=_utc(lock["locked_at"])
-        filtered=sorted((r for r in cases if _utc(r["target_utc"])>locked_at),
-                        key=lambda r:r["target_utc"])
-        unique=[]
-        seen=set()
-        for row in filtered:
-            if row["target_utc"] in seen:
+        # Fixed 32 *calendar* hours after lock. Missing NOAA/index hours
+        # cannot be replaced with later, easier conditions.
+        first=locked_at.replace(minute=0,second=0,microsecond=0)+timedelta(hours=1)
+        expected=[first+timedelta(hours=i) for i in range(LOCKBOX)]
+        cases_by_hour={}
+        newest=None
+        for row in cases:
+            when=_utc(row["target_utc"])
+            if when<=locked_at:
                 continue
-            seen.add(row["target_utc"])
-            unique.append(row)
-            if len(unique)==LOCKBOX:
-                break
+            newest=when if newest is None else max(newest,when)
+            if first<=when<=expected[-1]:
+                if when in cases_by_hour:
+                    output["status"]="DUPLICATE_PROSPECTIVE_TARGET"
+                    return output
+                cases_by_hour[when]=row
+        unique=[cases_by_hour[hour] for hour in expected
+                if hour in cases_by_hour]
         output["lockbox_hours"]=len(unique)
         output["market_verified_hours"]=sum(bool(r.get("market_verified") and
                           r.get("threshold_f") is not None) for r in unique)
         if len(unique)<LOCKBOX:
+            if newest is not None and newest>expected[-1]:
+                output["status"]="INCOMPLETE_FIXED_LOCKBOX_WINDOW"
             return output
         if output["market_verified_hours"]<MIN_LOCKBOX_MARKETS:
             output["status"]="INSUFFICIENT_SETTLEMENT_VERIFIED_MARKETS"
