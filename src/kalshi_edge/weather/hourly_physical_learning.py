@@ -73,8 +73,9 @@ def _init(conn: sqlite3.Connection) -> None:
       ON weather_hourly_physical_pairs(city,config_version,lead_minutes,target_utc)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_physical_locks(
       city TEXT NOT NULL,config_version TEXT NOT NULL,lead_minutes INTEGER NOT NULL,
+      baseline_kind TEXT NOT NULL DEFAULT '',
       locked_at TEXT NOT NULL,params_json TEXT NOT NULL,params_sha TEXT NOT NULL,
-      PRIMARY KEY(city,config_version,lead_minutes))""")
+      PRIMARY KEY(city,config_version,lead_minutes,baseline_kind))""")
 
 
 def _estimate(row: dict, weights: list[float] | tuple[float,...],
@@ -157,9 +158,21 @@ def _fit(rows: list[dict]) -> tuple[tuple[float,float,float],float,float]:
 def select_candidate(rows: list[dict]) -> dict:
     """Select with strictly older training and held-out later hours."""
     ordered=sorted(rows,key=lambda r:r["target_utc"])
+    baseline_kind=ordered[-1].get("baseline_kind") if ordered else None
+    if baseline_kind is not None:
+        # Comparisons against an older incumbent are no longer meaningful
+        # once V1/V2 updates the incumbent. Train only the latest
+        # uninterrupted run of identically versioned baseline forecasts.
+        suffix=[]
+        for row in reversed(ordered):
+            if row.get("baseline_kind")!=baseline_kind:
+                break
+            suffix.append(row)
+        ordered=list(reversed(suffix))
     n=len(ordered)
     decision={
         "candidate_ready":False,"status":"INSUFFICIENT_PAIRED_HOURS",
+        "baseline_kind":baseline_kind,
         "history_hours":n,"train_hours":0,"validation_hours":0,
         "weights":[1.,0.,0.],"bias_f":0.,"sigma_scale":1.,
         "validation":None,
@@ -338,6 +351,8 @@ def freeze_pair(conn: sqlite3.Connection,prediction: dict,
              "lead_minutes":bucket,"asof":now.isoformat(),
              "config_version":cfg,
              "baseline_f":base,"sigma_f":sigma,
+             "baseline_kind":prediction.get("pre_physical_model_kind") or
+                             prediction.get("model_kind"),
              "hrrr_f":hrrr,"nbm_f":nbm,
              "market_ticker":chosen["ticker"] if chosen else None,
              "threshold_f":_finite(chosen["threshold_f"]) if chosen else None,
@@ -456,7 +471,8 @@ def collect_cases(conn: sqlite3.Connection, city: str,
             result.append({"target_utc":target_raw,
                 **values,"sigma_f":sigma,"observed_f":actual,
                 "threshold_f":threshold,"market_verified":is_verified,
-                "config_version":config_version})
+                "config_version":config_version,
+                "baseline_kind":frozen.get("baseline_kind")})
     except (ValueError,TypeError,KeyError,OverflowError,
             json.JSONDecodeError,sqlite3.Error,AttributeError):
         return []
@@ -477,21 +493,24 @@ def freeze_candidate_locks(db_path: Path, *,
         keys=conn.execute("""SELECT DISTINCT city,config_version,lead_minutes
             FROM weather_hourly_physical_pairs""").fetchall()
         for city,cfg,lead in keys:
-            if conn.execute("""SELECT 1 FROM weather_hourly_physical_locks
-                WHERE city=? AND config_version=? AND lead_minutes=?""",
-                (city,cfg,lead)).fetchone():
-                continue
             rows=collect_cases(conn,city,cfg,lead,now)
             decision=select_candidate(rows)
-            if not decision["candidate_ready"]:
+            kind=decision.get("baseline_kind")
+            if not decision["candidate_ready"] or not isinstance(kind,str) or not kind:
+                continue
+            if conn.execute("""SELECT 1 FROM weather_hourly_physical_locks
+                WHERE city=? AND config_version=? AND lead_minutes=?
+                AND baseline_kind=?""",
+                (city,cfg,lead,kind)).fetchone():
                 continue
             params={**decision,"city":city,"config_version":cfg,
                     "lead_minutes":lead,"locked_at":now.isoformat()}
             frozen=_canonical(params)
             written=conn.execute("""INSERT OR IGNORE INTO weather_hourly_physical_locks
-                (city,config_version,lead_minutes,locked_at,params_json,params_sha)
-                VALUES(?,?,?,?,?,?)""",
-                (city,cfg,lead,now.isoformat(),frozen,_sha(frozen)))
+                (city,config_version,lead_minutes,baseline_kind,
+                 locked_at,params_json,params_sha)
+                VALUES(?,?,?,?,?,?,?)""",
+                (city,cfg,lead,kind,now.isoformat(),frozen,_sha(frozen)))
             result["locked"]+=written.rowcount
         conn.commit()
     return result
@@ -499,7 +518,8 @@ def freeze_candidate_locks(db_path: Path, *,
 
 def physical_live_decision(conn: sqlite3.Connection,city: str,
                            config_version: str,target: datetime,
-                           asof: datetime,physics: dict) -> dict:
+                           asof: datetime,physics: dict, *,
+                           baseline_kind: str | None = None) -> dict:
     """Read-only eligibility: no recalibration or candidate mutation in UI path."""
     output={"enabled":False,"status":"COLLECTING_PAIRED_HOURS",
             "paired_hours":0,"scored_hours":0,"research_scores":None,
@@ -521,11 +541,18 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
         completed=collect_cases(conn,city,config_version,lead,now)
         output["scored_hours"]=len(completed)
         output["research_scores"]=research_scores(completed)
+        kind=baseline_kind or ""
         row=conn.execute("""SELECT locked_at,params_json,params_sha
              FROM weather_hourly_physical_locks
-             WHERE city=? AND config_version=? AND lead_minutes=?""",
-             (city,config_version,lead)).fetchone()
+             WHERE city=? AND config_version=? AND lead_minutes=?
+               AND baseline_kind=?""",
+             (city,config_version,lead,kind)).fetchone()
         if row is None:
+            old=conn.execute("""SELECT 1 FROM weather_hourly_physical_locks
+                WHERE city=? AND config_version=? AND lead_minutes=?
+                LIMIT 1""",(city,config_version,lead)).fetchone()
+            if old:
+                output["status"]="BASELINE_MODEL_CHANGED"
             return output
         locked_at,raw,digest=row
         if _sha(raw)!=digest:
@@ -535,6 +562,7 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
         if (model.get("city")!=city or
             model.get("config_version")!=config_version or
             model.get("lead_minutes")!=lead or
+            (model.get("baseline_kind") or "")!=kind or
             model.get("locked_at")!=locked_at or _utc(locked_at)>now or
             model.get("candidate_ready") is not True or
             model.get("status")!="HISTORICAL_POINT_HOLDOUT_IMPROVED" or
@@ -553,7 +581,9 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
             not .75<=model["sigma_scale"]<=1.8):
             output["status"]="INVALID_PHYSICAL_MODEL_LOCK"
             return output
-        score=evaluate_lockbox(model,completed)
+        compatible=[case for case in completed
+                    if (case.get("baseline_kind") or "")==kind]
+        score=evaluate_lockbox(model,compatible)
         output.update(score)
         output["lead_minutes"]=lead
         return output
