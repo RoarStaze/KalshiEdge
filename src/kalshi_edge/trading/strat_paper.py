@@ -446,10 +446,10 @@ class StratPaperTrader:
                     self._last_signal = "INVALID_OPEN_POSITION_SIDE"
                 elif signals[held].action == "SELL" or self._exit_latched:
                     self._exit_latched = True
-                    self._exit(opened, quotes[held], now)
+                    self._exit(opened, quotes[held], observed_ns)
                 else:
                     self._last_signal = signals[held].reason
-            elif market_info != (ticker, close):
+            elif self._market(observed_ns) != (ticker, close):
                 self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
             elif self._global_loss_streak(now) >= 3:
                 self._last_signal = "GLOBAL_LOSS_CIRCUIT_ACTIVE"
@@ -467,7 +467,7 @@ class StratPaperTrader:
                 ]
                 if len(candidates) == 1:
                     selected = candidates[0]
-                    self._enter(quotes[selected], selected, close, now, stats)
+                    self._enter(quotes[selected], selected, close, observed_ns, stats)
                 elif len(candidates) > 1:
                     self._last_signal = "AMBIGUOUS_BIDIRECTIONAL_ACCELERATION"
                 else:
