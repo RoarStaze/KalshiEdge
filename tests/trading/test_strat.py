@@ -341,15 +341,15 @@ def test_entry_rejects_last_snapshot_stall_after_earlier_burst():
         assert signal.reason == "LATEST_TICK_NOT_RISING"
 
 
-def test_exit_on_immediate_deceleration_without_2_second_average_lag():
-    """The newest bid stall should trigger before the whole window reverses."""
+def test_a_single_flat_quote_is_not_a_confirmed_momentum_exit():
+    """One unchanged REST response is not evidence that a burst ended."""
     stall = quotes(list(map(D, [
         "0.64", "0.64", "0.65", "0.68", "0.68"
     ])))
     for side in ("UP", "DOWN"):
         signal = evaluate_side_momentum(stall, 90, side=side, holding=True)
-        assert signal.action == "SELL"
-        assert signal.reason == f"{side}_LATEST_BID_STALLED"
+        assert signal.action == "HOLD"
+        assert signal.reason == f"{side}_FLAT_QUOTE_UNCONFIRMED"
 
 
 def test_fee_model_has_no_unsupported_extra_one_cent_per_leg():
@@ -647,3 +647,114 @@ def test_dashboard_shows_entry_eligibility_separate_from_momentum():
     assert "Informational daily loss streak" in page
     assert "GLOBAL_LOSS_CIRCUIT_ACTIVE" not in page
     assert "s.global_loss_circuit_active" not in page
+
+
+
+def test_three_consecutive_flat_updates_confirm_slowdown_both_sides():
+    for side in ("UP", "DOWN"):
+        # Exactly three unchanged bid observations after a clear rise.
+        series = quotes(list(map(D, [
+            "0.64", "0.68", "0.68", "0.68", "0.68"
+        ])))
+        signal = evaluate_side_momentum(
+            series, 90, side=side, holding=True
+        )
+        assert signal.action == "SELL"
+        assert signal.reason == f"{side}_MOMENTUM_FLAT_CONFIRMED"
+
+
+def test_single_flat_rest_poll_does_not_force_negative_spread_roundtrip(tmp_path):
+    now = [BASE]
+    close = BASE + 600*NS
+    bids = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68",  # first flat sample: hold, not an automatic 3c loss
+        "0.68", "0.68",  # sustained flat, exit after confirmation
+    ]))
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(
+        tmp_path, live,
+        client=FakeMarketClient([(bid, bid+D("0.02")) for bid in bids]),
+        clock=lambda: now[0],
+    )
+    trader.arm("1.00")
+    for i in range(6):
+        now[0] = BASE + i*NS
+        trader.tick(now[0])
+    opening = trader.ledger.open_position()
+    assert opening is not None and opening["status"] == "OPEN"
+    assert trader.status()["last_signal"] == "UP_FLAT_QUOTE_UNCONFIRMED"
+    for i in range(6, len(bids)):
+        now[0] = BASE + i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is None
+    history = trader.ledger.recent()
+    assert history[0]["exit_reason"] == "UP_MOMENTUM_SLOWED"
+    assert history[0]["exit_ns"] > BASE + 5*NS
+    trader.close()
+
+
+def test_quote_replay_is_cost_aware_and_respects_market_time(tmp_path):
+    from kalshi_edge.trading.strat_tape import StratQuoteTape
+    from kalshi_edge.trading.strat_replay import analyze_causal_markouts
+    tape = StratQuoteTape(tmp_path / "quotes.sqlite3")
+    ticker = TICKER
+    close = BASE+600*NS
+    for idx, bid in enumerate(map(D, [
+        "0.68", "0.68", "0.68", "0.68", "0.68",
+        "0.69", "0.70", "0.73", "0.74", "0.75", "0.76",
+    ])):
+        t = BASE+idx*NS
+        up = UpQuote(ticker, t, bid, bid+D("0.02"), D("100"), D("100"))
+        down = UpQuote(ticker, t, D("0.25"), D("0.27"), D("100"), D("100"))
+        tape.append(
+            observed_ns=t, ticker=ticker, close_ns=close,
+            remaining_seconds=(close-t)/NS,
+            quotes={"UP":up,"DOWN":down},
+            signals={
+                "UP":"NEW_FAST_UP_MOMENTUM" if idx==0 else "NO_NEW_ACCELERATION",
+                "DOWN":"WAIT"
+            },position_side=None,
+        )
+    # 5s and 10s marks are executable hypothetical exits, not mid-price.
+    summary = analyze_causal_markouts(tape.path, horizons=(5,10))
+    assert summary["candidate_count"] == 1
+    five = summary["horizons"]["5s"]
+    ten = summary["horizons"]["10s"]
+    assert five["observed"] == 1 and ten["observed"] == 1
+    assert five["net_profitable"] == 0
+    assert ten["net_profitable"] == 1
+    assert five["mean_net_cents_per_contract"] < 0
+    assert ten["mean_net_cents_per_contract"] > 0
+    assert summary["interpretation"] == "DESCRIPTIVE_ONLY_NO_VERIFIED_EDGE"
+
+    # A second tape with no follow-up cannot use the next ticker's quotes.
+    sparse = StratQuoteTape(tmp_path / "sparse.sqlite3")
+    t = BASE
+    q_up = UpQuote(TICKER, t, D("0.68"), D("0.70"), D("100"), D("100"))
+    q_down = UpQuote(TICKER, t, D("0.28"), D("0.30"), D("100"), D("100"))
+    sparse.append(observed_ns=t, ticker=TICKER, close_ns=close,
+                  remaining_seconds=600.0, quotes={"UP":q_up,"DOWN":q_down},
+                  signals={"UP":"NEW_FAST_UP_MOMENTUM","DOWN":"WAIT"},
+                  position_side=None)
+    no_future = analyze_causal_markouts(sparse.path, horizons=(5,))
+    assert no_future["candidate_count"] == 1
+    assert no_future["horizons"]["5s"]["observed"] == 0
+    assert no_future["horizons"]["5s"]["missing_followup"] == 1
+
+
+def test_strat_dashboard_can_show_on_demand_causal_markout_audit():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    page = render_strat_page()
+    assert "Analyze captured momentum" in page
+    assert "/api/strat/replay" in page
+    assert "NO VERIFIED EDGE" in page
+    assert 'id="replayResult"' in page
