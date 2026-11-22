@@ -27,6 +27,9 @@ from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
 from .hourly_physics import collect_hourly_physics_once
+from .hourly_physical_learning import (
+    journal_physical_pairs, freeze_candidate_locks,
+)
 from .status import weather_database_path
 
 
@@ -335,6 +338,18 @@ class WeatherSupervisor:
             frozen = await asyncio.to_thread(journal_hourly_forecasts,self.db_path)
             self._hourly["journal"]={"state":"READY",
                                      "new_forecasts":frozen["inserted"]}
+            # Research pairs do not depend on contract availability. Keep this
+            # separate from the official-index health path if SQLite is busy.
+            try:
+                pairs=await asyncio.to_thread(journal_physical_pairs,self.db_path)
+                self._hourly["physical_pairs"]={
+                    "state":"COLLECTING",
+                    "new_pairs":pairs["inserted"],
+                    "checked_at":datetime.now(timezone.utc).isoformat()}
+            except Exception as exc:
+                self._hourly["physical_pairs"]={
+                    "state":"UNAVAILABLE",
+                    "reason":f"{type(exc).__name__}: {exc}"[:180]}
         except Exception as exc:
             self._hourly={"state":"UNAVAILABLE",
                           "reason":f"{type(exc).__name__}: {exc}"[:220]}
@@ -377,6 +392,18 @@ class WeatherSupervisor:
                 "target_utc":report.get("target_utc"),
                 "checked_at":datetime.now(timezone.utc).isoformat(),
             }
+            # Freeze prospective candidates only in the write-owning worker.
+            # No GUI request may train or rewrite a candidate retrospectively.
+            try:
+                pairs=await asyncio.to_thread(journal_physical_pairs,self.db_path)
+                locks=await asyncio.to_thread(freeze_candidate_locks,self.db_path)
+                self._hourly_physics["adaptive"]={
+                    "state":"MONITORING","new_pairs":pairs["inserted"],
+                    "new_candidate_locks":locks["locked"]}
+            except Exception as exc:
+                self._hourly_physics["adaptive"]={
+                    "state":"UNAVAILABLE",
+                    "reason":f"{type(exc).__name__}: {exc}"[:180]}
         except Exception as exc:
             self._hourly_physics={
                 "state":"UNAVAILABLE",
