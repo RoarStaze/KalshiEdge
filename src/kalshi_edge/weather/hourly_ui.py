@@ -57,7 +57,7 @@ MAIN = """
    </div>
    <div class="wx-stat wx-hourly-clock">
     <span>Market closes in</span><strong id="wx-hourly-close-clock" aria-live="off">—:—</strong>
-    <small id="wx-hourly-close-note">Actual Kalshi close time for the highlighted contract</small>
+    <small id="wx-hourly-close-note">Kalshi-listed closing time · confirm on Kalshi; early closure is possible</small>
    </div>
    <div class="wx-stat wx-hourly-contract">
     <span>Closest Kalshi contract</span><strong id="wx-hourly-contract">—</strong>
@@ -160,21 +160,21 @@ SCRIPT = r"""<script>
  function tickMarketClose(){
     if(!Number.isFinite(activeCloseMs)){
        put("wx-hourly-close-clock","UNAVAILABLE");
-       put("wx-hourly-close-note","Kalshi did not provide a verified contract close time");
+       put("wx-hourly-close-note","Kalshi close time unavailable; verify directly on Kalshi");
        put("wx-hourly-lean",activeLean);
        return;
     }
     const remaining=Math.max(0,Math.ceil((activeCloseMs-(Date.now()-serverClockBiasMs))/1000));
     if(remaining===0){
        put("wx-hourly-close-clock","CLOSED");
-       put("wx-hourly-close-note","Highlighted contract is no longer open for trading");
+       put("wx-hourly-close-note","Scheduled close reached · check Kalshi market status");
        put("wx-hourly-lean","Market closed — no current side");
        return;
     }
     const minutes=Math.floor(remaining/60);
     const seconds=String(remaining%60).padStart(2,"0");
     put("wx-hourly-close-clock",minutes+":"+seconds);
-    put("wx-hourly-close-note","Actual Kalshi close time for the highlighted contract");
+    put("wx-hourly-close-note","Kalshi-listed closing time · confirm on Kalshi; early closure is possible");
     put("wx-hourly-lean",activeLean);
  }
  function drawLadder(rows,focusTicker){
@@ -237,7 +237,8 @@ SCRIPT = r"""<script>
     put("wx-hourly-focus-ticker",focus?"Kalshi ticker: "+focus.ticker:"");
     if(focus){
        const yesPct=100*focus.probability_yes, noPct=100-yesPct;
-       activeLean="Model leans "+(yesPct>=noPct?"YES":"NO");
+       activeLean=Math.abs(yesPct-noPct)<0.01?"Model is evenly split":
+          "Model leans "+(yesPct>noPct?"YES":"NO");
        put("wx-hourly-model-chance","Estimated YES "+yesPct.toFixed(1)+
           "% · NO "+noPct.toFixed(1)+"% (unvalidated)");
     }else{
