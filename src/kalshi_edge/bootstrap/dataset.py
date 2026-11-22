@@ -568,6 +568,16 @@ def build_dataset(
     if settings.bootstrap_dir.resolve() != root:
         raise DatasetBuildError("bootstrap settings root does not match requested dataset root")
 
+    # Pruned historical raw trades cannot reproduce the existing verified dataset.
+    # Fail before writing anything rather than silently shrinking features.parquet.
+    from ..storage_maintenance import is_historical_trade_history_pruned
+    if is_historical_trade_history_pruned(root):
+        raise DatasetBuildError(
+            "historical raw Kalshi trades are pruned; dataset rebuild blocked to "
+            "protect the existing verified features.parquet. Restore the verified "
+            "raw trade records and manifests before rebuilding."
+        )
+
     market_root = root / "raw" / "kalshi" / "markets"
     if not market_root.exists():
         raise DatasetBuildError("Kalshi backfill must be completed before dataset build")
