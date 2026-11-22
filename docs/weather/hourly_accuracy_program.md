@@ -35,7 +35,8 @@ Kalshi **weighted multi-station Weather Index** settlement underlying.
   toward the incumbent and bound their magnitudes.
 - Evaluate the final 24 hours chronologically, with at least 64 earlier hours
   for training. Require improvements of >=0.03 F in MAE, >=0.003 in Brier
-  and >=0.001 in log loss, all on the same observed contracts.
+  and >=0.001 in log loss, all on the same observed contracts. Also require
+  candidate holdout MAE <=2.5 F to reject catastrophic distribution shifts.
 - Keep the original baseline if any gate fails. Report audit/holdout state and
   number of verified hours. Historical holdout improvement is **not**
   prospective accuracy certification; no empirical 90% coverage guarantee.
