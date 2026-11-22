@@ -277,3 +277,48 @@ def test_even_validly_hashed_invalid_locked_weights_cannot_promote():
     result=physical_live_decision(conn,"chicago",CONFIG,START,now,guidance)
     assert result["enabled"] is False
     assert result["status"]=="INVALID_PHYSICAL_MODEL_LOCK"
+
+
+def test_approved_locked_model_changes_probability_but_cannot_enable_orders(monkeypatch):
+    from kalshi_edge.weather import hourly
+    from kalshi_edge.weather.hourly import event_for, _forecast
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    _init(conn)
+    now=START-timedelta(minutes=30)
+    last=now-timedelta(minutes=3)
+    raw={"t":int(last.timestamp()*1000),"v":59.0,
+         "status":"normal","contributors":4}
+    conn.execute("""INSERT INTO weather_hourly_index
+       (city,event_ms,received_at,temp_f,status,config_version,source_sha,payload)
+       VALUES(?,?,?,?,?,?,?,?)""",
+       ("chicago",raw["t"],(last+timedelta(minutes=1)).isoformat(),
+        59.0,"normal",CONFIG,"a"*64,json.dumps(raw)))
+    event,target=event_for("chicago",now)
+    meta={"source":"KALSHI_WEATHER_INDEX",
+          "close_time_utc":target.isoformat()}
+    conn.execute("""INSERT INTO weather_hourly_markets
+       (ticker,city,event_ticker,target_utc,threshold_f,received_at,metadata)
+       VALUES(?,?,?,?,?,?,?)""",
+       ("TEST","chicago",event,target.isoformat(),60.0,now.isoformat(),
+        json.dumps(meta)))
+    monkeypatch.setattr(hourly,"read_hourly_physics",
+        lambda *args,**kwargs:{
+            "status":"RESEARCH_ONLY_NOT_PROMOTED",
+            "calibration_version":CONFIG,
+            "hrrr_index_f":61.,"nbm_index_f":61.})
+    monkeypatch.setattr(hourly,"physical_live_decision",
+        lambda *args,**kwargs:{
+            "enabled":True,
+            "status":"PROSPECTIVE_LOCKBOX_IMPROVED_NOT_CERTIFIED",
+            "weights":[0.,.5,.5],"bias_f":0.,"sigma_scale":1.,
+            "paired_hours":125,"lockbox_hours":32,
+            "market_verified_hours":32})
+    candidate=_forecast(conn,"chicago",now)
+    assert candidate["status"]=="READY_RESEARCH"
+    assert candidate["pre_physical_mean_f"]==pytest.approx(59.)
+    assert candidate["predicted_index_f"]==pytest.approx(61.)
+    assert candidate["model_kind"]=="PROSPECTIVE_LOCKBOX_PHYSICAL_INDEX_V4"
+    assert candidate["markets"][0]["probability_yes"]>.5
+    assert candidate["real_orders_enabled"] is False
+    assert candidate["calibration_certified"] is False
