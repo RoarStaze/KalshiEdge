@@ -39,6 +39,7 @@ def scan_storage(root: Path | str, *, top: int = 15) -> dict[str, object]:
         raise ValueError("top must be >= 1")
     first: dict[str, int] = {}
     second: dict[str, int] = {}
+    deep: dict[str, int] = {}
     caches: dict[str, int] = {}
     largest: list[tuple[int, str]] = []
     failures: list[str] = []
@@ -82,6 +83,9 @@ def scan_storage(root: Path | str, *, top: int = 15) -> dict[str, object]:
             if len(parts) >= 3:
                 second_key = "/".join(parts[:2])
                 second[second_key] = second.get(second_key, 0) + size
+                for depth in range(3, min(len(parts), 8)):
+                    deeper = "/".join(parts[:depth])
+                    deep[deeper] = deep.get(deeper, 0) + size
             # Exclude Git internals entirely. Only named, regenerateable
             # cache directories qualify, not files merely ending in .tmp.
             if ".git" not in parts:
@@ -103,6 +107,7 @@ def scan_storage(root: Path | str, *, top: int = 15) -> dict[str, object]:
         "errors": failures,
         "first_level_bytes": dict(sorted(first.items(), key=lambda item: -item[1])),
         "second_level_bytes": dict(sorted(second.items(), key=lambda item: -item[1])),
+        "deep_folder_bytes": dict(sorted(deep.items(), key=lambda item: -item[1])),
         "largest_files": [
             {"path": path, "bytes": size}
             for size, path in sorted(largest, reverse=True)
@@ -167,6 +172,9 @@ def _present(report: dict[str, object], *, mode: str) -> None:
             print(f"  {_gib(size):>14}  {name}")
         print("\nLargest second-level folders:")
         for name, size in list(report["second_level_bytes"].items())[:20]:
+            print(f"  {_gib(size):>14}  {name}")
+        print("\nLargest deeper folders (up to 7 levels):")
+        for name, size in list(report["deep_folder_bytes"].items())[:30]:
             print(f"  {_gib(size):>14}  {name}")
         print("\nLargest files:")
         for entry in report["largest_files"]:
