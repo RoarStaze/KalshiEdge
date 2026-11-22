@@ -159,3 +159,60 @@ def test_no_grid_data_reports_unavailable_without_synthetic_temperature(tmp_path
     status=asyncio.run(run())
     assert status["cities"]["chicago"]["state"]=="UNAVAILABLE"
     assert status["real_orders_enabled"] is False
+
+
+def test_configuration_switch_blocks_stale_station_weights(tmp_path):
+    p=payload()
+    newer=copy.deepcopy(p["calibrations"][0])
+    newer["config_version"]="chicago-temperature-v1.2"
+    newer["effective_at_ms"]=int((TARGET-timedelta(minutes=2)).timestamp()*1000)
+    newer["published_at_ms"]=int((NOW-timedelta(minutes=5)).timestamp()*1000)
+    newer["stations"][0]["offset_c"]+=.1
+    newer["city_reference_c"]+=.05
+    configs=parse_calibrations({"city":"chicago","units":"celsius",
+                                "calibrations":[p["calibrations"][0],newer]},"chicago")
+    assert select_calibration(configs,TARGET,NOW)["version"]=="chicago-temperature-v1.2"
+
+
+def test_physics_ready_in_standard_hourly_forecast_response_without_auto_trading(tmp_path):
+    from kalshi_edge.weather.hourly import read_hourly_forecasts
+    def api(request):
+        if request.url.path.endswith("/calibrations"):
+            return httpx.Response(200,json=payload())
+        if request.url.path.endswith("/stationinfo"):
+            return httpx.Response(200,json=[
+                {"icaoId":"KMDW","lat":41.79,"lon":-87.75},
+                {"icaoId":"KORD","lat":41.97,"lon":-87.9},
+                {"icaoId":"KPWK","lat":42.11,"lon":-87.9},
+            ])
+        return httpx.Response(404)
+    async def grib(client,model,run,hour,coords):
+        return ({sid:294.15 for sid in coords},"c"*64)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(api)) as client:
+            return await collect_hourly_physics_once(
+                tmp_path/"weatheredge.sqlite3",client=client,cities=("chicago",),
+                clock=lambda:NOW,grib_fetch=grib)
+    asyncio.run(run())
+    data=read_hourly_forecasts(tmp_path,db_path=tmp_path/"weatheredge.sqlite3",asof=NOW)
+    chicago=next(item for item in data["forecasts"] if item["city"]=="chicago")
+    assert chicago["physical_ensemble"]["status"]=="RESEARCH_ONLY_NOT_PROMOTED"
+    assert chicago["physical_ensemble"]["model_count"]==2
+    assert chicago["real_orders_enabled"] is False
+
+
+def test_one_command_weather_supervisor_reports_physical_data_status(tmp_path):
+    from kalshi_edge.weather.runtime import WeatherSupervisor
+    db=tmp_path/"weatheredge.sqlite3"
+    async def collect(path):
+        assert path==db
+        return {"mode":"HOURLY_PHYSICAL_RESEARCH","real_orders_enabled":False,
+                "cities":{"chicago":{"state":"RESEARCH_READY"}},
+                "model_status":{"HRRR":"READY","NBM":"READY"}}
+    worker=WeatherSupervisor(db,hourly_physics_collect=collect,
+                             ensure_decoder=lambda:{"state":"AVAILABLE"})
+    asyncio.run(worker.poll_hourly_physics())
+    health=json.loads((db.parent/"collector-status.json").read_text())
+    assert health["hourly_physics"]["cities"]["chicago"]["state"]=="RESEARCH_READY"
+    assert health["hourly_physics"]["model_status"]["NBM"]=="READY"
+    assert health["real_orders_enabled"] is False
