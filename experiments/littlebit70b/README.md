@@ -128,3 +128,18 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ```
 
 The RTX 4050 GPU validation is pending; 11 new tests are added, and the expected complete experiment suite has 56 tests. The demo uses synthetic weights and downloads nothing.
+
+
+## Bounded multi-layer latency and memory profile
+
+The [STREAM_PROFILE.md](STREAM_PROFILE.md) milestone profiles 8 or more **synthetic**, Samsung-keyed packed linear layers using the RTX 4050 CUDA warp backend. It measures median whole-chain latency and private-pool high-water allocation. Device memory readings before and after are snapshots **not VRAM peak**.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\stream_profile.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+Expected suite size is 65 tests (56 previous + 9 profiler tests). No model files are downloaded. This is not end-to-end Gemma generation or evidence of 27B feasibility.
