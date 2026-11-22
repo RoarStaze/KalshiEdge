@@ -34,7 +34,7 @@ The profiler refuses excessive width/rank/layer/repeat counts or estimated check
 - layers_per_second counts synthetic **linear layers**, NOT generated tokens.
 - private_pool_peak_reserved_bytes is the maximum allocated/reserved amount measured by CUDALayerStream within its *private* CuPy memory pool.
 - live_pool_bytes_after_each_run must be all zeros; this proves no live allocations remain in **that pool**, not all GPU memory.
-- device_free_before_bytes_snapshot and device_free_after_bytes_snapshot are NVML/CUDA device free-memory snapshots. They are NOT instantaneous or peak whole-process VRAM measurements. The field vram_peak_measured is always false.
+- device_free_before_bytes_snapshot and device_free_after_bytes_snapshot are CUDA runtime device free-memory snapshots. They are NOT continuous measurements of whole-process or peak VRAM use. The field vram_peak_measured is always false.
 - wall_time_variability_warning indicates a 2x or larger observed timing spread.
 
 Because the implementation transfers each layer's output back to CPU and calls Python garbage collection for every layer, speed is **not** a prediction for a production transformer. End-to-end streaming is likely slower than keeping all layers resident on GPU.
