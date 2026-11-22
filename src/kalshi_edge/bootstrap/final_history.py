@@ -434,10 +434,20 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                     raise ValueError("Invalid Strat action size")
                 payload = json.loads(self.rfile.read(length))
                 if self.path == "/api/strat/arm":
-                    if (not isinstance(payload, dict) or set(payload) != {"amount"}
+                    if (not isinstance(payload, dict)
+                            or not {"amount"} <= set(payload)
+                            or not set(payload) <= {
+                                "amount", "exploratory_ignore_negative_evidence"
+                            }
                             or not isinstance(payload["amount"], str)):
-                        raise ValueError("Strat arm accepts only a dollar amount")
-                    result = strat.arm(payload["amount"])
+                        raise ValueError("Strat arm accepts a dollar amount and optional paper research flag")
+                    explore = payload.get("exploratory_ignore_negative_evidence", False)
+                    if type(explore) is not bool:
+                        raise ValueError("Paper research flag must be a boolean")
+                    result = strat.arm(
+                        payload["amount"],
+                        exploratory_ignore_negative_evidence=explore,
+                    )
                 elif self.path == "/api/strat/pause":
                     if payload != {}:
                         raise ValueError("Strat pause accepts no overrides")
