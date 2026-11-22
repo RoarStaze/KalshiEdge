@@ -68,6 +68,23 @@ def event_for(city: str, asof: datetime) -> tuple[str, datetime]:
             local_target.strftime("%y%b%d%H").upper(), target)
 
 
+def listed_event_target(city: str, event: str) -> datetime | None:
+    """Decode the actual listed Eastern-hour event without guessing its ticker."""
+    prefix = CITIES[city].series + "-"
+    if not isinstance(event, str) or not event.startswith(prefix):
+        return None
+    suffix = event[len(prefix):]
+    if not re.fullmatch(r"\d{2}[A-Z]{3}\d{2}\d{2}", suffix):
+        return None
+    try:
+        local = datetime.strptime(suffix, "%y%b%d%H").replace(tzinfo=EASTERN, fold=0)
+        if local.astimezone(timezone.utc).astimezone(EASTERN).strftime("%y%b%d%H").upper() != suffix:
+            return None
+        return local.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
 def _finite(value: object) -> float:
     if isinstance(value, bool):
         raise ValueError("boolean is not a temperature")
@@ -143,12 +160,22 @@ def _valid_market(market: dict, city: str, event: str, *,
         return None
     if market.get("status") not in (("settled",) if settled else ("active", "open")):
         return None
-    rules = market.get("rules_primary")
-    if not isinstance(rules, str) or "kalshi weather index" not in rules.lower():
-        # Historical single-station/TWC markets are NOT these HS index contracts.
+    if market.get("series_ticker") not in (None, CITIES[city].series):
         return None
-    title = market.get("yes_sub_title", market.get("subtitle"))
-    match = _ABOVE.fullmatch(title) if isinstance(title, str) else None
+    if market.get("market_type") not in (None, "binary"):
+        return None
+    rules = market.get("rules_primary")
+    if not isinstance(rules, str) or not rules.strip():
+        return None
+    # The *whitelisted HS series* identifies the Kalshi multi-station index.
+    # Wording can mention the index publisher (Synoptic Data) instead of the
+    # literal string "Kalshi Weather Index". Never conflate the older
+    # Weather Company single-airport contracts with the HS series.
+    if "the weather company" in rules.lower() or "weather.com" in rules.lower():
+        return None
+    match = next((found for title in (market.get("yes_sub_title"), market.get("subtitle"))
+                  if isinstance(title, str)
+                  for found in [_ABOVE.fullmatch(title)] if found), None)
     if not match:
         return None
     try:
@@ -263,23 +290,86 @@ async def collect_hourly_once(
                         city, point["event_ms"], receipt.isoformat(),
                         point["temp_f"], point["status"], point["config_version"],
                         source_sha, json.dumps(point["raw"], sort_keys=True)))
+                # Discover *listed* contracts by the official index series.
+                # A guessed event_ticker can point to an unlisted hour.
+                listed: list[dict] = []
+                seen_tickers: set[str] = set()
+                cursor = ""
+                for page in range(4):
+                    params = {"series_ticker": CITIES[city].series,
+                              "status": "open", "limit": 200}
+                    if cursor:
+                        params["cursor"] = cursor
+                    reply = await client.get(f"{API}/markets", params=params)
+                    reply.raise_for_status()
+                    if len(reply.content) > MAX_SIZE:
+                        raise ValueError("OVERSIZED_MARKET_RESPONSE")
+                    payload = reply.json()
+                    if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
+                        raise ValueError("INVALID_HOURLY_MARKETS")
+                    for raw in payload["markets"]:
+                        if not isinstance(raw, dict):
+                            continue
+                        ticker = raw.get("ticker")
+                        if isinstance(ticker, str) and ticker not in seen_tickers:
+                            listed.append(raw)
+                            seen_tickers.add(ticker)
+                    cursor = payload.get("cursor") or ""
+                    if not isinstance(cursor, str) or len(cursor) > 2048:
+                        raise ValueError("INVALID_HOURLY_CURSOR")
+                    if not cursor:
+                        break
+                else:
+                    raise ValueError("INCOMPLETE_HOURLY_SERIES_LISTING")
+
+                candidates_by_event: dict[str, list[dict]] = {}
+                targets: dict[str, datetime] = {}
+                for raw in listed:
+                    event_name = raw.get("event_ticker")
+                    target_time = listed_event_target(city, event_name)
+                    if (target_time is None or not receipt < target_time <=
+                            receipt + timedelta(hours=3)):
+                        continue
+                    targets[event_name] = target_time
+                    candidates_by_event.setdefault(event_name, []).append(raw)
+
+                selected: list[dict] = []
                 event, target = event_for(city, receipt)
-                reply = await client.get(f"{API}/markets",
-                                         params={"event_ticker":event,"limit":200})
-                reply.raise_for_status()
-                if len(reply.content) > MAX_SIZE:
-                    raise ValueError("OVERSIZED_MARKET_RESPONSE")
-                candidates = parse_markets(reply.json(), city, event)
-                for item in candidates:
+                for candidate_event in sorted(targets, key=lambda x: targets[x]):
+                    parsed = parse_markets(
+                        {"markets": candidates_by_event[candidate_event], "cursor": ""},
+                        city, candidate_event)
+                    # Even an API listing cached as 'open' may already be closed.
+                    valid = [item for item in parsed
+                             if item["close_time_utc"] is None or
+                             datetime.fromisoformat(item["close_time_utc"]) > receipt]
+                    if valid:
+                        event = candidate_event
+                        target = targets[event]
+                        selected = valid
+                        break
+
+                for item in selected:
                     markets.append((
                         item["ticker"], city, event, target.isoformat(),
-                        item["threshold_f"], _utc(current_clock()).isoformat(),
+                        item["threshold_f"], receipt.isoformat(),
                         json.dumps(item, sort_keys=True)))
+                reason = None
+                if not selected:
+                    reason = (
+                        "Kalshi returned no open contracts for this index series"
+                        if not listed else
+                        "Kalshi returned open contracts, but none matched a "
+                        "future HS index event and accepted threshold")
                 results[city] = {
-                    "state": "READY" if rows and candidates else
+                    "state": "READY" if rows and selected else
                     ("NO_ACTIVE_HOURLY_MARKET" if rows else "NO_INDEX_POINTS"),
-                    "index_points": len(rows), "market_strikes": len(candidates),
-                    "event_ticker": event,
+                    "index_points": len(rows), "market_strikes": len(selected),
+                    "source_market_count": len(listed),
+                    "future_event_count": len(candidates_by_event),
+                    "listed_event_tickers": list(dict.fromkeys(
+                        str(x.get("event_ticker", "")) for x in listed))[:4],
+                    "event_ticker": event, "reason": reason,
                 }
             except (ValueError, TypeError, httpx.HTTPError,
                     KeyError, OverflowError, json.JSONDecodeError) as exc:
@@ -309,6 +399,17 @@ async def collect_hourly_once(
 
 def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
     event, target = event_for(city, asof)
+    # Follow actual collected Kalshi listings, not a speculative event hour.
+    # An old entry is not evidence that a market is still open.
+    selected = conn.execute("""
+        SELECT event_ticker, target_utc FROM weather_hourly_markets
+        WHERE city=? AND received_at>=? AND received_at<=?
+          AND target_utc>? AND target_utc<=?
+        ORDER BY target_utc ASC, received_at DESC LIMIT 1""",
+        (city, (asof-timedelta(minutes=5)).isoformat(), asof.isoformat(),
+         asof.isoformat(), (asof+timedelta(hours=3)).isoformat())).fetchone()
+    if selected:
+        event, target = selected[0], datetime.fromisoformat(selected[1])
     result = {
         "city": city, "name": CITIES[city].label, "series": CITIES[city].series,
         "status":"MISSING_INDEX","event_ticker":event,"target_utc":target.isoformat(),
@@ -363,6 +464,9 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         try:
             m=json.loads(raw)
             if m["source"]!="KALSHI_WEATHER_INDEX":
+                continue
+            close_at = m.get("close_time_utc")
+            if close_at and datetime.fromisoformat(close_at) <= asof:
                 continue
             probability=max(0.,min(1.,1-normal_cdf(threshold,mean,sigma)))
         except (ValueError,TypeError,KeyError,json.JSONDecodeError):

@@ -43,7 +43,8 @@ def transport(request):
     if "/live_data/weather/" in request.url.path:
         return httpx.Response(200,json=points())
     assert request.url.path.endswith("/markets")
-    assert request.url.params["event_ticker"]==EVENT
+    assert request.url.params["series_ticker"]=="KXTEMPCHIHS"
+    assert request.url.params["status"]=="open"
     return httpx.Response(200,json={"markets":[market()],"cursor":""})
 
 
@@ -126,6 +127,65 @@ def test_hourly_collection_and_prospective_forecast_one_command_compatible(tmp_p
         row=conn.execute("SELECT event_ticker, asof, source_reading_ms FROM weather_hourly_snapshots").fetchone()
         assert row[0]==EVENT and row[1]==NOW.isoformat()
         assert row[2]<int(NOW.timestamp()*1000)
+
+
+def test_hourly_series_listing_preserves_real_event_not_constructed_ticker(tmp_path):
+    future_event="KXTEMPCHIHS-26NOV2214"
+    future_target=datetime(2026,11,22,19,tzinfo=timezone.utc)
+    future={**market(event=future_event),
+            "close_time":(future_target-timedelta(seconds=30)).isoformat(),
+            "series_ticker":"KXTEMPCHIHS"}
+    requests_seen=[]
+    def response(request):
+        if "/live_data/weather/" in request.url.path:
+            return httpx.Response(200,json=points())
+        requests_seen.append(str(request.url))
+        assert request.url.params.get("series_ticker")=="KXTEMPCHIHS"
+        assert request.url.params.get("status")=="open"
+        return httpx.Response(200,json={"markets":[future],"cursor":""})
+    db=tmp_path/"weatheredge.sqlite3"
+    async def collect():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+            return await collect_hourly_once(db,client=client,cities=("chicago",),clock=lambda:NOW)
+    status=asyncio.run(collect())["cities"]["chicago"]
+    assert status["state"]=="READY"
+    assert status["market_strikes"]==1
+    assert status["event_ticker"]==future_event
+    assert len(requests_seen)==1
+    forecast=next(x for x in read_hourly_forecasts(tmp_path,db_path=db,asof=NOW)["forecasts"]
+                  if x["city"]=="chicago")
+    assert forecast["status"]=="READY_RESEARCH"
+    assert forecast["target_utc"]==future_target.isoformat()
+    assert forecast["event_ticker"]==future_event
+    assert len(forecast["markets"])==1
+
+
+def test_hourly_listing_uses_series_identity_when_rules_name_synoptic_index():
+    row={**market(),"series_ticker":"KXTEMPCHIHS",
+         "rules_primary":"The Chicago Metro hourly temperature Index is "
+                         "published by the Source Agency using Synoptic Data."}
+    parsed=parse_markets({"markets":[row],"cursor":""},"chicago",EVENT)
+    assert len(parsed)==1
+    assert parsed[0]["ticker"]==row["ticker"]
+    assert parse_markets({"markets":[{**row,"series_ticker":"KXTEMPCHIH"}],
+                          "cursor":""},"chicago",EVENT)==[]
+    assert parse_markets({"markets":[{**row,"rules_primary":"The Weather Company at Midway Airport"}],
+                          "cursor":""},"chicago",EVENT)==[]
+
+
+def test_hourly_series_collector_reports_empty_listings_diagnostically(tmp_path):
+    def response(request):
+        if "/live_data/weather/" in request.url.path:
+            return httpx.Response(200,json=points())
+        return httpx.Response(200,json={"markets":[],"cursor":""})
+    async def collect():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+            return await collect_hourly_once(tmp_path/"weatheredge.sqlite3",
+                client=client,cities=("chicago",),clock=lambda:NOW)
+    data=asyncio.run(collect())["cities"]["chicago"]
+    assert data["state"]=="NO_ACTIVE_HOURLY_MARKET"
+    assert data["source_market_count"]==0
+    assert data["market_strikes"]==0
 
 
 def test_late_and_unobserved_hour_are_not_predicted(tmp_path):
