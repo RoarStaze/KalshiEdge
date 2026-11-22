@@ -157,3 +157,18 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ```
 
 The experiment suite is expected to contain **71 tests**; the new CUDA tests must run (not skip) on your RTX 4050. The GPU resident path is experimental and is not automatically promoted based on earlier benchmarks.
+
+
+## Cached Safetensors metadata streaming (experimental)
+
+See [CACHED_STREAM.md](CACHED_STREAM.md). A separate CUDA streaming path reuses Safetensors metadata and skips forced garbage collection per layer. Its paired benchmark compares against the unchanged CPU-round-trip streamer on the same synthetic checkpoint, checking numerical parity and eviction.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\cached_stream.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+Expected total: 84 tests, including three new GPU tests. This new path is not GPU-verified until you run it on your RTX 4050. The demo downloads no pretrained weights.
