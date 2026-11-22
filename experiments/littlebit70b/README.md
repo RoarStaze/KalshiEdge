@@ -91,3 +91,26 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ```
 
 These only execute synthetic packed-matrix operations, not a trained Gemma model.
+
+
+## Samsung-packed Safetensors layer loading (experimental)
+
+The [CHECKPOINT_STREAMING.md](CHECKPOINT_STREAMING.md) milestone adds a bounded, per-layer reader for genuine Samsung LittleBit packed factor keys, including BF16 scaling vectors and sharded model.safetensors.index.json manifests. It **does not** download or run a full Gemma 3 27B model.
+
+Use the already-installed isolated CUDA environment:
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\safetensors_layer.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+Optional repeated GPU timings:
+
+~~~powershell
+& $py experiments\littlebit70b\repeat_benchmark.py
+~~~
+
+The checkpoint demo is synthetic only; the new checkpoint-to-GPU path needs RTX 4050 parity validation before any real checkpoint integration.
