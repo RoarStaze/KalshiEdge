@@ -32,6 +32,8 @@ def test_scan_counts_and_classifies_without_mutation(tmp_path):
     assert data['total_bytes'] == 17 + 31 + 23 + 7 + 5 + len('PRIVATE=KEY')
     assert data['first_level_bytes']['data'] == 48
     assert data['first_level_bytes']['artifacts'] == 23
+    assert data['deep_folder_bytes']['data/bootstrap/raw/binance/archive'] == 17
+    assert data['deep_folder_bytes']['data/bootstrap/derived'] == 31
     assert data['cache_bytes'] == 12
     assert data['files'] == 6
     assert len(data['largest_files']) == 2
