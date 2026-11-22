@@ -23,6 +23,7 @@ _DASHBOARD_FILES = (
     "trading/strat_paper.py",
     "trading/strat_tape.py",
     "trading/strat_replay.py",
+    "trading/strat_evidence.py",
     "bootstrap/scalp_paper_ui.py",
     "trading/paper_scalper.py",
     "trading/scalp_policy.py",
