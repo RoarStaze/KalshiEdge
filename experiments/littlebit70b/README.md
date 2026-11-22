@@ -41,3 +41,13 @@ No automatic downloads or model execution occur here. A failed memory estimate m
 Official source: https://github.com/SamsungLabs/LittleBit . The official README documents quantization-aware training and evaluation, not a prebuilt 70B local deployment package.
 
 **Release gate:** Never advertise this experiment as a local 27B/70B inference application until real hardware inference, speed, memory, quality, and checkpoint provenance have been demonstrated. Running `discover.py` alone is insufficient.
+
+## Check for a usable 27B–70B LittleBit release
+
+**LittleBit-only**: See [LARGE_MODELS.md](LARGE_MODELS.md) for source-grounded eligibility criteria and the latest documented limitations. Run the metadata scout (no weights downloaded):
+
+```powershell
+python experiments/littlebit70b/large_check.py
+```
+
+This search does not install, compress, or execute a model. No large model is currently verified runnable on the target hardware.
