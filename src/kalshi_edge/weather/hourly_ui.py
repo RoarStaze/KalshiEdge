@@ -96,6 +96,9 @@ MAIN = """
     <div class="wx-row"><span>Physical ensemble evidence</span><strong id="wx-physics-status">WAITING</strong></div>
     <div class="wx-row"><span>Physical ensemble validation</span><strong id="wx-physical-adaptive-state">COLLECTING</strong></div>
     <div class="wx-row"><span>Paired hourly forecast evidence</span><strong id="wx-physical-adaptive-pairs">0</strong></div>
+    <div class="wx-row"><span>Completed hourly index outcomes</span><strong id="wx-physical-adaptive-scored">0</strong></div>
+    <div class="wx-row"><span>Observed historical MAE (baseline / HRRR / NBM / blend)</span><strong id="wx-physical-adaptive-research-mae">NOT MEASURED</strong></div>
+    <div class="wx-row"><span>Observed historical CRPS (baseline / HRRR / NBM / blend)</span><strong id="wx-physical-adaptive-research-crps">NOT MEASURED</strong></div>
     <div class="wx-row"><span>Prospective lockbox hours</span><strong id="wx-physical-adaptive-lockbox">0 / 32</strong></div>
     <div class="wx-row"><span>Settlement-verified lockbox hours</span><strong id="wx-physical-adaptive-verified">0 / 24</strong></div>
     <div class="wx-row"><span>Prospective MAE / CRPS / Brier</span><strong id="wx-physical-adaptive-metrics">NOT YET MEASURED</strong></div>
@@ -234,6 +237,16 @@ SCRIPT = r"""<script>
     put("wx-physics-status",physics.status||"NO_PHYSICAL_GUIDANCE");
     put("wx-physical-adaptive-state",row.physical_adaptive_status||"COLLECTING");
     put("wx-physical-adaptive-pairs",row.physical_adaptive_paired_hours??0);
+    put("wx-physical-adaptive-scored",row.physical_adaptive_scored_hours??0);
+    const research=row.physical_adaptive_research_scores;
+    put("wx-physical-adaptive-research-mae",research?
+        [research.baseline_mae_f,research.hrrr_mae_f,
+         research.nbm_mae_f,research.equal_blend_mae_f].join(" / "):
+        "Fewer than 10 completed paired hours");
+    put("wx-physical-adaptive-research-crps",research?
+        [research.baseline_crps,research.hrrr_crps,
+         research.nbm_crps,research.equal_blend_crps].join(" / "):
+        "Fewer than 10 completed paired hours");
     put("wx-physical-adaptive-lockbox",(row.physical_adaptive_lockbox_hours??0)+" / 32");
     put("wx-physical-adaptive-verified",(row.physical_adaptive_market_hours??0)+" / 24");
     const pm=row.physical_adaptive_metrics;
