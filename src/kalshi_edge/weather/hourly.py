@@ -492,8 +492,10 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
             result["index_nowcast_validation"]=nowcast.get("validation")
             live=nowcast.get("live_slopes")
             if nowcast["enabled"] and live is not None:
+                nowcast_hours=(target-datetime.fromtimestamp(
+                    live[3]/1000,tz=timezone.utc)).total_seconds()/3600
                 mean,sigma=nowcast_prediction(live[2],sigma,live[0],live[1],
-                            hours_ahead,nowcast)
+                            nowcast_hours,nowcast)
                 result["model_kind"]="HISTORICAL_INDEX_NOWCAST_V2"
                 result["index_nowcast_selected_model"]=nowcast["model"]
         else:
