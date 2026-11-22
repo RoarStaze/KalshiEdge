@@ -398,6 +398,8 @@ def read_hourly_physics(conn: sqlite3.Connection, city: str,
               ORDER BY received_at DESC""",
               (city,target.isoformat(),asof.isoformat(),target.isoformat())).fetchall()
         selected={}
+        model_receipts={}
+        model_runs={}
         version=None
         digest=None
         for model,value,cfg,sha,received,run in _init_read_rows:
@@ -426,7 +428,15 @@ def read_hourly_physics(conn: sqlite3.Connection, city: str,
                 continue
             if not (isinstance(value,(int,float)) and math.isfinite(value)):
                 continue
+            # Retain actual provider model cycle and *local* receipt times
+            # so future validation cannot pair a model that arrived too late.
+            cycle=_utc(run)
+            receipt=_utc(received)
+            if cycle>receipt or cycle>=target:
+                continue
             selected[model]=float(value)
+            model_receipts[model]=receipt.isoformat()
+            model_runs[model]=cycle.isoformat()
         if set(selected)!={"HRRR","NBM"}:
             output["model_count"]=len(selected)
             return output
@@ -438,6 +448,8 @@ def read_hourly_physics(conn: sqlite3.Connection, city: str,
             "hrrr_index_f":round(selected["HRRR"],3),
             "nbm_index_f":round(selected["NBM"],3),
             "ensemble_index_f":round((selected["HRRR"]+selected["NBM"])/2,3),
+            "model_receipts":model_receipts,
+            "model_runs":model_runs,
             "blend_method":"UNTRAINED_EQUAL_WEIGHT_RESEARCH",
         })
     except (sqlite3.Error,ValueError,TypeError,KeyError,OverflowError,
