@@ -329,20 +329,19 @@ def freeze_pair(conn: sqlite3.Connection,prediction: dict,
 
 def journal_physical_pairs(db_path: Path, *, asof: datetime | None = None) -> dict:
     """Run from ordinary kalshiedge start; never wait for a Kalshi market."""
-    from .hourly import read_hourly_forecasts
+    from .hourly import CITIES, _forecast
     now=_utc(asof or datetime.now(timezone.utc))
     result={"mode":"HOURLY_PHYSICAL_EVIDENCE","inserted":0,
             "real_orders_enabled":False}
     path=Path(db_path)
     if not path.is_file():
         return result
-    forecast=read_hourly_forecasts(path.parent,db_path=path,asof=now)
-    if forecast.get("status")=="HOURLY_DATABASE_ERROR":
-        result["status"]="SOURCE_UNAVAILABLE"
-        return result
     with closing(sqlite3.connect(path,timeout=10)) as conn:
         _init(conn)
-        for row in forecast.get("forecasts",[]):
+        for city in CITIES:
+            # The physical ensemble always targets the next official index
+            # hour, even when the only currently listed Kalshi event is later.
+            row=_forecast(conn,city,now,force_next_index_hour=True)
             result["inserted"]+=int(freeze_pair(conn,row,now))
         conn.commit()
     return result
