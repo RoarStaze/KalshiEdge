@@ -94,6 +94,22 @@ its own gate. Incomplete history keeps the previous exploratory paper
 behavior; it is **not** positive evidence. Exits for existing positions
 continue regardless of the gate.
 
+**Paper research opt-in:** The Arm controls now have an unchecked
+`Paper exploration — optional negative-evidence override` checkbox.
+When deliberately enabled, this option bypasses **only the negative
+historical taker entry veto**. It never bypasses the 2:00 entry cutoff,
+65–85¢ executable ask requirement, acceleration, budget, single open
+position, liquidity, re-entry cooldown or market cycle limits. Trades
+remain 100% simulated. Historical negative results continue to be shown
+and are not recalculated or deleted. The option must be explicitly
+selected again each time entries are armed, is cleared on pause and on
+application restart, and cannot authorize any real orders.
+
+**Example:** with 7:33 remaining, UP ask 56¢, DOWN ask 45¢, **neither
+side qualifies** even if the exploration override is selected. Once a
+side's executable ask enters 65–85¢, it still needs a fresh accelerating
+BUY signal and the modeled entry price cannot exceed 85¢.
+
 These fixed thresholds are deliberately conservative *negative-evidence
 heuristics*, not significance tests, optimized settings or an automatic
 profitability filter. Correlated events, exact fill availability, contract
@@ -132,4 +148,10 @@ $py = ".\.venv\Scripts\python.exe"
 kalshiedge start
 ```
 
-Then select **Strat**, choose the simulated budget, and press **Arm paper Strat**. Nothing places a real Kalshi order. Keep the server running to record real-time simulated cycles.
+Then select **Strat**, choose the simulated budget, and press **Arm paper Strat**.
+By default the negative historical entry veto is enforced. To collect
+further *paper-only* trades despite already-negative historical evidence,
+deliberately check **Paper exploration** before arming. The checkbox
+is not an order permission, cannot make a 56¢ or 45¢ ask eligible under
+the 65–85¢ rule, and does not imply the strategy will profit.
+Nothing places a real Kalshi order. Keep the server running to record real-time simulated cycles.
