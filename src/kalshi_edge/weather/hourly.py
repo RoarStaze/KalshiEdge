@@ -58,8 +58,14 @@ def event_for(city: str, asof: datetime) -> tuple[str, datetime]:
     now = _utc(asof)
     target = datetime.fromtimestamp(
         (int(now.timestamp()) // 3600 + 1) * 3600, tz=timezone.utc)
+    local_target = target.astimezone(EASTERN)
+    if local_target.fold == 1:
+        # On fall-back DST, Kalshi's contract defaults to the earlier
+        # occurrence. Do not fabricate a second identical ET event ticker.
+        target += timedelta(hours=1)
+        local_target = target.astimezone(EASTERN)
     return (CITIES[city].series + "-" +
-            target.astimezone(EASTERN).strftime("%y%b%d%H").upper(), target)
+            local_target.strftime("%y%b%d%H").upper(), target)
 
 
 def _finite(value: object) -> float:
@@ -201,6 +207,7 @@ def _init(conn: sqlite3.Connection) -> None:
         result TEXT NOT NULL, observed_index_f REAL NOT NULL,
         observed_event_ms INTEGER NOT NULL, checked_at TEXT NOT NULL,
         source_index_sha TEXT NOT NULL, market_sha TEXT NOT NULL,
+        source_index_raw TEXT NOT NULL, market_raw TEXT NOT NULL,
         PRIMARY KEY(city,event_ticker))""")
 
 
@@ -479,12 +486,15 @@ async def settle_hourly_once(db_path: Path, *, client: httpx.AsyncClient | None 
                     _init(conn)
                     cursor=conn.execute("""INSERT OR IGNORE INTO weather_hourly_settlements
                         (city,event_ticker,market_ticker,result,observed_index_f,
-                        observed_event_ms,checked_at,source_index_sha,market_sha)
-                        VALUES(?,?,?,?,?,?,?,?,?)""",
+                        observed_event_ms,checked_at,source_index_sha,market_sha,
+                        source_index_raw,market_raw)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                         (city,event,ticker,matching["result"],canonical["temp_f"],
                          canonical["event_ms"],now_str,
                          hashlib.sha256(response.content).hexdigest(),
-                         hashlib.sha256(reply.content).hexdigest()))
+                         hashlib.sha256(reply.content).hexdigest(),
+                         response.content.decode("utf-8"),
+                         reply.content.decode("utf-8")))
                     conn.commit()
                     result["verified"]+=cursor.rowcount
             except (httpx.HTTPError,ValueError,TypeError,OverflowError,
@@ -511,22 +521,50 @@ def hourly_calibration(root: Path, *, db_path: Path | None = None,
         uri=path.resolve().as_uri()+"?mode=ro"
         with closing(sqlite3.connect(uri,uri=True,timeout=2)) as conn:
             conn.execute("PRAGMA query_only=ON")
-            rows=conn.execute("""SELECT s.forecast_json,s.forecast_sha,
-               o.result,o.observed_index_f,o.market_ticker,s.market_ticker
+            rows=conn.execute("""SELECT s.city,s.event_ticker,s.target_utc,
+               s.forecast_json,s.forecast_sha,o.result,o.observed_index_f,
+               o.observed_event_ms,o.market_ticker,s.market_ticker,
+               o.checked_at,o.source_index_raw,o.market_raw,
+               o.source_index_sha,o.market_sha
                FROM weather_hourly_snapshots s
                JOIN weather_hourly_settlements o
                ON o.city=s.city AND o.event_ticker=s.event_ticker""").fetchall()
         observations=[]
-        for raw,digest,yes,value,settled_ticker,original_ticker in rows:
+        for (city,event,target_raw,raw,digest,yes,value,value_ms,
+             settled_ticker,original_ticker,checked_at,index_raw,market_raw,
+             index_sha,market_sha) in rows:
             if settled_ticker!=original_ticker:
-                continue
+                raise ValueError("HOURLY_SETTLEMENT_TICKER_CHANGED")
             if hashlib.sha256(raw.encode()).hexdigest()!=digest:
                 raise ValueError("TAMPERED_HOURLY_FORECAST")
+            if (hashlib.sha256(index_raw.encode()).hexdigest()!=index_sha or
+                hashlib.sha256(market_raw.encode()).hexdigest()!=market_sha):
+                raise ValueError("TAMPERED_HOURLY_SETTLEMENT_SOURCE")
+            target=_utc(datetime.fromisoformat(target_raw))
+            as_checked=_utc(datetime.fromisoformat(checked_at))
+            indexed=parse_index(json.loads(index_raw),city,as_checked,
+                                max_age_seconds=8*24*3600)
+            lower_ms=int((target-timedelta(minutes=60)).timestamp()*1000)
+            upper_ms=int(target.timestamp()*1000)
+            viable=[x for x in indexed if lower_ms<=x["event_ms"]<=upper_ms]
+            if not viable:
+                raise ValueError("NO_RECORDED_CANONICAL_SETTLEMENT_POINT")
+            canonical=max(viable,key=lambda x:x["event_ms"])
+            market_row=next((x for x in parse_markets(json.loads(market_raw),city,
+                            event,settled=True) if x["ticker"]==settled_ticker),None)
+            if (market_row is None or market_row["result"]!=yes or
+                canonical["event_ms"]!=value_ms or
+                abs(canonical["temp_f"]-value)>1e-6 or
+                (canonical["temp_f"]>=market_row["threshold_f"])!=(yes=="yes")):
+                raise ValueError("HOURLY_SETTLEMENT_RECONCILIATION_CHANGED")
             frozen=json.loads(raw)
             chosen=frozen["selected_market"]
+            if (chosen["ticker"]!=settled_ticker or
+                abs(chosen["threshold_f"]-market_row["threshold_f"])>1e-6):
+                raise ValueError("HOURLY_SNAPSHOT_MARKET_MISMATCH")
             p=chosen["probability_yes"]
             if not isinstance(p,(int,float)) or not 0<=p<=1:
-                continue
+                raise ValueError("INVALID_FROZEN_HOURLY_PROBABILITY")
             observations.append((p,1 if yes=="yes" else 0,
                 abs(float(value)-frozen["predicted_index_f"])<=
                 1.64485362695*frozen["sigma_f"]))
