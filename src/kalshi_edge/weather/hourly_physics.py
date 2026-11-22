@@ -175,6 +175,11 @@ def parse_station_coordinates(payload: object,
 
 
 def _init(conn: sqlite3.Connection) -> None:
+    # Independent workers may start in either order on first boot.
+    # Initialize the official hourly tables as well so read-only forecast
+    # endpoints never encounter a half-initialized weather database.
+    from .hourly import _init as init_hourly
+    init_hourly(conn)
     conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_physics_calibrations(
         city TEXT NOT NULL,config_version TEXT NOT NULL,
