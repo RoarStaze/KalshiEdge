@@ -39,6 +39,17 @@ def analyze_causal_markouts(
         "candidate_count": 0,
         "capped_at": MAX_CANDIDATES,
         "truncated": False,
+        "execution_scenarios": {
+            f"{h}s": {
+                "maker_label": (
+                    "NOT VERIFIED: immediate passive BID entry fill assumed, "
+                    "zero hypothetical maker entry fee, taker exit modeled"
+                ),
+                "optimistic_maker_entry_is_verified": False,
+                "optimistic_maker_entry_assumed_fills": 0,
+                "optimistic_maker_entry_mean_net_cents": None,
+            } for h in horizons
+        },
         "horizons": {
             f"{h}s": {
                 "observed": 0, "net_profitable": 0,
@@ -64,7 +75,8 @@ def analyze_causal_markouts(
         db.row_factory = sqlite3.Row
         source = db.execute(
             """SELECT ticker, observed_ns, close_ns, remaining_seconds,
-                      up_ask, down_ask, up_signal, down_signal, position_side
+                      up_bid, down_bid, up_ask, down_ask,
+                      up_signal, down_signal, position_side
                FROM quotes
                WHERE up_signal='NEW_FAST_UP_MOMENTUM'
                   OR down_signal='NEW_FAST_DOWN_MOMENTUM'
@@ -76,6 +88,7 @@ def analyze_causal_markouts(
             source = source[:MAX_CANDIDATES]
         last_event_ns: dict[tuple[str, str], int] = {}
         totals = {h: D("0") for h in horizons}
+        maker_totals = {h: D("0") for h in horizons}
         for event in source:
             if (event["position_side"] is not None
                     or event["remaining_seconds"] < 120
@@ -129,7 +142,30 @@ def analyze_causal_markouts(
                     if net > 0:
                         row["net_profitable"] += 1
                     totals[h] += net
+                    # Optimistic "would profit IF filled" counterfactual:
+                    # an order resting at the entry BID is NOT guaranteed
+                    # to fill. It must never be interpreted as a backtest.
+                    try:
+                        maker_bid = D(event[f"{side.lower()}_bid"])
+                        if not D("0") < maker_bid < entry:
+                            raise ValueError("invalid passive bid")
+                        maker_net = (
+                            sale - maker_bid
+                            - standard_taker_fee_estimate(sale, D("1"))
+                        )
+                    except (TypeError, InvalidOperation, ValueError):
+                        continue
+                    comparison = result["execution_scenarios"][f"{h}s"]
+                    comparison["optimistic_maker_entry_assumed_fills"] += 1
+                    maker_totals[h] += maker_net
         for h in horizons:
+            maker = result["execution_scenarios"][f"{h}s"]
+            if maker["optimistic_maker_entry_assumed_fills"]:
+                maker["optimistic_maker_entry_mean_net_cents"] = float(
+                    (maker_totals[h] * 100 /
+                     maker["optimistic_maker_entry_assumed_fills"]
+                    ).quantize(D("0.0001"))
+                )
             row = result["horizons"][f"{h}s"]
             if row["observed"]:
                 row["mean_net_cents_per_contract"] = float(
