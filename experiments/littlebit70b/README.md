@@ -143,3 +143,17 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 Expected suite size is 65 tests (56 previous + 9 profiler tests). No model files are downloaded. This is not end-to-end Gemma generation or evidence of 27B feasibility.
+
+## GPU-resident intermediate activations (experimental)
+
+The [RESIDENT_ACTIVATIONS.md](RESIDENT_ACTIVATIONS.md) milestone adds a **separate** bounded CUDA path that retains intermediate activation vectors on GPU while evicting each layer's packed weights. Its paired benchmark compares against the existing CPU-round-trip streamer using identical synthetic checkpoints and alternating execution order. The old path remains unchanged. Neither path executes a complete Gemma 3 model.
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\resident_stream.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+```
+
+The experiment suite is expected to contain **71 tests**; the new CUDA tests must run (not skip) on your RTX 4050. The GPU resident path is experimental and is not automatically promoted based on earlier benchmarks.
