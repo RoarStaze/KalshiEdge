@@ -1,4 +1,4 @@
-"""Deterministic, model-independent KXBTC15M UP momentum rules.
+"""Deterministic, model-independent KXBTC15M symmetric UP/DOWN momentum rules.
 
 Signals use executable YES bids and asks, never last-price ticks or model
 confidence. Numerical thresholds are initial experimental assumptions, not
@@ -38,6 +38,9 @@ class UpQuote:
                 and self.bid_depth > 0 and self.ask_depth > 0)
 
 
+SideQuote = UpQuote  # Existing UP callers remain compatible.
+
+
 @dataclass(frozen=True)
 class MomentumResult:
     action: str
@@ -46,19 +49,20 @@ class MomentumResult:
     acceleration_ratio: float | None
 
 
-def evaluate_up_momentum(
-    quotes: Sequence[UpQuote], seconds_remaining: float, *,
-    holding: bool, exit_latched: bool = False,
+def evaluate_side_momentum(
+    quotes: Sequence[SideQuote], seconds_remaining: float, *,
+    side: str, holding: bool, exit_latched: bool = False,
 ) -> MomentumResult:
-    """Five time-ordered samples: prior 2-s pace vs latest 2-s pace.
+    """The same executable-book signal logic for each side.
 
-    Entry needs a new >=2c rise in both executable bid and ask, stronger
-    than the previous 2-s rise; exit triggers when bid rise decelerates to
-    25% or less of prior pace, or the bid falls. A latched exit persists
-    through temporary loss of liquidity; this function never places orders.
+    Use independently sampled bid/ask series for UP and DOWN, not
+    the inverse of a BTC-spot move or the inverse of the opposite bid.
+    Entry evaluates a 5-sample causal window. Exit can occur after 7m.
     """
     idle = lambda reason, speed=0., ratio=None: MomentumResult(
         "HOLD" if holding else "WAIT", reason, speed, ratio)
+    if side not in ("UP", "DOWN"):
+        return idle("INVALID_SIDE")
     if len(quotes) < 5:
         return idle("WARMING_UP")
     window = quotes[-5:]
@@ -70,7 +74,7 @@ def evaluate_up_momentum(
     if (any(b <= a for a, b in zip(times, times[1:]))
             or times[-1] - times[0] > 12 * NS
             or times[-1] - times[0] < 2 * NS
-            or max(b-a for a,b in zip(times, times[1:])) > 4 * NS):
+            or max(b-a for a, b in zip(times, times[1:])) > 4 * NS):
         return idle("GAPPED_OR_STALE_SAMPLES")
     a, mid, last = window[0], window[2], window[4]
     prev_dt = D(mid.observed_ns - a.observed_ns) / NS
@@ -84,20 +88,31 @@ def evaluate_up_momentum(
         if exit_latched:
             return MomentumResult("SELL", "MOMENTUM_SLOWED_LATCHED", speed, ratio)
         if recent < 0:
-            return MomentumResult("SELL", "UP_BID_REVERSAL", speed, ratio)
+            return MomentumResult("SELL", f"{side}_BID_REVERSAL", speed, ratio)
         if prior > 0 and recent <= prior * D("0.25"):
-            return MomentumResult("SELL", "UP_MOMENTUM_DECELERATED", speed, ratio)
-        return idle("UP_MOMENTUM_ACTIVE", speed, ratio)
+            return MomentumResult("SELL", f"{side}_MOMENTUM_DECELERATED", speed, ratio)
+        return idle(f"{side}_MOMENTUM_ACTIVE", speed, ratio)
     if seconds_remaining < MIN_REMAINING or seconds_remaining > 900:
         return idle("OUTSIDE_7_MINUTE_BUY_WINDOW", speed, ratio)
     if not MIN_UP_ASK <= last.ask <= MAX_UP_ASK:
-        return idle("UP_ASK_OUTSIDE_65_85", speed, ratio)
+        return idle(f"{side}_ASK_OUTSIDE_65_85", speed, ratio)
     if last.ask - last.bid > MAX_SPREAD:
         return idle("SPREAD_TOO_WIDE", speed, ratio)
     if recent * now_dt < MIN_BURST or ask_recent * now_dt < MIN_BURST:
-        return idle("NO_FAST_UP_BURST", speed, ratio)
+        return idle(f"NO_FAST_{side}_BURST", speed, ratio)
     rising = a.bid <= mid.bid < last.bid and a.ask <= mid.ask < last.ask
     accelerating = prior <= 0 or recent >= prior * D("1.5")
     if not (rising and accelerating):
         return idle("NO_NEW_ACCELERATION", speed, ratio)
-    return MomentumResult("BUY", "NEW_FAST_UP_MOMENTUM", speed, ratio)
+    return MomentumResult("BUY", f"NEW_FAST_{side}_MOMENTUM", speed, ratio)
+
+
+def evaluate_up_momentum(
+    quotes: Sequence[UpQuote], seconds_remaining: float, *,
+    holding: bool, exit_latched: bool = False,
+) -> MomentumResult:
+    """Backward-compatible UP evaluation used by existing test consumers."""
+    return evaluate_side_momentum(
+        quotes, seconds_remaining, side="UP", holding=holding,
+        exit_latched=exit_latched,
+    )
