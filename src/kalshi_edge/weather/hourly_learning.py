@@ -93,6 +93,7 @@ def choose_correction(cases: list[dict]) -> dict:
     # Selection on the held-out tail is research-grade evidence, not
     # independent prospective certification. Require joint improvements.
     if (candidate["mae_f"] <= baseline["mae_f"]-.03 and
+        candidate["mae_f"] <= 2.5 and  # reject catastrophic regime drift
         candidate["brier"] <= baseline["brier"]-.003 and
         candidate["logloss"] <= baseline["logloss"]-.001):
         report["enabled"]=True
