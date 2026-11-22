@@ -545,3 +545,34 @@ def hourly_calibration(root: Path, *, db_path: Path | None = None,
         result["status"]="HOURLY_AUDIT_ERROR"
         result["reason"]=f"{type(exc).__name__}: {exc}"[:180]
     return result
+
+
+def hourly_status(root: Path, *, db_path: Path | None = None,
+                  preview: bool = False) -> dict:
+    """Hourly-only read-only index source health; legacy daily rows ignored."""
+    from .status import read_collector_health
+    path=Path(db_path or weather_database_path(root))
+    result={"mode":"HOURLY_PAPER_ONLY","real_orders_enabled":False,
+            "status":"NOT_STARTED","sample_count":0,"city_count":0,
+            "last_received_at":None,"cities":[],
+            "collector":read_collector_health(root,preview=preview)}
+    if preview or not path.is_file():
+        return result
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",
+                                    uri=True,timeout=2)) as conn:
+            conn.execute("PRAGMA query_only=ON")
+            rows=conn.execute("""SELECT city,COUNT(*),MAX(received_at)
+                FROM weather_hourly_index GROUP BY city ORDER BY city""").fetchall()
+        result["cities"]=[{"city":city,"points":n,"last_received_at":ts}
+                           for city,n,ts in rows]
+        result["sample_count"]=sum(n for _,n,_ in rows)
+        result["city_count"]=len(rows)
+        dates=[ts for _,_,ts in rows if ts]
+        result["last_received_at"]=max(dates) if dates else None
+        result["status"]="READY" if rows else "COLLECTING_INDEX"
+    except sqlite3.OperationalError as exc:
+        result["status"]="COLLECTING_INDEX" if "no such table" in str(exc) else "DATABASE_ERROR"
+    except (sqlite3.Error,OSError,ValueError):
+        result["status"]="DATABASE_ERROR"
+    return result
