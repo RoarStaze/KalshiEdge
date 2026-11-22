@@ -1106,8 +1106,17 @@ def run_training_worker(root: Path, *, mode: str, round_number: int, git_sha: st
             settings = BootstrapSettings(bootstrap_dir=root)
             if mode == BASELINE_MODE:
                 from . import dataset
+                from ..storage_maintenance import (
+                    is_historical_trade_history_pruned,
+                    verify_retained_training_dataset,
+                )
                 market_root = root / "raw" / "kalshi" / "markets"
-                verified_existing=bool(
+                trade_history_pruned = is_historical_trade_history_pruned(root)
+                if trade_history_pruned:
+                    # Preserve full research capability on the sealed existing
+                    # feature snapshot; never rebuild against missing trade JSON.
+                    verify_retained_training_dataset(root)
+                verified_existing=trade_history_pruned or bool(
                     resume_state.get("dataset_verified")
                     and resume_state.get("resume_stage") in (
                         "SPLITTING","TRAINING","FITTING","EVALUATING",
