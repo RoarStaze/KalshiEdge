@@ -215,6 +215,8 @@ def collect_verified_cases(conn: sqlite3.Connection, city: str,
                 raise ValueError("INVALID_FROZEN_HOURLY_ESTIMATE")
             cases.append({
                 "target_utc":target_at,
+                "event_ticker":event,
+                "market_ticker":ticker,
                 "baseline_mean_f":raw_mean,
                 "baseline_sigma_f":raw_sigma,
                 "current_index_f":current,
