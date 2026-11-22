@@ -404,7 +404,8 @@ async def collect_hourly_once(
             await client.aclose()
 
 
-def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
+def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
+              *, force_next_index_hour: bool = False) -> dict:
     event, target = event_for(city, asof)
     # Follow actual collected Kalshi listings, not a speculative event hour.
     # An old entry is not evidence that a market is still open.
@@ -415,7 +416,7 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         ORDER BY target_utc ASC, received_at DESC LIMIT 1""",
         (city, (asof-timedelta(minutes=5)).isoformat(), asof.isoformat(),
          asof.isoformat(), (asof+timedelta(hours=3)).isoformat())).fetchone()
-    if selected:
+    if selected and not force_next_index_hour:
         event, target = selected[0], datetime.fromisoformat(selected[1])
     result = {
         "city": city, "name": CITIES[city].label, "series": CITIES[city].series,
