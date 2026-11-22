@@ -250,3 +250,20 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 Expected total: **144 tests** (129 previously passed, plus 15 new). The CUDA streaming path is **not** verified until the three new CUDA-dependent tests execute on the RTX 4050. This is still a small synthetic model with no pretrained weights, no tokenizer and no real Gemma 3 27B inference.
+
+
+## Full Gemma 3 27B checkpoint preflight and resource planning
+
+[GEMMA3_27B_PREFLIGHT.md](GEMMA3_27B_PREFLIGHT.md) documents a new **62-layer / 434-projection** Samsung LittleBit-2 checkpoint format validator and planning-only CPU/GPU budget checker. Unlike the small checkpoint generation demo, the inspector accepts the published full 27B tensor dimensions without allocating dense 27B weights.
+
+A separate one-block-at-a-time reader can load packed factors into CPU memory or, in a context manager, into a **private capped CuPy weight pool** with cleanup checks. It does not run a full 62-layer decoder or certify trained weights. The default resource plan assumes the known **6 GiB VRAM / 16 GiB RAM** hardware and 4096-token context; all memory figures are planning reservations, not measured peaks.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\gemma3_27b_ready.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+Expected full suite: **160 tests** (144 prior + 16 new, two CUDA-dependent). No new weights are downloaded. The output deliberately reports runnable_model = false because genuine trained Gemma 3 27B LittleBit-2 weights, full-scale model execution and tokenizer integration remain unresolved.
