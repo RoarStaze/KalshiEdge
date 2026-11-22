@@ -77,3 +77,17 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 Install CuPy into the isolated environment first using the instructions above. The GPU code is not yet validated on the target RTX 4050, and this milestone does not overcome the separate 27B checkpoint and QAT compute blockers.
+
+## Experimental warp kernel benchmark
+
+After the verified RTX 4050 packed-factor CUDA demo, an independent **warp-per-row** CUDA candidate and bounded GPU-event microbenchmark are provided in [WARP_BENCHMARK.md](WARP_BENCHMARK.md). The existing backend remains the default until hardware parity and benchmark measurements justify promotion.
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\cuda_warp.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+```
+
+These only execute synthetic packed-matrix operations, not a trained Gemma model.
