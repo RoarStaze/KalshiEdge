@@ -297,7 +297,7 @@ blindly. For more details use `kalshiedge storage --top 50` or
 
 The large per-market historical JSON trade archives can be discarded **only if
 you accept losing their original replay/rebuild evidence**. This mode preserves
-the promoted model, sealed \`derived/features.parquet\` training snapshot,
+the promoted model, sealed `derived/features.parquet` training snapshot,
 its manifest and source-hash provenance, final forecasts, settlement records,
 market metadata, raw WebSocket recording, and Python environments.
 
@@ -314,17 +314,17 @@ subsequent training from silently rebuilding an incomplete dataset.
 
 Close the KalshiEdge dashboard, collectors, and training processes first:
 
-\`\`\`powershell
+```powershell
 cd "$HOME\Desktop\KalshiEdge"
 git pull --ff-only origin main
 kalshiedge storage reclaim-trades            # preview, no deletion
 kalshiedge storage reclaim-trades --apply    # permanently delete archived trades
-\`\`\`
+```
 
-\`--apply\` writes \`data/bootstrap/storage/raw_trade_pruned.json\` *before*
+`--apply` writes `data/bootstrap/storage/raw_trade_pruned.json` *before*
 deleting anything. If interrupted, re-running the same command can finish
 removing the remaining directories. A full historical dataset rebuild using
-\`bootstrap-build-dataset\` is then intentionally blocked; the full-training
+`bootstrap-build-dataset` is then intentionally blocked; the full-training
 worker is modified to reuse the SHA-verified existing derived dataset instead
 of replacing it with partial history. More recent new source data cannot be
 incorporated into that historical dataset until original trade evidence has
