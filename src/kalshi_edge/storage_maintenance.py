@@ -158,6 +158,188 @@ def clean_caches(root: Path | str, *, apply: bool = False) -> dict[str, object]:
     return result
 
 
+
+# This marker is written BEFORE raw trade deletion. Dataset rebuilding must
+# fail closed until historical sources have been fully restored and verified.
+PRUNED_TRADE_MARKER = Path("storage") / "raw_trade_pruned.json"
+
+
+def is_historical_trade_history_pruned(bootstrap_root: Path | str) -> bool:
+    return (Path(bootstrap_root) / PRUNED_TRADE_MARKER).exists()
+
+
+def verify_retained_training_dataset(bootstrap_root: Path | str) -> str:
+    """Authenticate the retained derived dataset, not its 129 GiB raw inputs.
+
+    This is intentionally O(size of features.parquet), approximately 0.17 GiB
+    in the reported installation, rather than hashing all historical trades.
+    """
+    from .bootstrap.provenance import verify_artifact
+
+    base = Path(bootstrap_root)
+    if not (base / "models" / "default.json").is_file():
+        raise ValueError("promoted model pointer missing; refusing historical trade pruning")
+    data = base / "derived" / "features.parquet"
+    manifest = base / "manifests" / "dataset" / "features.parquet.manifest.json"
+    provenance = base / "derived" / "features.provenance.json"
+    if not all(p.is_file() for p in (data, manifest, provenance)):
+        raise ValueError("verified feature dataset or provenance missing; refusing trade pruning")
+    if not verify_artifact(data, manifest):
+        raise ValueError("feature dataset verification failed; refusing trade pruning")
+    try:
+        manifest_json = json.loads(manifest.read_text(encoding="utf-8"))
+        provenance_json = json.loads(provenance.read_text(encoding="utf-8"))
+        digest = str(manifest_json["sha256"]).lower()
+        inputs = provenance_json["inputs"]
+        if (len(digest) != 64
+                or provenance_json["dataset_sha256"].lower() != digest
+                or not isinstance(inputs, list) or not inputs):
+            raise ValueError("feature dataset provenance verification failed")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ValueError("feature dataset provenance verification failed") from exc
+    return digest
+
+
+def _assert_local_directory(base: Path, target: Path) -> None:
+    """Reject any symlink/junction in the ancestor chain to this deletion root."""
+    try:
+        parts = target.relative_to(base).parts
+    except ValueError as exc:
+        raise ValueError("deletion target is outside the selected project") from exc
+    path = base
+    for part in parts:
+        path /= part
+        if _is_link(path):
+            raise ValueError(f"link or junction in trade deletion path: {path}")
+    if not target.resolve().is_relative_to(base):
+        raise ValueError("trade deletion path resolves outside project")
+
+
+def _write_pruned_marker(path: Path, digest: str) -> None:
+    from datetime import datetime, timezone
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "raw-kalshi-trades-pruned-v1",
+        "dataset_sha256": digest,
+        "pruned_at_utc": datetime.now(timezone.utc).isoformat(),
+        "warning": (
+            "Historical raw Kalshi trades were intentionally deleted. Do not rebuild "
+            "features.parquet from incomplete raw history. Full historical rebuilding "
+            "requires restoring verified trades and their manifests first."
+        ),
+    }
+    fd, filename = tempfile.mkstemp(prefix="raw-trade-prune-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(payload, out, sort_keys=True)
+            out.write("\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(filename, path)
+    finally:
+        if Path(filename).exists():
+            Path(filename).unlink()
+
+
+def prune_historical_trades(root: Path | str, *, apply: bool = False) -> dict[str, object]:
+    """Fast optional reclaim: delete ONLY old Kalshi raw trade JSON + paired manifests.
+
+    No full-disk scan; no read of raw trade bytes. Current model, verified
+    feature dataset, market labels, forecast/settlement evidence and raw WS
+    streams remain untouched. This permanently removes full source
+    reproducibility until the official archives are re-fetched.
+    """
+    project = _root(root)
+    bootstrap = project / "data" / "bootstrap"
+    trades = bootstrap / "raw" / "kalshi" / "trades"
+    manifests = bootstrap / "manifests" / "kalshi" / "trades"
+    marker = bootstrap / PRUNED_TRADE_MARKER
+    for location in (trades, manifests, marker):
+        _assert_local_directory(project, location)
+
+    digest = verify_retained_training_dataset(bootstrap)
+    already_pruned = marker.exists()
+    if already_pruned:
+        try:
+            state = json.loads(marker.read_text(encoding="utf-8"))
+            if (state.get("schema") != "raw-kalshi-trades-pruned-v1"
+                    or state.get("dataset_sha256") != digest):
+                raise ValueError("retained dataset changed since raw trade pruning")
+        except (OSError, json.JSONDecodeError, AttributeError) as exc:
+            raise ValueError("stored raw-trade prune marker is unreadable") from exc
+    elif trades.is_dir() != manifests.is_dir():
+        raise ValueError("historical trade manifest directory is missing or incomplete; refusing pruning")
+    elif not trades.is_dir():
+        raise ValueError("historical trade and manifest directories are absent; nothing to prune")
+
+    # List only the two known trade directories (not the 156 GiB tree).
+    # Reject unexpected content or mismatched provenance *before* the marker.
+    # Existing prune markers permit resumption after interrupted deletion.
+    if not already_pruned:
+        with os.scandir(trades) as entries:
+            raw_entries = list(entries)
+        with os.scandir(manifests) as entries:
+            manifest_entries = list(entries)
+        if (any(entry.is_symlink() or not entry.is_file(follow_symlinks=False)
+                or not entry.name.endswith(".json") for entry in raw_entries)
+                or any(entry.is_symlink() or not entry.is_file(follow_symlinks=False)
+                or not entry.name.endswith(".json.manifest.json")
+                for entry in manifest_entries)):
+            raise ValueError("unexpected files, links, or subdirectories in trade archive; refusing pruning")
+        raw_names = {entry.name for entry in raw_entries}
+        manifest_names = {entry.name.removesuffix(".manifest.json") for entry in manifest_entries}
+        if not raw_names or raw_names != manifest_names:
+            raise ValueError("historical trade JSON and manifest names do not match; refusing pruning")
+
+    report: dict[str, object] = {
+        "root": str(project),
+        "applied": apply,
+        "already_pruned": already_pruned,
+        "verified_dataset": True,
+        "dataset_sha256": digest,
+        "targets": [str(trades), str(manifests)],
+        "reclaimed_bytes": 0,
+        "risk": (
+            "Original historical trade JSON and manifests will be permanently deleted. "
+            "Live operation and training from the existing verified dataset are retained; "
+            "rebuilding or expanding historical source data requires restoring the deleted "
+            "trade records from Kalshi before rebuilding the dataset."
+        ),
+    }
+    if not apply:
+        return report
+
+    # Refuse while a supervised local dashboard or authenticated worker is live.
+    from .launcher import _dashboard_healthy
+    if _dashboard_healthy(8899):
+        raise ValueError("stop 'kalshiedge start' before pruning historical trade files")
+    state_path = bootstrap / "training_runs" / "current.json"
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            raise ValueError("training state unreadable; cannot safely prune")
+        pid, identity = state.get("worker_pid"), state.get("worker_identity")
+        if type(pid) is int and isinstance(identity, str):
+            from .bootstrap.training_process_control import is_alive
+            if is_alive(pid, identity):
+                raise ValueError("active training worker detected; stop or checkpoint training first")
+
+    before_free = shutil.disk_usage(project).free
+    if not already_pruned:
+        _write_pruned_marker(marker, digest)
+    # The on-disk marker prevents all future unguarded dataset builds, even
+    # if deletion is interrupted between directories. Re-run to resume.
+    for directory in (trades, manifests):
+        if directory.is_dir():
+            shutil.rmtree(directory)
+    after_free = shutil.disk_usage(project).free
+    report["reclaimed_bytes"] = max(0, after_free - before_free)
+    return report
+
+
 def _gib(amount: int) -> str:
     return f"{amount / (1024 ** 3):,.3f} GiB"
 
@@ -181,6 +363,15 @@ def _present(report: dict[str, object], *, mode: str) -> None:
             print(f"  {_gib(entry['bytes']):>14}  {entry['path']}")
         print(f"\nDisposable Python caches: {_gib(report['cache_bytes'])}")
         print("Nothing was deleted. Historical raw data, Parquet, models and training state are protected.")
+    elif mode == "reclaim-trades":
+        print("Verified retained dataset:", report["dataset_sha256"])
+        print("Targets: historical Kalshi raw trades and matching manifests ONLY")
+        print("Warning:", report["risk"])
+        if report["applied"]:
+            print("Historical raw trades pruned; existing features.parquet preserved.")
+            print("Newly available disk space:", _gib(report["reclaimed_bytes"]))
+        else:
+            print("PREVIEW ONLY; nothing deleted. Use 'reclaim-trades --apply' to opt in.")
     else:
         print(f"Candidate disposable caches: {_gib(report['candidate_bytes'])}")
         print(f"Estimated removed apparent bytes: {_gib(report['deleted_bytes'])}")
@@ -188,7 +379,7 @@ def _present(report: dict[str, object], *, mode: str) -> None:
             print("PREVIEW ONLY; nothing was deleted. Use 'clean --apply' after stopping KalshiEdge.")
         else:
             print(f"Cache directories removed: {len(report['deleted_directories'])}")
-    if report["errors"]:
+    if report.get("errors"):
         print(f"Warnings ({len(report['errors'])}):")
         for problem in report["errors"][:10]:
             print(f"  {problem}")
@@ -196,16 +387,17 @@ def _present(report: dict[str, object], *, mode: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit KalshiEdge storage; optionally prune only disposable Python caches")
-    parser.add_argument("mode", nargs="?", choices=("scan", "clean"), default="scan")
+    parser.add_argument("mode", nargs="?", choices=("scan", "clean", "reclaim-trades"), default="scan")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--top", type=int, default=15, help="number of largest files to report")
     parser.add_argument("--json", action="store_true", help="emit a machine-readable report")
-    parser.add_argument("--apply", action="store_true", help="actually remove recognized caches (clean only)")
+    parser.add_argument("--apply", action="store_true", help="permanently execute the selected cleanup")
     args = parser.parse_args(argv)
-    if args.apply and args.mode != "clean":
-        parser.error("--apply is valid only for clean")
+    if args.apply and args.mode not in ("clean", "reclaim-trades"):
+        parser.error("--apply is valid only for clean or reclaim-trades")
     try:
         result = (scan_storage(args.root, top=args.top) if args.mode == "scan"
+                  else prune_historical_trades(args.root, apply=args.apply) if args.mode == "reclaim-trades"
                   else clean_caches(args.root, apply=args.apply))
     except ValueError as error:
         print(str(error), file=sys.stderr)
@@ -214,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
     else:
         _present(result, mode=args.mode)
-    return 2 if result["errors"] else 0
+    return 2 if result.get("errors") else 0
 
 
 if __name__ == "__main__":

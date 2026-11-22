@@ -391,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
     preview.add_argument("--no-browser", action="store_true", help="print the preview URL without opening a tab")
     preview.add_argument("--port", type=int, default=8900, help="preview-only TCP port (default 8900)")
     storage = sub.add_parser("storage", help="audit local disk use or explicitly prune Python caches")
-    storage.add_argument("mode", nargs="?", choices=("scan", "clean"), default="scan")
+    storage.add_argument("mode", nargs="?", choices=("scan", "clean", "reclaim-trades"), default="scan")
     storage.add_argument("--top", type=int, default=15, help="largest files to display")
     storage.add_argument("--root", type=Path, default=None, help="project root (default: this installation)")
     storage.add_argument("--json", action="store_true", help="print a JSON report")
