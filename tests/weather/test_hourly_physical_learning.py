@@ -228,3 +228,29 @@ def test_locked_coefficients_and_forecasts_do_not_enable_real_weather_orders():
     assert result["physical_adaptive_status"]=="WAITING_FOR_MATCHED_EVIDENCE"
     assert result["real_orders_enabled"] is False
     assert result["calibration_certified"] is False
+
+
+def test_physical_training_target_is_next_index_hour_even_if_market_lists_later_hour():
+    from kalshi_edge.weather.hourly import _forecast
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    _init(conn)
+    now=START-timedelta(minutes=30)
+    last=now-timedelta(minutes=2)
+    raw={"t":int(last.timestamp()*1000),"v":59.0,
+         "status":"normal","contributors":3}
+    conn.execute("""INSERT INTO weather_hourly_index
+         (city,event_ms,received_at,temp_f,status,config_version,source_sha,payload)
+         VALUES(?,?,?,?,?,?,?,?)""",
+         ("chicago",raw["t"],(last+timedelta(minutes=1)).isoformat(),
+          59.0,"normal",CONFIG,"a"*64,json.dumps(raw)))
+    far=START+timedelta(hours=2)
+    conn.execute("""INSERT INTO weather_hourly_markets
+          (ticker,city,event_ticker,target_utc,threshold_f,received_at,metadata)
+          VALUES(?,?,?,?,?,?,?)""",
+          ("LATER","chicago","KXTEMPCHIHS-LATER",far.isoformat(),60.0,
+           (now-timedelta(minutes=1)).isoformat(),"{}"))
+    normal=_forecast(conn,"chicago",now)
+    physical=_forecast(conn,"chicago",now,force_next_index_hour=True)
+    assert normal["target_utc"]==far.isoformat()
+    assert physical["target_utc"]==START.isoformat()
