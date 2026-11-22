@@ -203,7 +203,9 @@ async def _default_grib_fetch(client: httpx.AsyncClient, model: str,
                               coords: dict[str,tuple[float,float]]
                               ) -> tuple[dict[str,float],str]:
     data=await fetch_grib_temperature(client,nwp_url(model,run,hour))
-    samples=await asyncio.to_thread(decode_station_temperatures,data,coords)
+    samples=await asyncio.to_thread(
+        decode_station_temperatures,data,coords,
+        expected_run=run,expected_valid_at=run+timedelta(hours=hour))
     return samples,hashlib.sha256(data).hexdigest()
 
 
