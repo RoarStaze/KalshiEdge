@@ -243,6 +243,12 @@ def _write_pruned_marker(path: Path, digest: str) -> None:
             Path(filename).unlink()
 
 
+from contextlib import nullcontext
+
+def _empty_entries():
+    return nullcontext(())
+
+
 def prune_historical_trades(root: Path | str, *, apply: bool = False) -> dict[str, object]:
     """Fast optional reclaim: delete ONLY old Kalshi raw trade JSON + paired manifests.
 
@@ -274,25 +280,48 @@ def prune_historical_trades(root: Path | str, *, apply: bool = False) -> dict[st
     elif not trades.is_dir():
         raise ValueError("historical trade and manifest directories are absent; nothing to prune")
 
-    # List only the two known trade directories (not the 156 GiB tree).
-    # Reject unexpected content or mismatched provenance *before* the marker.
-    # Existing prune markers permit resumption after interrupted deletion.
-    if not already_pruned:
-        with os.scandir(trades) as entries:
-            raw_entries = list(entries)
-        with os.scandir(manifests) as entries:
-            manifest_entries = list(entries)
-        if (any(entry.is_symlink() or not entry.is_file(follow_symlinks=False)
-                or not entry.name.endswith(".json") for entry in raw_entries)
-                or any(entry.is_symlink() or not entry.is_file(follow_symlinks=False)
-                or not entry.name.endswith(".json.manifest.json")
-                for entry in manifest_entries)):
-            raise ValueError("unexpected files, links, or subdirectories in trade archive; refusing pruning")
-        raw_names = {entry.name for entry in raw_entries}
-        manifest_names = {entry.name.removesuffix(".manifest.json") for entry in manifest_entries}
-        if not raw_names or raw_names != manifest_names:
-            raise ValueError("historical trade JSON and manifest names do not match; refusing pruning")
-
+    # Inventory ONLY the two known trade directories. Many real installations
+    # have temporary sidecars, orphan manifests, and diagnostics subfolders.
+    # Never remove an unexpected entry. Match canonical names and delete only
+    # verified path-shaped trade/manifest pairs, without hashing 129 GiB.
+    raw_files: dict[str, tuple[Path, int]] = {}
+    manifest_files: dict[str, Path] = {}
+    retained_raw: list[str] = []
+    retained_manifests: list[str] = []
+    with os.scandir(trades) if trades.is_dir() else _empty_entries() as entries:
+        for entry in entries:
+            if (entry.name.endswith(".json")
+                    and not entry.is_symlink()
+                    and entry.is_file(follow_symlinks=False)):
+                raw_files[entry.name] = (
+                    Path(entry.path), entry.stat(follow_symlinks=False).st_size
+                )
+            else:
+                retained_raw.append(entry.name)
+    with os.scandir(manifests) if manifests.is_dir() else _empty_entries() as entries:
+        for entry in entries:
+            if (entry.name.endswith(".json.manifest.json")
+                    and not entry.is_symlink()
+                    and entry.is_file(follow_symlinks=False)):
+                manifest_files[entry.name.removesuffix(".manifest.json")] = Path(entry.path)
+            else:
+                retained_manifests.append(entry.name)
+    paired_names = sorted(raw_files.keys() & manifest_files.keys())
+    extra_raw = sorted(set(raw_files) - set(manifest_files))
+    extra_manifests = sorted(set(manifest_files) - set(raw_files))
+    retained_names = (
+        [f"raw/{x}" for x in retained_raw]
+        + [f"manifests/{x}" for x in retained_manifests]
+        + [f"raw/unpaired:{x}" for x in extra_raw]
+        + [f"manifests/unpaired:{x}" for x in extra_manifests]
+    )
+    if not paired_names and not already_pruned:
+        examples = ", ".join(retained_names[:8]) or "archive is empty"
+        raise ValueError(
+            "no matching trade .json and .json.manifest.json pairs found; "
+            f"nothing was deleted. Sample unexpected entries: {examples}"
+        )
+    reclaimable_bytes = sum(raw_files[name][1] for name in paired_names)
     report: dict[str, object] = {
         "root": str(project),
         "applied": apply,
@@ -300,6 +329,10 @@ def prune_historical_trades(root: Path | str, *, apply: bool = False) -> dict[st
         "verified_dataset": True,
         "dataset_sha256": digest,
         "targets": [str(trades), str(manifests)],
+        "paired_trade_files": len(paired_names),
+        "reclaimable_bytes": reclaimable_bytes,
+        "retained_other_entries": len(retained_names),
+        "retained_sample": retained_names[:10],
         "reclaimed_bytes": 0,
         "risk": (
             "Original historical trade JSON and manifests will be permanently deleted. "
@@ -332,9 +365,17 @@ def prune_historical_trades(root: Path | str, *, apply: bool = False) -> dict[st
         _write_pruned_marker(marker, digest)
     # The on-disk marker prevents all future unguarded dataset builds, even
     # if deletion is interrupted between directories. Re-run to resume.
+    for name in paired_names:
+        # Never recursively delete raw trade directories: sidecars and unknown
+        # nested content must remain untouched, even after --apply.
+        raw_files[name][0].unlink()
+        manifest_files[name].unlink()
     for directory in (trades, manifests):
         if directory.is_dir():
-            shutil.rmtree(directory)
+            try:
+                directory.rmdir()  # only when empty; preserves unknown entries
+            except OSError:
+                pass
     after_free = shutil.disk_usage(project).free
     report["reclaimed_bytes"] = max(0, after_free - before_free)
     return report
@@ -365,7 +406,12 @@ def _present(report: dict[str, object], *, mode: str) -> None:
         print("Nothing was deleted. Historical raw data, Parquet, models and training state are protected.")
     elif mode == "reclaim-trades":
         print("Verified retained dataset:", report["dataset_sha256"])
-        print("Targets: historical Kalshi raw trades and matching manifests ONLY")
+        print("Targets: matched historical Kalshi trade JSON and manifests ONLY")
+        print(f"Matched trade files: {report['paired_trade_files']:,}")
+        print(f"Estimated reclaimable bytes: {_gib(report['reclaimable_bytes'])}")
+        print(f"Other entries preserved: {report['retained_other_entries']:,}")
+        if report["retained_sample"]:
+            print("Preserved sample:", ", ".join(report["retained_sample"]))
         print("Warning:", report["risk"])
         if report["applied"]:
             print("Historical raw trades pruned; existing features.parquet preserved.")
