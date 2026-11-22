@@ -114,3 +114,17 @@ Optional repeated GPU timings:
 ~~~
 
 The checkpoint demo is synthetic only; the new checkpoint-to-GPU path needs RTX 4050 parity validation before any real checkpoint integration.
+
+## Bounded multi-layer CUDA streaming (experimental)
+
+The [LAYER_STREAMING.md](LAYER_STREAMING.md) milestone loads a **two-layer synthetic LittleBit checkpoint**, runs the first packed layer on the GPU, evicts its allocations, then runs the next layer with the CPU-transferred output. A dedicated CuPy memory pool enforces a configurable **pool allocation limit**. This is not a trained 27B LLM and does not bound total VRAM used by the CUDA driver or other libraries.
+
+```powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\layer_stream.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+```
+
+The RTX 4050 GPU validation is pending; 11 new tests are added, and the expected complete experiment suite has 56 tests. The demo uses synthetic weights and downloads nothing.
