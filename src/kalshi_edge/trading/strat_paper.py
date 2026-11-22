@@ -28,7 +28,6 @@ LOG = logging.getLogger(__name__)
 SLIPPAGE = D("0.01")
 MAX_CYCLES = 12
 COOLDOWN_NS = 6 * NS
-DAILY_LOSS_LIMIT = D("2.00")
 INITIAL_CAPITAL = D("100.00")
 SINGLE_FILL_FEE_QUANTUM = D("0.0001")  # centicent per official 2026 schedule
 
