@@ -186,7 +186,7 @@ def test_no_exact_index_observation_is_never_fabricated_as_label():
     cases=collect_cases(conn,"chicago",CONFIG,30,START+timedelta(minutes=15))
     assert len(cases)==1
     assert cases[0]["observed_f"]==60.0
-    conn.execute("UPDATE weather_hourly_physical_pairs SET forecast_json='{}'")
+    conn.execute("UPDATE weather_hourly_physical_pairs SET frozen_json='{}'")
     assert collect_cases(conn,"chicago",CONFIG,30,START+timedelta(minutes=15))==[]
 
 
