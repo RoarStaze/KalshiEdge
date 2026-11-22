@@ -89,6 +89,15 @@ MAIN = """
     <div class="wx-row"><span>Last canonical minute (UTC)</span><strong id="wx-hourly-event-time">—</strong></div>
     <div class="wx-row"><span>Locally received (UTC)</span><strong id="wx-hourly-receipt">—</strong></div>
     <div class="wx-row"><span>Official index publisher</span><strong>Kalshi Weather Index</strong></div>
+    <div class="wx-row"><span>HRRR constituent-station index guidance</span><strong id="wx-physics-hrrr">—</strong></div>
+    <div class="wx-row"><span>NBM constituent-station index guidance</span><strong id="wx-physics-nbm">—</strong></div>
+    <div class="wx-row"><span>HRRR + NBM physical blend (research)</span><strong id="wx-physics-blend">—</strong></div>
+    <div class="wx-row"><span>Kalshi station calibration version</span><strong id="wx-physics-config">—</strong></div>
+    <div class="wx-row"><span>Physical ensemble evidence</span><strong id="wx-physics-status">WAITING</strong></div>
+    <p>Physical guidance uses Kalshi-published station weights and Celsius offsets,
+      NOAA forecast grids and AWC airport-coordinate sampling. It is not the
+      official high-frequency index or verified accuracy evidence; not activated
+      for Kalshi market probabilities.</p>
    </div>
   </details>
   <p id="wx-hourly-diagnostic" role="status">Waiting for fresh index data and matching hourly contracts.</p>
@@ -211,6 +220,12 @@ SCRIPT = r"""<script>
     if(!card)return;
     const row=forecasts[card.value]||{};
     put("wx-hourly-state",row.status||"WAITING");
+    const physics=row.physical_ensemble||{};
+    put("wx-physics-hrrr",f(physics.hrrr_index_f));
+    put("wx-physics-nbm",f(physics.nbm_index_f));
+    put("wx-physics-blend",f(physics.ensemble_index_f));
+    put("wx-physics-config",physics.calibration_version||"NOT AVAILABLE");
+    put("wx-physics-status",physics.status||"NO_PHYSICAL_GUIDANCE");
     put("wx-hourly-learning",row.learning_status||"WAITING FOR EVIDENCE");
     put("wx-hourly-learning-hours",row.learning_verified_hours??0);
     put("wx-hourly-nowcast-state",row.index_nowcast_status||"WAITING FOR INDEX");
@@ -309,6 +324,7 @@ SCRIPT = r"""<script>
           (100*c.empirical_90_coverage).toFixed(1)+"%":"NOT MEASURED");
       put("wx-hm-state",c.status||"UNAVAILABLE");
       const h=s.collector||{},feed=h.hourly||{},outcome=h.hourly_settlement||{};
+      const physical=h.hourly_physics||{};
       put("wx-hd-settlement",outcome.state||"NOT STARTED");
       const summary=["Automatic Kalshi hourly collector: "+(h.state||"STARTING")];
       for(const city of ["chicago","nyc","miami","la-coastal"]){
@@ -321,6 +337,11 @@ SCRIPT = r"""<script>
             " · events: "+x.listed_event_tickers.join(", "):"")+
           (x.reason?" ("+x.reason+")":""));
       }
+      summary.push("Physical HRRR/NBM: "+(physical.state||"WAITING")+
+        (physical.cities&&physical.cities[card?.value]?
+          " · "+(physical.cities[card.value].state||"WAITING")+
+          " · "+(physical.cities[card.value].configuration||"NO_CONFIG"):"")+
+        (physical.reason?" ("+physical.reason+")":""));
       summary.push("Settlement: "+(outcome.state||"WAITING")+
          (outcome.verified!=null?" · newly matched "+outcome.verified:""));
       put("wx-hourly-health",summary.join(" · "));

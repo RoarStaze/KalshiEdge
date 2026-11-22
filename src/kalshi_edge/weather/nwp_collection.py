@@ -128,7 +128,10 @@ async def fetch_grib_temperature(client: httpx.AsyncClient, url: str) -> bytes:
 
 
 def decode_station_temperatures(grib_message: bytes,
-                                stations: dict[str, tuple[float, float]]) -> dict[str, float]:
+                                stations: dict[str, tuple[float, float]],
+                                *, expected_run: datetime | None = None,
+                                expected_valid_at: datetime | None = None
+                                ) -> dict[str, float]:
     """Decode one 2m grid field and sample nearest point for each station.
 
     Requires optional xarray/cfgrib/eccodes/numpy packages. Grid values are
@@ -141,6 +144,21 @@ def decode_station_temperatures(grib_message: bytes,
         location.write_bytes(grib_message)
         ds = xr.open_dataset(location, engine="cfgrib", backend_kwargs={"indexpath": ""})
         try:
+            if expected_run is not None or expected_valid_at is not None:
+                if expected_run is None or expected_valid_at is None:
+                    raise ValueError("INCOMPLETE_NOAA_GRIB_TIME_CONTRACT")
+                # Use timestamps embedded in the GRIB message, not only the
+                # S3 object's model-cycle and lead-hour filename.
+                def grib_epoch(field: str) -> int:
+                    if field not in ds.coords:
+                        raise ValueError("MISSING_NOAA_GRIB_" + field.upper())
+                    raw = np.asarray(ds.coords[field].values)
+                    if raw.size != 1 or not np.issubdtype(raw.dtype, np.datetime64):
+                        raise ValueError("INVALID_NOAA_GRIB_" + field.upper())
+                    return int(raw.astype("datetime64[s]").astype("int64").item())
+                if (grib_epoch("time") != int(_utc(expected_run).timestamp()) or
+                    grib_epoch("valid_time") != int(_utc(expected_valid_at).timestamp())):
+                    raise ValueError("NOAA_GRIB_RUN_OR_VALID_TIME_MISMATCH")
             variable = next((v for v in ("t2m", "t", "TMP") if v in ds.data_vars), None)
             if variable is None:
                 raise ValueError("decoded field does not contain 2m temperature")
