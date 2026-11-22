@@ -1,4 +1,4 @@
-"""Isolated experimental 15-minute Bitcoin UP-momentum PAPER auto-trader.
+"""Isolated experimental 15-minute Bitcoin UP/DOWN momentum PAPER auto-trader.
 
 Never imports authenticated order clients or submits orders. Fills are
 hypothetical and include 1c per-share slippage plus fee estimates. The
@@ -20,7 +20,7 @@ from .paper import PublicMarketClient
 from .paper_scalper import PaperScalpLedger
 from .risk import taker_fee_reserve
 from .scalp_policy import quote_from_kalshi
-from .strat_policy import UpQuote, evaluate_up_momentum
+from .strat_policy import UpQuote, evaluate_side_momentum
 
 D = Decimal
 NS = 1_000_000_000
@@ -37,7 +37,7 @@ def _cash(x: D) -> str:
 
 
 class StratPaperTrader:
-    """One UP inventory at a time, multiple completed cycles per ticker."""
+    """One UP or DOWN inventory at a time, multiple cycles per ticker."""
     def __init__(
         self, root: Path, read_live: Callable[[], dict], *,
         client=None, clock: Callable[[], int] = time.time_ns,
@@ -54,7 +54,9 @@ class StratPaperTrader:
         self._lock = threading.RLock()
         self._enabled = False   # restart NEVER authorizes new positions
         self._budget = D("1.00")
-        self._samples: deque[UpQuote] = deque(maxlen=5)
+        self._samples: dict[str, deque[UpQuote]] = {
+            side: deque(maxlen=5) for side in ("UP", "DOWN")
+        }
         self._ticker: str | None = None
         self._last_exit_ns = 0
         self._exit_latched = False
@@ -62,6 +64,9 @@ class StratPaperTrader:
         self._last_speed = 0.0
         self._last_ratio: float | None = None
         self._last_ask_cents: str | None = None
+        self._last_down_ask_cents: str | None = None
+        self._side_speeds = {"UP": 0.0, "DOWN": 0.0}
+        self._side_reasons = {"UP": "WARMING_UP", "DOWN": "WARMING_UP"}
 
     def _market(self, now: int) -> tuple[str, int] | None:
         try:
@@ -92,9 +97,12 @@ class StratPaperTrader:
             raise ValueError("Unverified public market identity")
         if info.get("status") not in ("active", "open"):
             raise ValueError("Public market is no longer tradable")
-        q = quote_from_kalshi(book, "UP", timestamp_ns=now)
-        return UpQuote(ticker, now, q.bid, q.ask,
-                       q.bid_available, q.ask_available)
+        quotes = {}
+        for side in ("UP", "DOWN"):
+            q = quote_from_kalshi(book, side, timestamp_ns=now)
+            quotes[side] = UpQuote(ticker, now, q.bid, q.ask,
+                                   q.bid_available, q.ask_available)
+        return quotes
 
     def _settle(self, row: dict, now: int) -> bool:
         """Use only a verified result; never infer a win from quote movement."""
@@ -108,14 +116,15 @@ class StratPaperTrader:
         if side not in ("yes", "no"):
             return False
         qty = D(row["quantity"])
-        payout = qty if side == "yes" else D("0")
+        winning_side = "UP" if side == "yes" else "DOWN"
+        payout = qty if row["side"] == winning_side else D("0")
         pnl = payout - D(row["total_paid"])
         self.ledger.close(
             row["id"], price=D("1") if side == "yes" else D("0"),
             fee=D("0"), now_ns=now, reason="OFFICIAL_SETTLEMENT",
             pnl=pnl, settled=True)
         self._exit_latched = False
-        self._last_signal = "OFFICIALLY_SETTLED_" + side.upper()
+        self._last_signal = "OFFICIALLY_SETTLED_" + row["side"] + "_" + side.upper()
         return True
 
     def _stats(self, now: int) -> dict:
@@ -154,14 +163,22 @@ class StratPaperTrader:
                 "acceleration_ratio": self._last_ratio,
                 "market_ticker": self._ticker,
                 "up_ask_cents": self._last_ask_cents,
-                "samples": len(self._samples),
+                "down_ask_cents": self._last_down_ask_cents,
+                "side_momentum": {
+                    side: {
+                        "speed_cents_per_second": round(self._side_speeds[side], 3),
+                        "signal": self._side_reasons[side],
+                    } for side in ("UP", "DOWN")
+                },
+                "samples": max(len(series) for series in self._samples.values()),
                 "scan_interval_seconds": 0.75,
                 "max_cycles_per_market": MAX_CYCLES,
                 "rules": {
-                    "buy_min_remaining_seconds": 420,
-                    "up_ask_cents_range": [65, 85],
-                    "entry": "NEW_EXECUTABLE_UP_ACCELERATION",
-                    "exit": "UP_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
+                    "buy_min_remaining_seconds": 120,
+                    "side_ask_cents_range": [65, 85],
+                    "sides": ["UP", "DOWN"],
+                    "entry": "NEW_EXECUTABLE_SIDE_ACCELERATION",
+                    "exit": "HELD_SIDE_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
                 },
                 "warning": ("Paper only: simulated top-of-book fills with 1c "
                             "slippage per contract per leg and estimated fees. "
@@ -182,18 +199,18 @@ class StratPaperTrader:
                 raise ValueError("Strat budget must be $0.10–$5 and <=5% paper cash")
             self._budget = budget
             self._enabled = True
-            self._last_signal = "SCANNING_UP_MOMENTUM"
+            self._last_signal = "SCANNING_UP_AND_DOWN_MOMENTUM"
             return self.status()
 
     def pause(self) -> dict:
         with self._lock:
             self._enabled = False
             self._last_signal = (
-                "ENTRIES_PAUSED_STILL_MONITORING_UP_POSITION"
+                "ENTRIES_PAUSED_STILL_MONITORING_POSITION"
                 if self.ledger.open_position() else "PAUSED")
             return self.status()
 
-    def _enter(self, quote: UpQuote, close: int, now: int, stats: dict) -> None:
+    def _enter(self, quote: UpQuote, side: str, close: int, now: int, stats: dict) -> None:
         price = quote.ask + SLIPPAGE
         # The actual simulated entry must also remain inside the user cap.
         if price > D("0.85") or quote.bid_depth <= 0:
@@ -216,11 +233,11 @@ class StratPaperTrader:
         qty = D(lo) / 100
         fee = taker_fee_reserve(price, qty)
         self.ledger.insert(
-            ticker=quote.ticker, side="UP", quantity=qty,
+            ticker=quote.ticker, side=side, quantity=qty,
             price=price, fee=fee, paid=qty * price + fee,
             now_ns=now, close_ns=close,
         )
-        self._last_signal = "PAPER_BOUGHT_UP_FAST_MOMENTUM"
+        self._last_signal = f"PAPER_BOUGHT_{side}_FAST_MOMENTUM"
 
     def _exit(self, row: dict, quote: UpQuote, now: int) -> None:
         qty = D(row["quantity"])
@@ -232,11 +249,11 @@ class StratPaperTrader:
         pnl = qty * sale - fee - D(row["total_paid"])
         self.ledger.close(
             row["id"], price=sale, fee=fee, now_ns=now,
-            reason="UP_MOMENTUM_SLOWED", pnl=pnl,
+            reason=f"{row['side']}_MOMENTUM_SLOWED", pnl=pnl,
         )
         self._last_exit_ns = now
         self._exit_latched = False
-        self._last_signal = "PAPER_SOLD_UP_MOMENTUM_SLOWED"
+        self._last_signal = f"PAPER_SOLD_{row['side']}_MOMENTUM_SLOWED"
 
     def tick(self, now_ns: int | None = None) -> dict:
         with self._lock:
