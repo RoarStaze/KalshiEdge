@@ -250,7 +250,12 @@ def apply_locked_blend(baseline_f: float,sigma_f: float,hrrr_f: float,
         return baseline_f,sigma_f
     if abs(sum(weights)-1)>1e-6:
         return baseline_f,sigma_f
-    return _estimate(row,weights,float(decision["bias_f"])),sigma*float(decision["sigma_scale"])
+    try:
+        bias=_finite(decision["bias_f"],-2.000001,2.000001)
+        scale=_finite(decision["sigma_scale"],.749999,1.800001)
+    except (ValueError,TypeError,KeyError):
+        return baseline_f,sigma_f
+    return _estimate(row,weights,bias),sigma*scale
 
 
 def freeze_pair(conn: sqlite3.Connection,prediction: dict,
@@ -499,7 +504,22 @@ def physical_live_decision(conn: sqlite3.Connection,city: str,
         if (model.get("city")!=city or
             model.get("config_version")!=config_version or
             model.get("lead_minutes")!=lead or
-            model.get("locked_at")!=locked_at or _utc(locked_at)>now):
+            model.get("locked_at")!=locked_at or _utc(locked_at)>now or
+            model.get("candidate_ready") is not True or
+            model.get("status")!="HISTORICAL_POINT_HOLDOUT_IMPROVED" or
+            model.get("train_hours",0)<MIN_TRAIN or
+            model.get("validation_hours")!=VALIDATION):
+            output["status"]="INVALID_PHYSICAL_MODEL_LOCK"
+            return output
+        weights=model.get("weights")
+        if (not isinstance(weights,list) or len(weights)!=3 or
+            any(not isinstance(w,(int,float)) or isinstance(w,bool) or
+                not math.isfinite(w) or not 0<=w<=1 for w in weights) or
+            abs(sum(weights)-1)>1e-6 or
+            not isinstance(model.get("bias_f"),(int,float)) or
+            not -2<=model["bias_f"]<=2 or
+            not isinstance(model.get("sigma_scale"),(int,float)) or
+            not .75<=model["sigma_scale"]<=1.8):
             output["status"]="INVALID_PHYSICAL_MODEL_LOCK"
             return output
         cases=collect_cases(conn,city,config_version,lead,now)
