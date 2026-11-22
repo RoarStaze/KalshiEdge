@@ -58,6 +58,8 @@ th,td{padding:12px 8px;text-align:left;border-top:1px solid #ffffff17}
 th{color:#a6c5bf;font-size:11px}
 td{font-variant-numeric:tabular-nums}
 .scroll{overflow:auto}
+.replay{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;
+color:#d3f5ed;font-variant-numeric:tabular-nums;font-size:12px}
 .badge{font-size:11px;border:1px solid #407a67;padding:5px 9px;
 border-radius:12px;color:#8ae6bd}
 @media(max-width:1060px){.grid{grid-template-columns:1fr 1fr}.rules{grid-template-columns:1fr 1fr}}
@@ -114,6 +116,11 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="rule"><small>BUY TRIGGER</small><strong>Side speed ↑</strong><small>Fresh UP or DOWN bid/ask acceleration, measured on that side.</small></div>
 <div class="rule"><small>SELL TRIGGER</small><strong>Side speed ↓</strong><small>Held-side bid momentum slows or reverses. Exits continue below 2:00.</small></div>
 </div></section>
+<section class="card span"><h2>Future quote evidence · paper research</h2>
+<button id="auditBtn" type="button">Analyze captured momentum</button>
+<p id="replayResult" class="replay" role="status">NO VERIFIED EDGE — run the audit to compare prior BUY signals with future executable bids after fees. Does not place orders.</p>
+<p class="sub">This shows what happened AFTER past entry signals at 2, 5, 10 and 20 seconds, using recorded quotes, estimated taker fees and 1¢ slippage per leg. It does not demonstrate that actual orders would fill or that a strategy is profitable.</p>
+</section>
 <section class="card span"><h2>Experimental round trips · persistent local ledger</h2>
 <div class="scroll"><table><thead><tr><th>Market</th><th>Side</th><th>State</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Gross price P&amp;L</th><th>Fee estimate</th><th>Net hypothetical P&amp;L</th></tr></thead>
 <tbody id="rounds"><tr><td colspan="9">No simulated rounds yet</td></tr></tbody></table></div>
@@ -168,6 +175,29 @@ async function refresh(){
     s.break_even_up_cents+"¢ / "+s.break_even_down_cents+"¢");
  }catch(e){set("feedback","Status unavailable: "+e.message)}
 }
+async function auditQuotes(){
+ const btn=el("auditBtn");btn.disabled=true;
+ set("replayResult","Loading captured quote evidence...");
+ try{
+  const r=await fetch("/api/strat/replay",{cache:"no-store"});
+  if(!r.ok)throw Error("Replay audit unavailable ("+r.status+")");
+  const data=await r.json();
+  let lines=["NO VERIFIED EDGE · "+data.status,
+    "Independent BUY events: "+data.candidate_count+
+       (data.truncated?" (first "+data.capped_at+" candidate records only)":"")];
+  for(const h of ["2s","5s","10s","20s"]){
+   const x=data.horizons?.[h];
+   if(x)lines.push(h+": "+x.observed+" future quotes, "+
+     x.net_profitable+" positive after modeled costs, "+
+     x.missing_followup+" without follow-up, mean "+
+     (x.mean_net_cents_per_contract==null?"—":
+      x.mean_net_cents_per_contract.toFixed(3)+"¢/contract"));
+  }
+  lines.push("Descriptive only. No verified profitable execution edge.");
+  set("replayResult",lines.join("\n"));
+ }catch(e){set("replayResult","Audit unavailable: "+e.message)}
+ finally{btn.disabled=false}
+}
 async function action(kind){
  el("arm").disabled=true;el("pause").disabled=true;
  try{
@@ -180,6 +210,7 @@ async function action(kind){
   await refresh();
  }catch(e){set("feedback",e.message);await refresh()}
 }
+el("auditBtn").addEventListener("click",auditQuotes);
 el("arm").addEventListener("click",()=>action("arm"));
 el("pause").addEventListener("click",()=>action("pause"));
 refresh();setInterval(refresh,900);
