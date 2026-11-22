@@ -546,3 +546,44 @@ def test_quote_tape_and_global_circuit_are_visible_in_dashboard():
     assert "Cross-market loss streak" in html
     assert "quote_tape_samples" in html
     assert "global_loss_streak" in html
+
+
+
+def test_market_close_gate_uses_post_response_quote_receipt_time(tmp_path):
+    """Network request time must not turn 1:59 into a legal 2:00 entry."""
+    start = [BASE]
+    close = BASE + 124*NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": start[0],
+            },
+        }
+
+    class SlowClient(FakeMarketClient):
+        def quote(self, ticker):
+            market, book = super().quote(ticker)
+            start[0] += NS  # REST response took one second
+            return market, book
+
+    prices = [
+        (bid, bid+D("0.02")) for bid in map(D, [
+            "0.64", "0.64", "0.65", "0.66", "0.68"
+        ])
+    ]
+    trader = StratPaperTrader(
+        tmp_path, live, client=SlowClient(prices), clock=lambda: start[0],
+    )
+    trader.arm("1.00")
+    for i in range(5):
+        start[0] = BASE+i*NS
+        trader.tick(BASE+i*NS)
+    assert trader.ledger.open_position() is None
+    assert trader.ledger.recent() == []
+    captured = trader.tape.recent(1)[0]
+    assert captured["observed_ns"] == BASE+5*NS
+    assert captured["remaining_seconds"] == 119.0
+    assert captured["up_signal"] == "OUTSIDE_2_MINUTE_BUY_WINDOW"
+    trader.close()
