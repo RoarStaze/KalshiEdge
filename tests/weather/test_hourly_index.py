@@ -203,3 +203,30 @@ def test_weather_ui_only_displays_hourly_index_markets():
         assert "Predicted daily maximum" not in page
         assert "Daily high · airport" not in page
         assert "/api/manual-trade/" not in page
+
+
+
+def test_hourly_api_routes_are_read_only_in_live_and_preview(tmp_path):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from types import SimpleNamespace
+    from kalshi_edge.bootstrap.final_history import _make_handler
+    from kalshi_edge.bootstrap.preview_site import make_preview_handler
+    for preview in (False,True):
+        handler=(make_preview_handler() if preview else
+           _make_handler(tmp_path/"bootstrap",credential_vault=SimpleNamespace(exists=lambda:True)))
+        server=ThreadingHTTPServer(("127.0.0.1",0),handler)
+        worker=threading.Thread(target=server.serve_forever,daemon=True)
+        worker.start()
+        try:
+            with httpx.Client(timeout=5,trust_env=False) as client:
+                for route in ("/api/weather/hourly/forecast",
+                              "/api/weather/hourly/calibration",
+                              "/api/weather/hourly/status"):
+                    uri=f"http://127.0.0.1:{server.server_port}"+route
+                    response=client.get(uri)
+                    assert response.status_code==200
+                    assert response.json()["real_orders_enabled"] is False
+                    assert client.post(uri,json={}).status_code in (403,404)
+        finally:
+            server.shutdown();server.server_close();worker.join(timeout=3)
