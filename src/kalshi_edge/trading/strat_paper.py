@@ -204,6 +204,30 @@ class StratPaperTrader:
             streak += 1
         return streak
 
+    def _entry_block_reason(self, now: int, stats: dict) -> str | None:
+        """Report *actual* paper entry restrictions, not directional signals.
+
+        Historical cross-market losses are informative only; they must not
+        silently veto a new experiment in a different 15-minute market.
+        """
+        if stats["open"] is not None:
+            return "POSITION_OPEN"
+        if self._capture_failed:
+            return "QUOTE_TAPE_WRITE_FAILED"
+        if not self._enabled:
+            return "NOT_ARMED"
+        if self._ticker is None:
+            return "WAITING_FOR_FRESH_MARKET"
+        if self._market_loss_streak(self._ticker) >= 3:
+            return "THREE_SAME_MARKET_PAPER_LOSSES"
+        if stats["loss"] >= DAILY_LOSS_LIMIT:
+            return "DAILY_PAPER_LOSS_CIRCUIT"
+        if self.ledger.ticker_count(self._ticker) >= MAX_CYCLES:
+            return "MAX_MARKET_CYCLES"
+        if now - self._last_exit_ns < COOLDOWN_NS:
+            return "REENTRY_COOLDOWN"
+        return None
+
     def status(self) -> dict:
         with self._lock:
             now = self.clock()
@@ -221,7 +245,7 @@ class StratPaperTrader:
                 "daily_paper_loss_dollars": _cash(stats["loss"]),
                 "market_loss_streak": self._market_loss_streak(self._ticker),
                 "global_loss_streak": streak,
-                "global_loss_circuit_active": streak >= 3,
+                "entry_block_reason": self._entry_block_reason(now, stats),
                 "quote_tape_samples": tape["snapshots"],
                 "quote_tape_markets": tape["markets"],
                 "quote_tape_path": tape["path"],
@@ -256,8 +280,8 @@ class StratPaperTrader:
                     "exit": "HELD_SIDE_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
                 },
                 "warning": ("Signal has no verified positive expectancy. "
-                            "Three same-day consecutive losses across markets "
-                            "block new paper entries while quotes keep recording. "
+                            "Cross-market loss streak is informational only; "
+                            "per-market and daily paper limits remain enforced. "
                             "Paper only: top-of-book hypothetical fills with 1c "
                             "slippage per leg and indicative standard taker fees. "
                             "Market-specific fees and actual fills are unverified. "
@@ -453,8 +477,6 @@ class StratPaperTrader:
                 self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
             elif self._market_loss_streak(ticker) >= 3:
                 self._last_signal = "THREE_SAME_MARKET_PAPER_LOSSES"
-            elif self._global_loss_streak(observed_ns) >= 3:
-                self._last_signal = "GLOBAL_LOSS_CIRCUIT_ACTIVE"
             elif stats["loss"] >= DAILY_LOSS_LIMIT:
                 self._last_signal = "DAILY_PAPER_LOSS_CIRCUIT"
             elif self.ledger.ticker_count(ticker) >= MAX_CYCLES:
