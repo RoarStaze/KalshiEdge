@@ -158,8 +158,20 @@ def _valid_market(market: dict, city: str, event: str, *,
             return None
     except (TypeError, ValueError, OverflowError):
         return None
+    # The trading deadline belongs to the individual Kalshi contract.
+    # Do not infer it from the forecast hour or settlement time.
+    close_time_utc = None
+    raw_close = market.get("close_time")
+    if isinstance(raw_close, str):
+        try:
+            close = datetime.fromisoformat(raw_close.replace("Z", "+00:00"))
+            if close.tzinfo is not None and close.utcoffset() is not None:
+                close_time_utc = close.astimezone(timezone.utc).isoformat()
+        except (ValueError, OverflowError):
+            pass
     return {"city": city, "event_ticker": event, "ticker": market["ticker"],
             "threshold_f": threshold, "rules_primary": rules,
+            "close_time_utc": close_time_utc,
             "source": "KALSHI_WEATHER_INDEX"}
 
 
@@ -350,6 +362,7 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
             continue
         strikes.append({"ticker":ticker,"threshold_f":threshold,
                         "probability_yes":round(probability,6),
+                        "close_time_utc":m.get("close_time_utc"),
                         "market_metadata_received_at":receipt})
     if not strikes:
         result["status"]="NO_VERIFIED_HOURLY_MARKETS"
