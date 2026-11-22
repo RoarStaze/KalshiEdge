@@ -395,6 +395,24 @@ def journal_physical_pairs(db_path: Path, *, asof: datetime | None = None) -> di
     return result
 
 
+def same_settled_contract(frozen: dict,settled: dict | None,
+                          observed_f: float) -> bool:
+    """Certify only the exact previously chosen market, not a nearby ticker."""
+    if not isinstance(settled,dict):
+        return False
+    try:
+        return (isinstance(frozen.get("market_ticker"),str) and
+                frozen["market_ticker"]==settled.get("market_ticker") and
+                frozen.get("event_ticker")==settled.get("event_ticker") and
+                frozen["threshold_f"] is not None and
+                abs(_finite(frozen["threshold_f"])-
+                    _finite(settled["threshold_f"]))<=1e-6 and
+                abs(_finite(observed_f)-
+                    _finite(settled["observed_index_f"]))<=1e-6)
+    except (ValueError,TypeError,KeyError):
+        return False
+
+
 def collect_cases(conn: sqlite3.Connection, city: str,
                   config_version: str, lead_minutes: int,
                   asof: datetime) -> list[dict]:
@@ -417,7 +435,7 @@ def collect_cases(conn: sqlite3.Connection, city: str,
     if status is not None:
         # Bad original settled evidence must never authorize promotion.
         verified=[]
-    matched={r["target_utc"]:r["observed_index_f"] for r in verified}
+    matched={r["target_utc"]:r for r in verified}
     result=[]
     try:
         for target_raw,at_raw,raw,digest in rows:
@@ -465,9 +483,8 @@ def collect_cases(conn: sqlite3.Connection, city: str,
             threshold=frozen.get("threshold_f")
             if threshold is not None:
                 threshold=_finite(threshold)
-            is_verified=(threshold is not None and
-                         target_raw in matched and
-                         abs(float(matched[target_raw])-actual)<=1e-6)
+            is_verified=same_settled_contract(
+                frozen,matched.get(target_raw),actual)
             result.append({"target_utc":target_raw,
                 **values,"sigma_f":sigma,"observed_f":actual,
                 "threshold_f":threshold,"market_verified":is_verified,
