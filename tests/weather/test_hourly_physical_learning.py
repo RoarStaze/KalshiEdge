@@ -334,3 +334,13 @@ def test_missing_early_prospective_hour_cannot_be_replaced_by_later_hour():
     outcome=evaluate_lockbox(locked,missing_first)
     assert outcome["enabled"] is False
     assert outcome["status"]=="INCOMPLETE_FIXED_LOCKBOX_WINDOW"
+
+
+def test_physical_research_scores_compare_each_model_on_identical_hours():
+    from kalshi_edge.weather.hourly_physical_learning import research_scores
+    scores=research_scores(synthetic(30))
+    assert scores["hours"]==30
+    assert scores["hrrr_mae_f"]<scores["baseline_mae_f"]
+    assert scores["nbm_mae_f"]<scores["baseline_mae_f"]
+    assert scores["equal_blend_crps"]<scores["baseline_crps"]
+    assert research_scores(synthetic(4)) is None
