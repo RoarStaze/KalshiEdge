@@ -187,3 +187,18 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 11 new CPU-only audit tests were added, bringing the expected complete experiment suite to **95 tests**. No large weights or datasets are downloaded.
+
+
+## Tiny Gemma 3 decoder with packed LittleBit projections
+
+[GEMMA3_DECODER_REFERENCE.md](GEMMA3_DECODER_REFERENCE.md) describes the new NumPy CPU numerical reference for one full tiny Gemma 3 text decoder block. It includes four RMSNorm stages, Q/K normalization, local/global split-half RoPE, causal grouped-query attention, bounded sliding/global KV cache behavior, and the seven existing packed LittleBit linear operators for Q/K/V/O and the gated MLP.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\gemma3_decoder.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+**The decoder demo is CPU-only and uses untrained synthetic packed factors.** The expected LittleBit experiment suite contains **106 tests** (95 prior plus 11 new decoder tests). No PyTorch installation is needed to run these. The demo is not a Gemma 3 27B model or a text generator, and no new weights are downloaded.
