@@ -287,3 +287,26 @@ def test_default_grib_decoder_receives_embedded_issue_and_valid_times(monkeypatc
     assert calls==[(run,run+timedelta(hours=2))]
     assert values["KMDW1M"]==290.
     assert digest==hashlib.sha256(b"GRIBtest").hexdigest()
+
+
+def test_tampered_calibration_payload_is_never_used_to_display_physical_guidance():
+    from kalshi_edge.weather.hourly_physics import _init
+    conn=sqlite3.connect(":memory:")
+    _init(conn)
+    c=parse_calibrations(payload(),"chicago")[0]
+    conn.execute("""INSERT INTO weather_hourly_physics_calibrations
+      (city,config_version,effective_at_ms,published_at_ms,config_json,
+       config_sha256,original_response_sha256,received_at)
+       VALUES(?,?,?,?,?,?,?,?)""",
+       ("chicago",c["version"],c["effective_at_ms"],c["published_at_ms"],
+        json.dumps(c),"0"*64,"a"*64,NOW.isoformat()))
+    for model in ("HRRR","NBM"):
+        conn.execute("""INSERT INTO weather_hourly_physics_forecasts
+          (city,target_utc,model,model_run_at,received_at,config_version,
+           config_sha256,index_f,nwp_field_sha256,sampled_station_kelvin_json,
+           coordinate_source) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+          ("chicago",TARGET.isoformat(),model,
+           (NOW-timedelta(hours=1)).isoformat(),NOW.isoformat(),
+           c["version"],"0"*64,68,"a"*64,"{}",
+           "AWC_ICAO_AIRPORT_PROXY_NOT_HF_SENSOR_LOCATION"))
+    assert read_hourly_physics(conn,"chicago",TARGET,NOW)["status"]=="NO_PHYSICAL_GUIDANCE"
