@@ -216,3 +216,52 @@ def test_one_command_weather_supervisor_reports_physical_data_status(tmp_path):
     assert health["hourly_physics"]["cities"]["chicago"]["state"]=="RESEARCH_READY"
     assert health["hourly_physics"]["model_status"]["NBM"]=="READY"
     assert health["real_orders_enabled"] is False
+
+
+def test_calibration_history_survives_noaa_or_stationinfo_outage(tmp_path):
+    def api(request):
+        if request.url.path.endswith("/calibrations"):
+            return httpx.Response(200,json=payload())
+        return httpx.Response(503)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(api)) as client:
+            return await collect_hourly_physics_once(
+                tmp_path/"weatheredge.sqlite3",client=client,
+                cities=("chicago",),clock=lambda:NOW)
+    result=asyncio.run(run())
+    assert result["cities"]["chicago"]["state"]=="UNAVAILABLE"
+    with sqlite3.connect(tmp_path/"weatheredge.sqlite3") as conn:
+        rows=conn.execute("SELECT config_version,config_sha256 "
+                "FROM weather_hourly_physics_calibrations").fetchall()
+        assert len(rows)==1 and rows[0][0]=="chicago-temperature-v1.1"
+        assert len(rows[0][1])==64
+
+
+def test_obsolete_configuration_is_not_displayed_after_new_effective_version(tmp_path):
+    from kalshi_edge.weather.hourly_physics import _init
+    conn=sqlite3.connect(":memory:")
+    _init(conn)
+    old=parse_calibrations(payload(),"chicago")[0]
+    newer=copy.deepcopy(old)
+    newer["version"]="chicago-temperature-v2.0"
+    newer["effective_at_ms"]=int((TARGET-timedelta(minutes=1)).timestamp()*1000)
+    newer["published_at_ms"]=int((NOW-timedelta(minutes=1)).timestamp()*1000)
+    newer["config_sha256"]="f"*64
+    for c in (old,newer):
+        conn.execute("""INSERT INTO weather_hourly_physics_calibrations
+            (city,config_version,effective_at_ms,published_at_ms,config_json,
+            config_sha256,original_response_sha256,received_at)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            ("chicago",c["version"],c["effective_at_ms"],
+             c["published_at_ms"],json.dumps(c),c["config_sha256"],
+             "a"*64,NOW.isoformat()))
+    for model in ("HRRR","NBM"):
+        conn.execute("""INSERT INTO weather_hourly_physics_forecasts
+          (city,target_utc,model,model_run_at,received_at,config_version,
+           config_sha256,index_f,nwp_field_sha256,sampled_station_kelvin_json,
+           coordinate_source) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+          ("chicago",TARGET.isoformat(),model,
+           (NOW-timedelta(hours=1)).isoformat(),NOW.isoformat(),
+           old["version"],old["config_sha256"],68,"a"*64,"{}",
+           "AWC_ICAO_AIRPORT_PROXY_NOT_HF_SENSOR_LOCATION"))
+    assert read_hourly_physics(conn,"chicago",TARGET,NOW)["status"]=="NO_PHYSICAL_GUIDANCE"
