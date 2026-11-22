@@ -360,7 +360,7 @@ def _present(report: dict[str, object], *, mode: str) -> None:
             print("PREVIEW ONLY; nothing was deleted. Use 'clean --apply' after stopping KalshiEdge.")
         else:
             print(f"Cache directories removed: {len(report['deleted_directories'])}")
-    if report["errors"]:
+    if report.get("errors"):
         print(f"Warnings ({len(report['errors'])}):")
         for problem in report["errors"][:10]:
             print(f"  {problem}")
@@ -372,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--top", type=int, default=15, help="number of largest files to report")
     parser.add_argument("--json", action="store_true", help="emit a machine-readable report")
-    parser.add_argument("--apply", action="store_true", help="actually remove recognized caches (clean only)")
+    parser.add_argument("--apply", action="store_true", help="permanently execute the selected cleanup")
     args = parser.parse_args(argv)
     if args.apply and args.mode not in ("clean", "reclaim-trades"):
         parser.error("--apply is valid only for clean or reclaim-trades")
@@ -387,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
     else:
         _present(result, mode=args.mode)
-    return 2 if result["errors"] else 0
+    return 2 if result.get("errors") else 0
 
 
 if __name__ == "__main__":
