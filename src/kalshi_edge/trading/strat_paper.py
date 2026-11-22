@@ -92,6 +92,8 @@ class StratPaperTrader:
         self._side_speeds = {"UP": 0.0, "DOWN": 0.0}
         self._side_reasons = {"UP": "WARMING_UP", "DOWN": "WARMING_UP"}
         self._breakeven_cents = {"UP": None, "DOWN": None}
+        self._evidence_market: str | None = None
+        self._entry_evidence: dict | None = None
 
     def _market(self, now: int) -> tuple[str, int] | None:
         try:
@@ -254,6 +256,7 @@ class StratPaperTrader:
                 "global_loss_streak": streak,
                 "entry_block_reason": self._entry_block_reason(now, stats),
                 "quote_tape_samples": tape["snapshots"],
+                "entry_evidence": self._entry_evidence,
                 "quote_tape_markets": tape["markets"],
                 "quote_tape_path": tape["path"],
                 "quote_tape_healthy": not self._capture_failed,
@@ -391,6 +394,8 @@ class StratPaperTrader:
                 return self.status()
 
             if self._ticker != ticker:
+                self._evidence_market = None
+                self._entry_evidence = None
                 for history in self._samples.values():
                     history.clear()
                 self._last_ask_cents = None
@@ -441,6 +446,18 @@ class StratPaperTrader:
                 else:
                     self._breakeven_cents[side] = None
             remain = (close - observed_ns) / NS
+            # Use only earlier, fully closed market quote evidence. The
+            # current market can never train its own entry veto.
+            if self._evidence_market != ticker:
+                try:
+                    from .strat_evidence import evaluate_historical_entry_evidence
+                    self._entry_evidence = evaluate_historical_entry_evidence(
+                        self.tape.path, observed_ns,
+                    )
+                except Exception:
+                    LOG.exception("Strat historical evidence unavailable")
+                    self._entry_evidence = None
+                self._evidence_market = ticker
             signals = {
                 side: evaluate_side_momentum(
                     list(self._samples[side]), remain, side=side,
@@ -499,7 +516,17 @@ class StratPaperTrader:
                 ]
                 if len(candidates) == 1:
                     selected = candidates[0]
-                    self._enter(quotes[selected], selected, close, observed_ns, stats)
+                    evidence = (self._entry_evidence or {}).get("sides", {}).get(
+                        selected, {}
+                    )
+                    if evidence.get("entry_veto") is True:
+                        self._last_signal = (
+                            f"NEGATIVE_HISTORICAL_{selected}_TAKER_MARKOUT"
+                        )
+                    else:
+                        self._enter(
+                            quotes[selected], selected, close, observed_ns, stats
+                        )
                 elif len(candidates) > 1:
                     self._last_signal = "AMBIGUOUS_BIDIRECTIONAL_ACCELERATION"
                 else:

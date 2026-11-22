@@ -807,3 +807,137 @@ def test_dashboard_no_longer_describes_paper_loss_circuits_as_entry_stops():
     assert "No paper-loss circuit" in page
     assert "THREE_SAME_MARKET_PAPER_LOSSES" not in page
     assert "DAILY_PAPER_LOSS_CIRCUIT" not in page
+
+
+
+def test_prior_completed_markets_negative_edge_blocks_only_losing_side(tmp_path):
+    """A sufficient past CLOSED-market sample blocks one side, never uses current."""
+    from kalshi_edge.trading.strat_tape import StratQuoteTape
+    from kalshi_edge.trading.strat_evidence import evaluate_historical_entry_evidence
+    tape = StratQuoteTape(tmp_path / "quotes.sqlite3")
+    for market_index in range(10):
+        ticker = f"KXBTC15M-OLD{market_index}"
+        start = BASE + market_index * 900 * NS
+        close = start + 600 * NS
+        for event_index in range(6):
+            t = start + (10 + event_index * 35) * NS
+            for when, bid, marker in [
+                (t, D("0.68"), "NEW_FAST_UP_MOMENTUM"),
+                (t + 20 * NS, D("0.68"), "NO_NEW_ACCELERATION"),
+            ]:
+                up = UpQuote(ticker, when, bid, bid + D("0.02"),
+                             D("100"), D("100"))
+                down = UpQuote(ticker, when, D("0.28"), D("0.30"),
+                               D("100"), D("100"))
+                tape.append(
+                    ticker=ticker, observed_ns=when, close_ns=close,
+                    remaining_seconds=(close - when) / NS,
+                    quotes={"UP": up, "DOWN": down},
+                    signals={"UP": marker, "DOWN": "WAIT"},
+                    position_side=None,
+                )
+    audit_time = BASE + 10 * 900 * NS
+    result = evaluate_historical_entry_evidence(tape.path, audit_time)
+    up, down = result["sides"]["UP"], result["sides"]["DOWN"]
+    assert up["status"] == "NEGATIVE_HISTORICAL_TAKER_MARKOUT"
+    assert up["entry_veto"] is True
+    assert up["observed"] == 60
+    assert up["market_count"] == 10
+    assert up["mean_net_cents_per_contract"] < 0
+    assert down["status"] == "INSUFFICIENT_HISTORY"
+    assert down["entry_veto"] is False
+    # Prior-to-close knowledge cannot veto a current/unfinished market.
+    premature = evaluate_historical_entry_evidence(
+        tape.path, BASE + 9 * 900 * NS + 300 * NS,
+    )
+    assert premature["sides"]["UP"]["market_count"] == 9
+    assert result["interpretation"] == "DESCRIPTIVE_ONLY_NO_VERIFIED_EDGE"
+
+
+def test_own_paper_trade_signal_is_vetoed_after_negative_prior_market_evidence(tmp_path):
+    from kalshi_edge.trading.strat_tape import StratQuoteTape
+    ticker = "KXBTC15M-NEWLIVE"
+    previous = StratQuoteTape(tmp_path / "trading" / "strat_quote_tape.sqlite3")
+    for i in range(10):
+        old = f"KXBTC15M-OLD{i}"
+        start = BASE + i * 900 * NS
+        close = start + 600 * NS
+        for j in range(6):
+            t = start + (20 + j*35)*NS
+            for when, sig in [(t, "NEW_FAST_UP_MOMENTUM"),
+                              (t+20*NS, "WAIT")]:
+                up = UpQuote(old, when, D("0.68"), D("0.70"), D("100"), D("100"))
+                down = UpQuote(old, when, D("0.28"), D("0.30"),
+                               D("100"), D("100"))
+                previous.append(
+                    ticker=old, observed_ns=when, close_ns=close,
+                    remaining_seconds=(close-when)/NS,
+                    quotes={"UP":up,"DOWN":down},
+                    signals={"UP":sig,"DOWN":"WAIT"}, position_side=None,
+                )
+    now = [BASE + 10*900*NS]
+    close = now[0] + 600*NS
+    def live():
+        return {
+            "market_ticker": ticker, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": ticker, "prediction_ts_ns": now[0]
+            }
+        }
+    client = FakeMarketClient([
+        (bid, bid+D("0.02")) for bid in map(D, [
+            "0.64","0.64","0.65","0.66","0.68"
+        ])
+    ])
+    trader = StratPaperTrader(
+        tmp_path, live, client=client, clock=lambda: now[0],
+    )
+    trader.arm("1.00")
+    for i in range(5):
+        now[0] = BASE + 10*900*NS + i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is None
+    assert trader.status()["last_signal"] == "NEGATIVE_HISTORICAL_UP_TAKER_MARKOUT"
+    assert trader.status()["entry_evidence"]["sides"]["UP"]["entry_veto"]
+    assert trader.status()["quote_tape_samples"] == 125
+    assert trader.status()["enabled"] is True
+    trader.close()
+
+
+def test_maker_entry_scenario_is_labelled_optimistic_and_unverified(tmp_path):
+    from kalshi_edge.trading.strat_tape import StratQuoteTape
+    from kalshi_edge.trading.strat_replay import analyze_causal_markouts
+    tape = StratQuoteTape(tmp_path / "tape.sqlite3")
+    ticker = TICKER
+    close = BASE + 600*NS
+    for seconds, bid, signal in [
+        (0, D("0.68"), "NEW_FAST_UP_MOMENTUM"),
+        (20, D("0.74"), "WAIT"),
+    ]:
+        when = BASE+seconds*NS
+        tape.append(
+            ticker=ticker, observed_ns=when, close_ns=close,
+            remaining_seconds=(close-when)/NS,
+            quotes={
+                "UP": UpQuote(ticker,when,bid,bid+D("0.02"),D("100"),D("100")),
+                "DOWN": UpQuote(ticker,when,D("0.25"),D("0.27"),
+                                D("100"),D("100")),
+            },
+            signals={"UP":signal,"DOWN":"WAIT"},position_side=None,
+        )
+    report = analyze_causal_markouts(tape.path, horizons=(20,))
+    comparison = report["execution_scenarios"]["20s"]
+    assert comparison["optimistic_maker_entry_assumed_fills"] == 1
+    assert comparison["optimistic_maker_entry_mean_net_cents"] > 0
+    assert comparison["optimistic_maker_entry_is_verified"] is False
+    assert "NOT VERIFIED" in comparison["maker_label"]
+    assert report["horizons"]["20s"]["mean_net_cents_per_contract"] < 0
+
+
+def test_dashboard_exposes_evidence_gate_and_unverified_maker_comparison():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    html = render_strat_page()
+    assert 'id="evidenceGate"' in html
+    assert "Negative historical taker markout" in html
+    assert "Maker entry (unverified)" in html
+    assert "entry_evidence" in html

@@ -107,6 +107,8 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="kv"><span>Daily simulated losses (informational)</span><strong id="dailyLoss">—</strong></div>
 <div class="kv"><span>Informational daily loss streak</span><strong id="globalLossStreak">0</strong></div>
 <div class="kv"><span>Entry restriction</span><strong id="entryBlock">—</strong></div>
+<div class="kv"><span>Historical taker evidence</span><strong id="evidenceGate">Not yet assessed</strong></div>
+<p class="sub">Negative historical taker markout in 10+ earlier completed markets, 60+ samples, ≥80% future-quote coverage, and mean ≤−2¢ with ≤30% after-cost winners blocks that side's NEW paper buys. This is an exposure-reduction heuristic, not proof the other side wins. Existing holdings still exit normally.</p>
 <div class="kv"><span>Captured book snapshots</span><strong id="quoteTapeSamples">0</strong></div>
 <div class="kv"><span>Markets captured</span><strong id="quoteTapeMarkets">0</strong></div>
 <p class="sub">No paper-loss circuit blocks research entries. Historical loss streaks and daily simulated losses are informational only; they remain visible. The 2:00 cutoff, 65¢–85¢ ask range, one open position, 12-cycle market limit, re-entry cooldown, and simulated budget cap still apply. Captured quote evidence is preserved.</p>
@@ -151,6 +153,14 @@ async function refresh(){
   set("dailyLoss",money(s.daily_paper_loss_dollars));
   set("globalLossStreak",s.global_loss_streak??0);
   set("entryBlock",s.entry_block_reason==null?"NONE — MOMENTUM ONLY":s.entry_block_reason.replace(/_/g," "));
+  const ev=s.entry_evidence?.sides;
+  set("evidenceGate",ev?
+    ["UP","DOWN"].map(side=>{
+      const e=ev[side];if(!e)return side+": no history";
+      return side+": "+(e.entry_veto?"BLOCKED NEGATIVE":"unvalidated / observing")+
+       " ("+e.observed+" observations, "+e.market_count+" markets, "+
+       (e.mean_net_cents_per_contract==null?"—":Number(e.mean_net_cents_per_contract).toFixed(2)+"¢")+" mean)";
+    }).join(" | "):"Not yet assessed");
   set("quoteTapeSamples",s.quote_tape_samples??0);
   set("quoteTapeMarkets",s.quote_tape_markets??0);
   set("held",s.open_position?"LONG "+s.open_position.side+" · "+s.open_position.quantity+" shares":"FLAT");
@@ -194,6 +204,12 @@ async function auditQuotes(){
      x.missing_followup+" without follow-up, mean "+
      (x.mean_net_cents_per_contract==null?"—":
       x.mean_net_cents_per_contract.toFixed(3)+"¢/contract"));
+   const maker=data.execution_scenarios?.[h];
+   if(maker)lines.push("  Maker entry (unverified): "+
+     maker.optimistic_maker_entry_assumed_fills+" ASSUMED fills, mean "+
+     (maker.optimistic_maker_entry_mean_net_cents==null?"—":
+      maker.optimistic_maker_entry_mean_net_cents.toFixed(3)+"¢/contract")+
+     " — NO ACTUAL FILLS VERIFIED");
   }
   lines.push("Descriptive only. No verified profitable execution edge.");
   set("replayResult",lines.join("\n"));
