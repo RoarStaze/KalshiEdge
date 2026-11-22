@@ -123,10 +123,13 @@ class StratPaperTrader:
             raise ValueError("Unverified public market identity")
         if info.get("status") not in ("active", "open"):
             raise ValueError("Public market is no longer tradable")
+        # REST responses can arrive after the decision loop timestamp. Use
+        # client receipt time for both sides; never claim exchange event time.
+        received_ns = self.clock()
         quotes = {}
         for side in ("UP", "DOWN"):
-            q = quote_from_kalshi(book, side, timestamp_ns=now)
-            quotes[side] = UpQuote(ticker, now, q.bid, q.ask,
+            q = quote_from_kalshi(book, side, timestamp_ns=received_ns)
+            quotes[side] = UpQuote(ticker, received_ns, q.bid, q.ask,
                                    q.bid_available, q.ask_available)
         return quotes
 
@@ -379,6 +382,10 @@ class StratPaperTrader:
                 self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
                 return self.status()
 
+            observed_ns = quotes["UP"].observed_ns
+            if observed_ns >= close:
+                self._last_signal = "MARKET_CLOSED_DURING_QUOTE"
+                return self.status()
             for side in ("UP", "DOWN"):
                 self._samples[side].append(quotes[side])
             self._last_ask_cents = format(quotes["UP"].ask * 100, ".2f")
@@ -395,7 +402,7 @@ class StratPaperTrader:
                     self._breakeven_cents[side] = format(drag * 100, ".2f")
                 else:
                     self._breakeven_cents[side] = None
-            remain = (close - now) / NS
+            remain = (close - observed_ns) / NS
             signals = {
                 side: evaluate_side_momentum(
                     list(self._samples[side]), remain, side=side,
@@ -410,7 +417,7 @@ class StratPaperTrader:
             # otherwise there is no timestamp-correct evidence to audit it.
             try:
                 self.tape.append(
-                    observed_ns=now, ticker=ticker, close_ns=close,
+                    observed_ns=observed_ns, ticker=ticker, close_ns=close,
                     remaining_seconds=remain,
                     quotes=quotes,
                     signals={side: signals[side].reason for side in ("UP", "DOWN")},
