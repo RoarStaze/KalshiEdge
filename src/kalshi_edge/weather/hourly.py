@@ -399,6 +399,17 @@ async def collect_hourly_once(
 
 def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
     event, target = event_for(city, asof)
+    # Follow actual collected Kalshi listings, not a speculative event hour.
+    # An old entry is not evidence that a market is still open.
+    selected = conn.execute("""
+        SELECT event_ticker, target_utc FROM weather_hourly_markets
+        WHERE city=? AND received_at>=? AND received_at<=?
+          AND target_utc>? AND target_utc<=?
+        ORDER BY target_utc ASC, received_at DESC LIMIT 1""",
+        (city, (asof-timedelta(minutes=5)).isoformat(), asof.isoformat(),
+         asof.isoformat(), (asof+timedelta(hours=3)).isoformat())).fetchone()
+    if selected:
+        event, target = selected[0], datetime.fromisoformat(selected[1])
     result = {
         "city": city, "name": CITIES[city].label, "series": CITIES[city].series,
         "status":"MISSING_INDEX","event_ticker":event,"target_utc":target.isoformat(),
@@ -453,6 +464,9 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime) -> dict:
         try:
             m=json.loads(raw)
             if m["source"]!="KALSHI_WEATHER_INDEX":
+                continue
+            close_at = m.get("close_time_utc")
+            if close_at and datetime.fromisoformat(close_at) <= asof:
                 continue
             probability=max(0.,min(1.,1-normal_cdf(threshold,mean,sigma)))
         except (ValueError,TypeError,KeyError,json.JSONDecodeError):
