@@ -274,6 +274,25 @@ def prune_historical_trades(root: Path | str, *, apply: bool = False) -> dict[st
     elif not trades.is_dir():
         raise ValueError("historical trade and manifest directories are absent; nothing to prune")
 
+    # List only the two known trade directories (not the 156 GiB tree).
+    # Reject unexpected content or mismatched provenance *before* the marker.
+    # Existing prune markers permit resumption after interrupted deletion.
+    if not already_pruned:
+        with os.scandir(trades) as entries:
+            raw_entries = list(entries)
+        with os.scandir(manifests) as entries:
+            manifest_entries = list(entries)
+        if (any(entry.is_symlink() or not entry.is_file(follow_symlinks=False)
+                or not entry.name.endswith(".json") for entry in raw_entries)
+                or any(entry.is_symlink() or not entry.is_file(follow_symlinks=False)
+                or not entry.name.endswith(".json.manifest.json")
+                for entry in manifest_entries)):
+            raise ValueError("unexpected files, links, or subdirectories in trade archive; refusing pruning")
+        raw_names = {entry.name for entry in raw_entries}
+        manifest_names = {entry.name.removesuffix(".manifest.json") for entry in manifest_entries}
+        if not raw_names or raw_names != manifest_names:
+            raise ValueError("historical trade JSON and manifest names do not match; refusing pruning")
+
     report: dict[str, object] = {
         "root": str(project),
         "applied": apply,
