@@ -5,7 +5,7 @@ from decimal import Decimal as D
 from pathlib import Path
 
 from kalshi_edge.trading.strat_policy import (
-    UpQuote, evaluate_up_momentum,
+    UpQuote, evaluate_up_momentum, evaluate_side_momentum,
 )
 from kalshi_edge.trading.strat_paper import StratPaperTrader
 
@@ -134,4 +134,118 @@ def test_budget_rejects_oversize_or_malformed(tmp_path: Path):
         import pytest
         with pytest.raises(ValueError):
             trader.arm(amount)
+    trader.close()
+
+
+
+def test_down_entry_obeys_identical_time_price_acceleration_rules():
+    # These are executable DOWN bids/asks, not inverted BTC spot returns.
+    down = quotes(list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"])))
+    assert evaluate_side_momentum(down, 420, side="DOWN", holding=False).action == "BUY"
+    assert evaluate_side_momentum(down, 419, side="DOWN", holding=False).action == "WAIT"
+    assert evaluate_side_momentum(
+        quotes([q.bid - D("0.06") for q in down]), 600, side="DOWN",
+        holding=False).action == "WAIT"
+    assert evaluate_side_momentum(
+        quotes([q.bid + D("0.18") for q in down]), 600, side="DOWN",
+        holding=False).action == "WAIT"
+    assert evaluate_side_momentum(down, 600, side="SIDEWAYS", holding=False).action == "WAIT"
+
+
+def test_down_exit_when_down_bid_slows_even_after_buy_cutoff():
+    down = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
+    outcome = evaluate_side_momentum(down, 200, side="DOWN", holding=True)
+    assert outcome.action == "SELL"
+    assert outcome.reason == "DOWN_MOMENTUM_DECELERATED"
+    down_reversal = quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"])))
+    assert evaluate_side_momentum(
+        down_reversal, 120, side="DOWN", holding=True
+    ).reason == "DOWN_BID_REVERSAL"
+
+
+class FakeDownClient:
+    def __init__(self, down_quotes):
+        self.values = iter(down_quotes)
+        self.calls = 0
+
+    def quote(self, ticker):
+        self.calls += 1
+        bid, ask = next(self.values)
+        return {"market": {"ticker": ticker, "status": "active"}}, {
+            "orderbook_fp": {
+                "yes_dollars": [[str(D("1") - ask), "100"]],
+                "no_dollars": [[str(bid), "100"]],
+            }
+        }
+
+    def close(self):
+        pass
+
+
+def test_bidirectional_trader_paper_buys_and_sells_down(tmp_path):
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    client = FakeDownClient([(x, x + D("0.02")) for x in values])
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(tmp_path, live, client=client, clock=lambda: now[0])
+    assert trader.status()["enabled"] is False
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE + i * NS
+        trader.tick(now[0])
+    history = trader.ledger.recent()
+    assert len(history) == 1
+    assert history[0]["side"] == "DOWN"
+    assert history[0]["status"] == "CLOSED"
+    assert history[0]["exit_reason"] == "DOWN_MOMENTUM_SLOWED"
+    assert client.calls == len(values)
+    assert D(history[0]["paper_net_pnl"]) < D("0")
+    assert trader.status()["down_ask_cents"] is not None
+    assert trader.status()["open_position"] is None
+    trader.close()
+
+
+def test_down_official_settlement_and_single_inventory(tmp_path):
+    values = list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"]))
+    client = FakeDownClient([(x, x + D("0.02")) for x in values])
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(
+        tmp_path, live, client=client, clock=lambda: now[0],
+        settlement_reader=lambda ticker: "no",
+    )
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE + i * NS
+        trader.tick(now[0])
+    open_pos = trader.ledger.open_position()
+    assert open_pos is not None and open_pos["side"] == "DOWN"
+    assert len(trader.ledger.recent()) == 1
+    now[0] = close + 1
+    trader.tick(now[0])
+    result = trader.ledger.recent()[0]
+    assert result["status"] == "SETTLED"
+    assert D(result["paper_net_pnl"]) == D(result["quantity"]) - D(result["total_paid"])
+    assert trader.ledger.open_position() is None
     trader.close()
