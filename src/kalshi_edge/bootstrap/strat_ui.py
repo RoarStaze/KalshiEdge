@@ -103,12 +103,13 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <p class="status" id="feedback" role="status">Arming is required after each restart. Existing simulated holdings remain monitored when paused.</p>
 <div class="kv"><span>Simulated P&amp;L</span><strong id="pnl">—</strong></div>
 <div class="kv"><span>Virtual cash</span><span id="cash">—</span></div>
-<div class="kv"><span>Loss streak this market</span><strong id="lossStreak">0 / 3</strong></div>
+<div class="kv"><span>Loss streak this market (informational)</span><strong id="lossStreak">0</strong></div>
+<div class="kv"><span>Daily simulated losses (informational)</span><strong id="dailyLoss">—</strong></div>
 <div class="kv"><span>Informational daily loss streak</span><strong id="globalLossStreak">0</strong></div>
 <div class="kv"><span>Entry restriction</span><strong id="entryBlock">—</strong></div>
 <div class="kv"><span>Captured book snapshots</span><strong id="quoteTapeSamples">0</strong></div>
 <div class="kv"><span>Markets captured</span><strong id="quoteTapeMarkets">0</strong></div>
-<p class="sub">Cross-market loss streak is shown for analysis, not used to block paper entries. Per-market risk checks and the $2 daily simulated loss cap still apply. Quote evidence remains recorded locally while Strat is armed.</p>
+<p class="sub">No paper-loss circuit blocks research entries. Historical loss streaks and daily simulated losses are informational only; they remain visible. The 2:00 cutoff, 65¢–85¢ ask range, one open position, 12-cycle market limit, re-entry cooldown, and simulated budget cap still apply. Captured quote evidence is preserved.</p>
 </section>
 <section class="card span"><h2>Exactly four strategy rules</h2><div class="rules">
 <div class="rule"><small>BUY TIME</small><strong>≥ 2:00</strong><small>Never open a new UP or DOWN position below two minutes remaining.</small></div>
@@ -146,9 +147,10 @@ async function refresh(){
   set("upSpeed",s.side_momentum?.UP==null?"—":Number(s.side_momentum.UP.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("downSpeed",s.side_momentum?.DOWN==null?"—":Number(s.side_momentum.DOWN.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("pnl",money(s.paper_net_pnl_dollars));set("cash",money(s.virtual_cash_dollars));
-  set("lossStreak",(s.market_loss_streak??0)+" / "+(s.max_same_market_loss_streak??3));
+  set("lossStreak",s.market_loss_streak??0);
+  set("dailyLoss",money(s.daily_paper_loss_dollars));
   set("globalLossStreak",s.global_loss_streak??0);
-  set("entryBlock",s.entry_block_reason==null?"NONE — MONITORING":s.entry_block_reason.replace(/_/g," "));
+  set("entryBlock",s.entry_block_reason==null?"NONE — MOMENTUM ONLY":s.entry_block_reason.replace(/_/g," "));
   set("quoteTapeSamples",s.quote_tape_samples??0);
   set("quoteTapeMarkets",s.quote_tape_markets??0);
   set("held",s.open_position?"LONG "+s.open_position.side+" · "+s.open_position.quantity+" shares":"FLAT");
