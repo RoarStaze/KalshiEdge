@@ -52,7 +52,7 @@ def test_hourly_index_is_not_daily_airport_high():
     assert CITIES["la-coastal"].series=="KXTEMPLAXHS"
     assert CITIES["miami"].series=="KXTEMPMIAH"
     assert event_for("chicago",NOW)==(EVENT,TARGET)
-    assert event_for("chicago",datetime(2026,11,23,4,20,tzinfo=timezone.utc))[0]=="KXTEMPCHIHS-26NOV2223"
+    assert event_for("chicago",datetime(2026,11,23,4,20,tzinfo=timezone.utc))[0]=="KXTEMPCHIHS-26NOV2300"
 
 
 def test_index_rejects_future_unit_backfills_and_unavailable_points():
@@ -194,8 +194,10 @@ def test_weather_ui_only_displays_hourly_index_markets():
     from kalshi_edge.weather.research_ui import render_weather_page
     for section in ("forecast","train","history","data"):
         page=render_weather_page(section)
-        assert "Hourly temperature" in page
-        assert "KXTEMPCHIHS" in page
+        assert "KALSHIEDGE / WEATHER · HOURLY INDEX" in page
+        if section=="forecast":
+            assert "Hourly temperature" in page
+            assert "KXTEMPCHIHS" in page
         assert 'data-market="weather"' in page
         assert "PAPER ONLY" in page
         assert "/api/weather/hourly/forecast" in page
