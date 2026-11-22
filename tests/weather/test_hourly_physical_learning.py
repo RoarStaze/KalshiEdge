@@ -390,3 +390,16 @@ def test_approved_weights_do_not_apply_to_different_baseline_model(monkeypatch):
                                   baseline_kind="newer-baseline")
     assert result["enabled"] is False
     assert result["status"]=="BASELINE_MODEL_CHANGED"
+
+
+def test_settlement_proof_must_match_precommitted_event_ticker_and_threshold():
+    from kalshi_edge.weather.hourly_physical_learning import same_settled_contract
+    chosen={"event_ticker":"EVT","market_ticker":"EVT-T59.99",
+            "threshold_f":60.}
+    settled={"event_ticker":"EVT","market_ticker":"EVT-T59.99",
+             "threshold_f":60.,"observed_index_f":60.1}
+    assert same_settled_contract(chosen,settled,60.1)
+    assert not same_settled_contract(chosen,{**settled,"market_ticker":"OTHER"},60.1)
+    assert not same_settled_contract(chosen,{**settled,"threshold_f":61.},60.1)
+    assert not same_settled_contract(chosen,{**settled,"event_ticker":"OTHER"},60.1)
+    assert not same_settled_contract(chosen,settled,62.0)
