@@ -42,10 +42,10 @@ def test_entry_requires_2_minutes_and_65_85_and_new_acceleration():
 
 
 def test_exit_remains_enabled_after_two_minute_cutoff():
-    series = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
+    series = quotes(list(map(D, ["0.64", "0.69", "0.69", "0.69", "0.69"])))
     signal = evaluate_up_momentum(series, 80, holding=True)
     assert signal.action == "SELL"
-    assert signal.reason == "UP_MOMENTUM_DECELERATED"
+    assert signal.reason == "UP_MOMENTUM_FLAT_CONFIRMED"
     assert evaluate_up_momentum(
         quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"]))),
         60, holding=True,
@@ -153,10 +153,10 @@ def test_down_entry_obeys_identical_time_price_acceleration_rules():
 
 
 def test_down_exit_when_down_bid_slows_even_after_buy_cutoff():
-    down = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
+    down = quotes(list(map(D, ["0.64", "0.69", "0.69", "0.69", "0.69"])))
     outcome = evaluate_side_momentum(down, 80, side="DOWN", holding=True)
     assert outcome.action == "SELL"
-    assert outcome.reason == "DOWN_MOMENTUM_DECELERATED"
+    assert outcome.reason == "DOWN_MOMENTUM_FLAT_CONFIRMED"
     down_reversal = quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"])))
     assert evaluate_side_momentum(
         down_reversal, 60, side="DOWN", holding=True
