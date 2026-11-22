@@ -24,3 +24,12 @@ Collect frozen point-in-time HRRR, NBM and existing WeatherEdge forecast predict
 
 ## Limitations
 NOAA forecast-grid samples are not independently verified HF-ASOS sensor observations and Kalshi settlement uses separate QC. Synthetic unit tests prove software behavior only, not an empirical accuracy advantage. See https://docs.kalshi.com/api-reference/live-data/get-weather-index-calibrations and https://rapidrefresh.noaa.gov/hrrr/.
+## Deployment-specific safeguards
+
+- An eligible candidate must use at least 64 older paired, completed index hours and 24 subsequent holdout hours from the same city, lead bucket, Kalshi calibration configuration and latest contiguous incumbent baseline-model type.
+- A candidate is fixed before the prospective lockbox. Only its first 32 **consecutive UTC target hours** after the lock count; an outage does not move the evaluation window forward.
+- At least 24 of those 32 hours must have source-reconciled **the exact same Kalshi event, market ticker and threshold selected before target**. A different settled ticker in the same city does not establish this contract's probability outcome.
+- Prospective MAE and Gaussian CRPS must both beat the paired incumbent; the same 24+ precommitted thresholds must have lower Brier and log loss, with a guarded nominal 90% interval coverage.
+- The full evidence minimum is 120 completed hours per city, lead and configuration, including 32 truly subsequent hours and 24 matched market outcomes. Missing source data or weekly configuration changes can increase elapsed collection time or prevent automatic promotion entirely.
+- Baseline model changes invalidate a lock built against an older baseline; new candidates can lock separately for the changed model type. No historic fitted coefficients are rewritten using lockbox outcomes.
+- A passing lockbox is limited prospective evidence, not fully independent calibration certification or a guarantee that future probabilities will be accurate or profitable.
