@@ -146,3 +146,59 @@ def test_new_weather_page_and_read_only_api_explain_contract_limitations():
     assert "NOT A KALSHI 15-MINUTE CONTRACT" in html
     assert 'id="wx-15m-station"' in html
     assert "/api/manual-trade/" not in html
+
+
+
+def test_existing_one_command_supervisor_automatically_records_short_outlooks(tmp_path):
+    from kalshi_edge.weather.runtime import WeatherSupervisor
+    db=tmp_path/"weatheredge.sqlite3"
+    seen=[]
+    def collector(path):
+        seen.append(path)
+        return {"mode":"PAPER_ONLY","inserted":1,"statuses":{"KMDW":"READY_RESEARCH"}}
+    worker=WeatherSupervisor(
+        db, ensure_decoder=lambda:{"state":"AVAILABLE"},
+        quarter_capture=collector,
+    )
+    asyncio.run(worker.poll_quarter_hour())
+    assert seen==[db]
+    health=json.loads((db.parent/"collector-status.json").read_text())
+    assert health["quarter_hour"]["state"]=="READY"
+    assert health["quarter_hour"]["inserted"]==1
+    assert health["real_orders_enabled"] is False
+
+
+def test_weather_15m_get_endpoint_real_and_preview_do_not_send_orders(tmp_path):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from types import SimpleNamespace
+    import httpx
+    from kalshi_edge.bootstrap.final_history import _make_handler
+    from kalshi_edge.bootstrap.preview_site import make_preview_handler
+
+    for preview in (False, True):
+        handler=(make_preview_handler() if preview else
+            _make_handler(tmp_path/"bootstrap",credential_vault=SimpleNamespace(exists=lambda:True)))
+        server=ThreadingHTTPServer(("127.0.0.1",0),handler)
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            with httpx.Client(timeout=5,trust_env=False) as client:
+                root=f"http://127.0.0.1:{server.server_port}"
+                response=client.get(root+"/api/weather/15m")
+                assert response.status_code==200
+                payload=response.json()
+                assert payload["mode"]=="PAPER_ONLY"
+                assert payload["horizon_minutes"]==15
+                assert payload["market_exists_15m"] is False
+                assert all(item["tradable"] is False for item in payload["forecasts"])
+                if preview:
+                    assert all(item["mean_f"] is None for item in payload["forecasts"])
+                assert client.post(root+"/api/weather/15m",json={}).status_code in (403,404)
+                page=client.get(root+"/weather/15m")
+                assert page.status_code==200
+                assert "NOT A KALSHI 15-MINUTE CONTRACT" in page.text
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
