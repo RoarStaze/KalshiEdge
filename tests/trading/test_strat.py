@@ -24,31 +24,31 @@ def quotes(bids, asks=None, *, base=BASE, ticker=TICKER):
     ]
 
 
-def test_entry_requires_7_minutes_and_65_85_and_new_acceleration():
+def test_entry_requires_2_minutes_and_65_85_and_new_acceleration():
     series = quotes(list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"])))
-    assert evaluate_up_momentum(series, 420, holding=False).action == "BUY"
-    assert evaluate_up_momentum(series, 419.999, holding=False).action == "WAIT"
+    assert evaluate_up_momentum(series, 120, holding=False).action == "BUY"
+    assert evaluate_up_momentum(series, 119.999, holding=False).action == "WAIT"
     assert evaluate_up_momentum(series, 901, holding=False).action == "WAIT"
     assert evaluate_up_momentum(
-        quotes([q.bid - D("0.06") for q in series]), 420, holding=False
+        quotes([q.bid - D("0.06") for q in series]), 120, holding=False
     ).reason == "UP_ASK_OUTSIDE_65_85"
     assert evaluate_up_momentum(
-        quotes([q.bid + D("0.18") for q in series]), 420, holding=False
+        quotes([q.bid + D("0.18") for q in series]), 120, holding=False
     ).reason == "UP_ASK_OUTSIDE_65_85"
     assert evaluate_up_momentum(
         quotes(list(map(D, ["0.64", "0.65", "0.66", "0.67", "0.68"]))),
-        420, holding=False,
+        120, holding=False,
     ).action == "WAIT"
 
 
-def test_exit_remains_enabled_after_seven_minute_cutoff():
+def test_exit_remains_enabled_after_two_minute_cutoff():
     series = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
-    signal = evaluate_up_momentum(series, 200, holding=True)
+    signal = evaluate_up_momentum(series, 80, holding=True)
     assert signal.action == "SELL"
     assert signal.reason == "UP_MOMENTUM_DECELERATED"
     assert evaluate_up_momentum(
         quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"]))),
-        100, holding=True,
+        60, holding=True,
     ).action == "SELL"
 
 
@@ -141,8 +141,8 @@ def test_budget_rejects_oversize_or_malformed(tmp_path: Path):
 def test_down_entry_obeys_identical_time_price_acceleration_rules():
     # These are executable DOWN bids/asks, not inverted BTC spot returns.
     down = quotes(list(map(D, ["0.64", "0.64", "0.65", "0.66", "0.68"])))
-    assert evaluate_side_momentum(down, 420, side="DOWN", holding=False).action == "BUY"
-    assert evaluate_side_momentum(down, 419, side="DOWN", holding=False).action == "WAIT"
+    assert evaluate_side_momentum(down, 120, side="DOWN", holding=False).action == "BUY"
+    assert evaluate_side_momentum(down, 119.999, side="DOWN", holding=False).action == "WAIT"
     assert evaluate_side_momentum(
         quotes([q.bid - D("0.06") for q in down]), 600, side="DOWN",
         holding=False).action == "WAIT"
@@ -154,12 +154,12 @@ def test_down_entry_obeys_identical_time_price_acceleration_rules():
 
 def test_down_exit_when_down_bid_slows_even_after_buy_cutoff():
     down = quotes(list(map(D, ["0.64", "0.66", "0.69", "0.69", "0.69"])))
-    outcome = evaluate_side_momentum(down, 200, side="DOWN", holding=True)
+    outcome = evaluate_side_momentum(down, 80, side="DOWN", holding=True)
     assert outcome.action == "SELL"
     assert outcome.reason == "DOWN_MOMENTUM_DECELERATED"
     down_reversal = quotes(list(map(D, ["0.69", "0.69", "0.68", "0.67", "0.66"])))
     assert evaluate_side_momentum(
-        down_reversal, 120, side="DOWN", holding=True
+        down_reversal, 60, side="DOWN", holding=True
     ).reason == "DOWN_BID_REVERSAL"
 
 
