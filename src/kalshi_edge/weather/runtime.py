@@ -26,6 +26,7 @@ from .nwp_collection import collect_recent
 from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
+from .hourly_physics import collect_hourly_physics_once
 from .status import weather_database_path
 
 
@@ -42,6 +43,7 @@ FORECAST_JOURNAL_SECONDS = 600
 SETTLEMENT_POLL_SECONDS = 6 * 3600
 HOURLY_INDEX_SECONDS = 120
 HOURLY_SETTLE_SECONDS = 300
+PHYSICAL_NWP_SECONDS = 3600
 
 
 def _missing_decoder_modules() -> list[str]:
@@ -133,6 +135,7 @@ class WeatherSupervisor:
         settlement_collect: Callable[[Path], Awaitable[dict]] = poll_settlements,
         hourly_collect: Callable[[Path], Awaitable[dict]] = collect_hourly_once,
         hourly_settle: Callable[[Path], Awaitable[dict]] = settle_hourly_once,
+        hourly_physics_collect: Callable[[Path], Awaitable[dict]] = collect_hourly_physics_once,
     ):
         self.db_path = Path(db_path)
         self.status_path = collector_health_path(self.db_path)
@@ -142,6 +145,8 @@ class WeatherSupervisor:
         self._collect_settlement = settlement_collect
         self._collect_hourly = hourly_collect
         self._settle_hourly = hourly_settle
+        self._collect_hourly_physics = hourly_physics_collect
+        self._hourly_physics = {"state":"STARTING"}
         self._hourly = {city: {"state":"STARTING"} for city in
                         ("chicago","nyc","la-coastal","miami")}
         self._hourly_settlement = {"state":"STARTING","verified":0}
@@ -168,6 +173,7 @@ class WeatherSupervisor:
             "settlement": self._settlement,
             "hourly": self._hourly,
             "hourly_settlement": self._hourly_settlement,
+            "hourly_physics": self._hourly_physics,
             "real_orders_enabled": False,
         }
         temp_path = None
@@ -334,6 +340,50 @@ class WeatherSupervisor:
                           "reason":f"{type(exc).__name__}: {exc}"[:220]}
         self._persist()
 
+    async def poll_hourly_physics(self) -> None:
+        """Official station configs + physically sampled NOAA guidance.
+
+        An independently scheduled research worker never blocks the official
+        index collector or updates live YES/NO probabilities.
+        """
+        try:
+            if not self._decoder_checked:
+                self._decoder_checked = True
+                try:
+                    self._decoder_state = await asyncio.to_thread(self._ensure_decoder)
+                except Exception as exc:
+                    self._decoder_state = {
+                        "state":"INSTALL_FAILED",
+                        "reason":f"{type(exc).__name__}: {exc}"[:200]}
+            if (not isinstance(self._decoder_state,dict) or
+                self._decoder_state.get("state")!="AVAILABLE"):
+                self._hourly_physics={
+                    "state":"DECODER_UNAVAILABLE",
+                    "reason":(self._decoder_state or {}).get(
+                        "reason","GRIB decoder unavailable")[:190]}
+                return
+            report = await asyncio.wait_for(
+                self._collect_hourly_physics(self.db_path),timeout=240)
+            if (not isinstance(report,dict) or
+                report.get("mode")!="HOURLY_PHYSICAL_RESEARCH" or
+                report.get("real_orders_enabled") is not False):
+                raise ValueError("invalid physical research collector result")
+            self._hourly_physics={
+                "state":"RESEARCH_READY" if any(
+                    isinstance(x,dict) and x.get("state")=="RESEARCH_READY"
+                    for x in report.get("cities",{}).values()) else "UNAVAILABLE",
+                "cities":report.get("cities",{}),
+                "model_status":report.get("model_status",{}),
+                "target_utc":report.get("target_utc"),
+                "checked_at":datetime.now(timezone.utc).isoformat(),
+            }
+        except Exception as exc:
+            self._hourly_physics={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:220]}
+        finally:
+            self._persist()
+
     async def poll_hourly_settlements(self) -> None:
         try:
             report=await asyncio.wait_for(
@@ -360,6 +410,7 @@ class WeatherSupervisor:
         await asyncio.gather(
             every(self.poll_hourly, HOURLY_INDEX_SECONDS),
             every(self.poll_hourly_settlements, HOURLY_SETTLE_SECONDS),
+            every(self.poll_hourly_physics, PHYSICAL_NWP_SECONDS),
         )
 
 
