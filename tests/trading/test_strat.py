@@ -901,7 +901,91 @@ def test_own_paper_trade_signal_is_vetoed_after_negative_prior_market_evidence(t
     assert trader.status()["entry_evidence"]["sides"]["UP"]["entry_veto"]
     assert trader.status()["quote_tape_samples"] == 125
     assert trader.status()["enabled"] is True
+    assert trader.status()["paper_exploration_override"] is False
+    assert trader.status()["entry_block_reason"] == "NEGATIVE_HISTORICAL_UP_TAKER_MARKOUT"
     trader.close()
+
+    # Explicit, PAPER-ONLY exploration override: underlying evidence remains
+    # negative and visible, but no longer vetoes the same entry.
+    now[0] = BASE + 10*900*NS
+    experimental = StratPaperTrader(
+        tmp_path, live,
+        client=FakeMarketClient([
+            (bid, bid+D("0.02")) for bid in map(D, [
+                "0.64", "0.64", "0.65", "0.66", "0.68"
+            ])
+        ]),
+        clock=lambda: now[0],
+    )
+    assert experimental.status()["paper_exploration_override"] is False
+    experimental.arm("1.00", exploratory_ignore_negative_evidence=True)
+    assert experimental.status()["paper_exploration_override"] is True
+    assert experimental.status()["live_orders_enabled"] is False
+    for i in range(5):
+        now[0] = BASE + 10*900*NS + i*NS
+        experimental.tick(now[0])
+    position = experimental.ledger.open_position()
+    assert position is not None and position["side"] == "UP"
+    assert experimental.status()["last_signal"] == "PAPER_BOUGHT_UP_FAST_MOMENTUM"
+    assert experimental.status()["entry_evidence"]["sides"]["UP"]["entry_veto"] is True
+    experimental.pause()
+    assert experimental.status()["paper_exploration_override"] is False
+    experimental.close()
+
+    restart = StratPaperTrader(
+        tmp_path, live, client=FakeMarketClient([]), clock=lambda: now[0],
+    )
+    assert restart.status()["paper_exploration_override"] is False
+    assert restart.status()["enabled"] is False
+    assert restart.ledger.open_position() is not None
+    restart.close()
+
+
+def test_paper_exploration_override_requires_actual_bool(tmp_path):
+    import pytest
+    trader = StratPaperTrader(tmp_path, lambda: {}, client=FakeMarketClient([]))
+    for invalid in ("yes", "true", 1, None, [], {}):
+        with pytest.raises(ValueError):
+            trader.arm("1.00", exploratory_ignore_negative_evidence=invalid)
+    assert trader.status()["paper_exploration_override"] is False
+    trader.close()
+
+
+def test_paper_exploration_keeps_original_time_and_price_rules(tmp_path):
+    now = [BASE]
+    close = BASE + 600*NS
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0]
+            }
+        }
+    # Same prices as user's no-trade screenshot: neither ask qualifies.
+    trader = StratPaperTrader(
+        tmp_path, live,
+        client=FakeMarketClient([(D("0.54"), D("0.56"))] * 5),
+        clock=lambda: now[0],
+    )
+    trader.arm("1.00", exploratory_ignore_negative_evidence=True)
+    for i in range(5):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is None
+    assert trader.status()["entry_block_reason"] == "BOTH_SIDE_ASKS_OUTSIDE_65_85"
+    close = BASE + 60*NS
+    assert trader.status()["entry_block_reason"] == "OUTSIDE_2_MINUTE_BUY_WINDOW"
+    trader.close()
+
+
+def test_exploratory_checkbox_and_active_state_are_explained():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    html = render_strat_page()
+    assert 'id="paperExplore"' in html
+    assert 'exploratory_ignore_negative_evidence' in html
+    assert "Paper exploration" in html
+    assert "Historical taker evidence" in html
+    assert "No verified profit edge" in html
 
 
 def test_maker_entry_scenario_is_labelled_optimistic_and_unverified(tmp_path):
