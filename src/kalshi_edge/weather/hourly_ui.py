@@ -285,11 +285,23 @@ SCRIPT = r"""<script>
       for(const city of ["chicago","nyc","miami","la-coastal"]){
         const x=feed[city]||{};
         summary.push(city+": "+(x.state||"WAITING")+
+          (Number.isFinite(x.source_market_count)?
+            " · Kalshi open: "+x.source_market_count+
+            " · accepted: "+(x.market_strikes??0):"")+
+          (Array.isArray(x.listed_event_tickers)&&x.listed_event_tickers.length?
+            " · events: "+x.listed_event_tickers.join(", "):"")+
           (x.reason?" ("+x.reason+")":""));
       }
       summary.push("Settlement: "+(outcome.state||"WAITING")+
          (outcome.verified!=null?" · newly matched "+outcome.verified:""));
       put("wx-hourly-health",summary.join(" · "));
+      const selectedHealth=feed[card?.value]||{};
+      if(selectedHealth.state==="NO_ACTIVE_HOURLY_MARKET"){
+         put("wx-hourly-diagnostic",
+           "Market discovery: "+(selectedHealth.reason||"No eligible contract")+
+           " · Kalshi open: "+(selectedHealth.source_market_count??"unknown")+
+           " · matching future events: "+(selectedHealth.future_event_count??"unknown"));
+      }
    }catch(err){
       put("wx-hourly-health","Hourly index health endpoint unavailable.");
       put("wx-hm-state","EVIDENCE API UNAVAILABLE");
