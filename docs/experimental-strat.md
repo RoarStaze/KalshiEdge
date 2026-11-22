@@ -37,7 +37,11 @@ cannot establish a profitable strategy without timestamp-correct evidence.
 While the paper experiment is armed, every validated market poll writes one
 immutable row with simultaneous UP/DOWN executable bids, asks, displayed depth,
 the market and close timestamp, time remaining, held side and the reason for
-each directional signal. The local file is
+each directional signal. The observation timestamp is taken **after the
+market-data HTTP response arrives** and is used for the 2:00 entry gate and
+simulated fill times, rather than the time before the request. This is a client
+receipt timestamp, **not** an exchange-event timestamp; server/network delays
+still limit scalp timing reliability. The local file is
 `data/bootstrap/trading/strat_quote_tape.sqlite3`.
 The quote recorder **continues when the global loss gate blocks entries**, so
 candidate signals can be reviewed without creating additional losses.
