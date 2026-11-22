@@ -166,3 +166,40 @@ def test_settlement_conflict_must_not_be_scored(tmp_path):
     out=asyncio.run(go())
     assert out["verified"]==0
     assert hourly_calibration(tmp_path/"bootstrap",db_path=db)["matched_hours"]==0
+
+
+
+def test_weather_start_runs_hourly_index_not_old_daily_forecast_loops(tmp_path):
+    from kalshi_edge.weather.runtime import WeatherSupervisor
+    db=tmp_path/"weatheredge.sqlite3"
+    async def hourly(path):
+        assert path==db
+        return {"mode":"HOURLY_PAPER_ONLY","cities":{"chicago":{"state":"READY"}}}
+    async def settled(path):
+        assert path==db
+        return {"mode":"HOURLY_PAPER_ONLY","verified":0,"unverified":0}
+    worker=WeatherSupervisor(db,hourly_collect=hourly,
+                              hourly_settle=settled)
+    async def run():
+        await worker.poll_hourly()
+        await worker.poll_hourly_settlements()
+    asyncio.run(run())
+    health=json.loads((db.parent/"collector-status.json").read_text())
+    assert health["hourly"]["chicago"]["state"]=="READY"
+    assert health["hourly_settlement"]["verified"]==0
+    assert health["real_orders_enabled"] is False
+
+
+def test_weather_ui_only_displays_hourly_index_markets():
+    from kalshi_edge.weather.research_ui import render_weather_page
+    for section in ("forecast","train","history","data"):
+        page=render_weather_page(section)
+        assert "Hourly temperature" in page
+        assert "KXTEMPCHIHS" in page
+        assert 'data-market="weather"' in page
+        assert "PAPER ONLY" in page
+        assert "/api/weather/forecast" in page
+        assert "/api/weather/calibration" in page
+        assert "Predicted daily maximum" not in page
+        assert "Daily high · airport" not in page
+        assert "/api/manual-trade/" not in page
