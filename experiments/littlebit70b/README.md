@@ -172,3 +172,18 @@ $py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
 ~~~
 
 Expected total: 84 tests, including three new GPU tests. This new path is not GPU-verified until you run it on your RTX 4050. The demo downloads no pretrained weights.
+
+
+## Gemma 3 27B architecture and checkpoint-key audit
+
+See [GEMMA3_COMPATIBILITY.md](GEMMA3_COMPATIBILITY.md). A new dependency-free static inspector uses the actual Gemma 3 27B model dimensions, seven projection paths per decoder layer and the real Hugging Face Safetensors key prefix. It computes idealized LittleBit text-only memory scenarios and safely differentiates ordinary BF16 checkpoints from checkpoints with Samsung LittleBit packed factor keys. This is not a model runner or a model-quality claim.
+
+~~~powershell
+cd "$HOME\Desktop\KalshiEdge"
+git pull --ff-only origin main
+$py = "$HOME\Desktop\LittleBit-CUDA-venv\Scripts\python.exe"
+& $py experiments\littlebit70b\gemma3_bridge.py
+& $py -m unittest discover -s experiments\littlebit70b\tests -v
+~~~
+
+11 new CPU-only audit tests were added, bringing the expected complete experiment suite to **95 tests**. No large weights or datasets are downloaded.
