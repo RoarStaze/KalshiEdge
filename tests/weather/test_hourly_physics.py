@@ -265,3 +265,25 @@ def test_obsolete_configuration_is_not_displayed_after_new_effective_version(tmp
            old["version"],old["config_sha256"],68,"a"*64,"{}",
            "AWC_ICAO_AIRPORT_PROXY_NOT_HF_SENSOR_LOCATION"))
     assert read_hourly_physics(conn,"chicago",TARGET,NOW)["status"]=="NO_PHYSICAL_GUIDANCE"
+
+
+def test_default_grib_decoder_receives_embedded_issue_and_valid_times(monkeypatch):
+    from kalshi_edge.weather import hourly_physics
+    run=NOW.replace(minute=0)-timedelta(hours=1)
+    calls=[]
+    async def get_field(client,url):
+        return b"GRIBtest"
+    def decode(message,coords,*,expected_run=None,expected_valid_at=None):
+        calls.append((expected_run,expected_valid_at))
+        assert message==b"GRIBtest"
+        return {"KMDW1M":290.}
+    monkeypatch.setattr(hourly_physics,"fetch_grib_temperature",get_field)
+    monkeypatch.setattr(hourly_physics,"decode_station_temperatures",decode)
+    async def get():
+        async with httpx.AsyncClient() as client:
+            return await hourly_physics._default_grib_fetch(
+                client,"HRRR",run,2,{"KMDW1M":(41.79,-87.75)})
+    values,digest=asyncio.run(get())
+    assert calls==[(run,run+timedelta(hours=2))]
+    assert values["KMDW1M"]==290.
+    assert digest==hashlib.sha256(b"GRIBtest").hexdigest()
