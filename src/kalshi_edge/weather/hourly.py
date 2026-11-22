@@ -441,6 +441,8 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
         "pre_physical_mean_f":None,"pre_physical_sigma_f":None,
         "physical_adaptive_status":"WAITING_FOR_MATCHED_EVIDENCE",
         "physical_adaptive_paired_hours":0,
+        "physical_adaptive_scored_hours":0,
+        "physical_adaptive_research_scores":None,
         "physical_adaptive_lockbox_hours":0,
         "physical_adaptive_market_hours":0,
         "physical_adaptive_metrics":None,
@@ -523,6 +525,8 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
         conn,city,last[4],target,asof,result["physical_ensemble"])
     result["physical_adaptive_status"]=physical["status"]
     result["physical_adaptive_paired_hours"]=physical.get("paired_hours",0)
+    result["physical_adaptive_scored_hours"]=physical.get("scored_hours",0)
+    result["physical_adaptive_research_scores"]=physical.get("research_scores")
     result["physical_adaptive_lockbox_hours"]=physical.get("lockbox_hours",0)
     result["physical_adaptive_market_hours"]=physical.get("market_verified_hours",0)
     result["physical_adaptive_metrics"]=physical.get("metrics")
