@@ -188,3 +188,43 @@ def test_no_exact_index_observation_is_never_fabricated_as_label():
     assert cases[0]["observed_f"]==60.0
     conn.execute("UPDATE weather_hourly_physical_pairs SET forecast_json='{}'")
     assert collect_cases(conn,"chicago",CONFIG,30,START+timedelta(minutes=15))==[]
+
+
+def test_live_read_path_rejects_tampered_locked_candidate():
+    from kalshi_edge.weather.hourly_physical_learning import physical_live_decision
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    _init(conn)
+    asof=START-timedelta(minutes=30)
+    conn.execute("""INSERT INTO weather_hourly_physical_locks
+         (city,config_version,lead_minutes,locked_at,params_json,params_sha)
+         VALUES(?,?,?,?,?,?)""",
+         ("chicago",CONFIG,30,(asof-timedelta(days=1)).isoformat(),
+          json.dumps({"candidate_ready":True}),"0"*64))
+    actual={"status":"RESEARCH_ONLY_NOT_PROMOTED","calibration_version":CONFIG,
+            "hrrr_index_f":55.,"nbm_index_f":57.}
+    result=physical_live_decision(conn,"chicago",CONFIG,START,asof,actual)
+    assert result["status"]=="TAMPERED_PHYSICAL_MODEL_LOCK"
+    assert result["enabled"] is False
+
+
+def test_hourly_weather_ui_exposes_prospective_evidence_without_promising_accuracy():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("forecast","")
+    assert "Physical ensemble validation" in html
+    assert "Paired hourly forecast evidence" in html
+    assert "Prospective lockbox hours" in html
+    assert "Settlement-verified lockbox hours" in html
+    assert "physical_adaptive_status" in html
+    assert "not a profit guarantee" in html
+
+
+def test_locked_coefficients_and_forecasts_do_not_enable_real_weather_orders():
+    from kalshi_edge.weather.hourly import _forecast
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    _init(conn)
+    result=_forecast(conn,"chicago",START-timedelta(minutes=30))
+    assert result["physical_adaptive_status"]=="WAITING_FOR_MATCHED_EVIDENCE"
+    assert result["real_orders_enabled"] is False
+    assert result["calibration_certified"] is False
