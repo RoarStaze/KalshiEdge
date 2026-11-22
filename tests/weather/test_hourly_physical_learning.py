@@ -254,3 +254,26 @@ def test_physical_training_target_is_next_index_hour_even_if_market_lists_later_
     physical=_forecast(conn,"chicago",now,force_next_index_hour=True)
     assert normal["target_utc"]==far.isoformat()
     assert physical["target_utc"]==START.isoformat()
+
+
+def test_even_validly_hashed_invalid_locked_weights_cannot_promote():
+    from kalshi_edge.weather.hourly_physical_learning import (
+        physical_live_decision, _sha)
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    _init(conn)
+    now=START-timedelta(minutes=30)
+    invalid={"city":"chicago","config_version":CONFIG,"lead_minutes":30,
+             "locked_at":(now-timedelta(days=1)).isoformat(),
+             "candidate_ready":True,"train_hours":64,"validation_hours":24,
+             "weights":[2.,-1.,0.],"bias_f":0.,"sigma_scale":-1.}
+    raw=json.dumps(invalid,sort_keys=True)
+    conn.execute("""INSERT INTO weather_hourly_physical_locks
+       (city,config_version,lead_minutes,locked_at,params_json,params_sha)
+       VALUES(?,?,?,?,?,?)""",
+       ("chicago",CONFIG,30,invalid["locked_at"],raw,_sha(raw)))
+    guidance={"status":"RESEARCH_ONLY_NOT_PROMOTED","calibration_version":CONFIG,
+              "hrrr_index_f":58.,"nbm_index_f":59.}
+    result=physical_live_decision(conn,"chicago",CONFIG,START,now,guidance)
+    assert result["enabled"] is False
+    assert result["status"]=="INVALID_PHYSICAL_MODEL_LOCK"
