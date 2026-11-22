@@ -390,7 +390,24 @@ def main(argv: list[str] | None = None) -> int:
     preview = sub.add_parser("test", help="open a standalone synthetic, read-only test website (never touches live training)")
     preview.add_argument("--no-browser", action="store_true", help="print the preview URL without opening a tab")
     preview.add_argument("--port", type=int, default=8900, help="preview-only TCP port (default 8900)")
+    storage = sub.add_parser("storage", help="audit local disk use or explicitly prune Python caches")
+    storage.add_argument("mode", nargs="?", choices=("scan", "clean"), default="scan")
+    storage.add_argument("--top", type=int, default=15, help="largest files to display")
+    storage.add_argument("--root", type=Path, default=None, help="project root (default: this installation)")
+    storage.add_argument("--json", action="store_true", help="print a JSON report")
+    storage.add_argument("--apply", action="store_true", help="delete caches (clean only)")
     args = parser.parse_args(argv)
+
+    if args.command == "storage":
+        from .storage_maintenance import main as storage_main
+        storage_args = [args.mode, "--top", str(args.top)]
+        if args.root is not None:
+            storage_args.extend(("--root", str(args.root)))
+        if args.json:
+            storage_args.append("--json")
+        if args.apply:
+            storage_args.append("--apply")
+        return storage_main(storage_args)
 
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
