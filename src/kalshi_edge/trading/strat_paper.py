@@ -289,6 +289,11 @@ class StratPaperTrader:
                             "an unfilled or illiquid exit can remain open."),
             }
 
+    def replay_audit(self) -> dict:
+        """Read-only, on-demand audit of historical FUTURE executable quotes."""
+        from .strat_replay import analyze_causal_markouts
+        return analyze_causal_markouts(self.tape.path)
+
     def arm(self, amount: str) -> dict:
         with self._lock:
             try:
