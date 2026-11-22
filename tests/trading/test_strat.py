@@ -249,3 +249,79 @@ def test_down_official_settlement_and_single_inventory(tmp_path):
     assert D(result["paper_net_pnl"]) == D(result["quantity"]) - D(result["total_paid"])
     assert trader.ledger.open_position() is None
     trader.close()
+
+
+
+def test_one_inventory_can_switch_from_up_to_down_after_prior_exit(tmp_path):
+    """Alternating momentum is allowed, simultaneous UP and DOWN is not."""
+    up = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    down = list(map(D, [
+        "0.64", "0.64", "0.64", "0.64", "0.64",
+        "0.64", "0.64", "0.64", "0.64", "0.64",
+        "0.64", "0.64", "0.64", "0.65", "0.66", "0.68",
+    ]))
+    prices = [("UP", value) for value in up] + [
+        ("DOWN", value) for value in down
+    ]
+
+    class Feed:
+        def __init__(self):
+            self.records = iter(prices)
+
+        def quote(self, ticker):
+            side, bid = next(self.records)
+            ask = bid + D("0.02")
+            if side == "UP":
+                yes_bid, no_bid = bid, D("1") - ask
+            else:
+                yes_bid, no_bid = D("1") - ask, bid
+            return {"market": {"ticker": ticker, "status": "open"}}, {
+                "orderbook_fp": {
+                    "yes_dollars": [[str(yes_bid), "100"]],
+                    "no_dollars": [[str(no_bid), "100"]],
+                }
+            }
+
+        def close(self):
+            pass
+
+    now = [BASE]
+    close = BASE + 600 * NS
+
+    def live():
+        return {
+            "market_ticker": TICKER,
+            "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    trader = StratPaperTrader(tmp_path, live, client=Feed(), clock=lambda: now[0])
+    trader.arm("1.00")
+    for index in range(len(prices)):
+        now[0] = BASE + index * NS
+        trader.tick(now[0])
+        assert len([r for r in trader.ledger.recent()
+                    if r["status"] == "OPEN"]) <= 1
+    history = trader.ledger.recent()
+    assert len(history) == 2
+    assert history[0]["side"] == "DOWN" and history[0]["status"] == "OPEN"
+    assert history[1]["side"] == "UP" and history[1]["status"] == "CLOSED"
+    assert history[0]["entered_at_ns"] > history[1]["exit_ns"]
+    trader.close()
+
+
+def test_strat_page_shows_both_sides_and_two_minute_buy_gate():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    html = render_strat_page()
+    assert "UP / DOWN Momentum" in html
+    assert "Executable DOWN ask" in html
+    assert 'id="downSpeed"' in html
+    assert "≥ 2:00" in html
+    assert "sec>=120" in html
+    assert 'r.side,r.status' in html
+    assert "≥ 7:00" not in html
