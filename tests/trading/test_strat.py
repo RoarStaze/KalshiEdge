@@ -325,3 +325,99 @@ def test_strat_page_shows_both_sides_and_two_minute_buy_gate():
     assert "sec>=120" in html
     assert 'r.side,r.status' in html
     assert "≥ 7:00" not in html
+
+
+
+def test_entry_rejects_last_snapshot_stall_after_earlier_burst():
+    """An old burst must not be treated as an active new impulse."""
+    stalled = quotes(list(map(D, [
+        "0.64", "0.64", "0.65", "0.68", "0.68"
+    ])))
+    for side in ("UP", "DOWN"):
+        signal = evaluate_side_momentum(
+            stalled, 500, side=side, holding=False
+        )
+        assert signal.action == "WAIT"
+        assert signal.reason == "LATEST_TICK_NOT_RISING"
+
+
+def test_exit_on_immediate_deceleration_without_2_second_average_lag():
+    """The newest bid stall should trigger before the whole window reverses."""
+    stall = quotes(list(map(D, [
+        "0.64", "0.64", "0.65", "0.68", "0.68"
+    ])))
+    for side in ("UP", "DOWN"):
+        signal = evaluate_side_momentum(stall, 90, side=side, holding=True)
+        assert signal.action == "SELL"
+        assert signal.reason == f"{side}_LATEST_BID_STALLED"
+
+
+def test_fee_model_has_no_unsupported_extra_one_cent_per_leg():
+    from kalshi_edge.trading.strat_paper import standard_taker_fee_estimate
+    from kalshi_edge.trading.risk import taker_fee_reserve
+    price, count = D("0.66"), D("1.45")
+    cost = price * count
+    raw = D("0.07") * price * (D("1") - price) * count
+    expected = (cost + raw).quantize(D("0.0001"), rounding="ROUND_CEILING") - cost
+    actual = standard_taker_fee_estimate(price, count)
+    assert actual == expected
+    assert actual < taker_fee_reserve(price, count)
+    assert standard_taker_fee_estimate(D("0.70"), D("0")) == D("0")
+
+
+def test_same_market_three_losses_block_fourth_entry(tmp_path):
+    import sqlite3
+    now = [BASE]
+    close = BASE + 700 * NS
+    bids = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    # Repeat enough price bursts with cooldown to trigger another entry.
+    stream = []
+    for _ in range(4):
+        stream.extend((bid, bid + D("0.02")) for bid in bids)
+        stream.extend((D("0.64"), D("0.66")) for _ in range(8))
+
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+
+    class Feed:
+        def __init__(self):
+            self.rows = iter(stream)
+        def quote(self, ticker):
+            bid, ask = next(self.rows)
+            return {"market": {"ticker": ticker, "status": "active"}}, {
+                "orderbook_fp": {
+                    "yes_dollars": [[str(bid), "100"]],
+                    "no_dollars": [[str(D("1") - ask), "100"]],
+                }
+            }
+        def close(self):
+            pass
+
+    trader = StratPaperTrader(tmp_path, live, client=Feed(), clock=lambda: now[0])
+    trader.arm("1.00")
+    for i in range(len(stream)):
+        now[0] = BASE + i * NS
+        trader.tick(now[0])
+    history = trader.ledger.recent()
+    assert len(history) == 3
+    assert all(r["status"] == "CLOSED" and D(r["paper_net_pnl"]) < 0
+               for r in history)
+    assert trader.status()["market_loss_streak"] == 3
+    assert trader.status()["last_signal"] == "THREE_SAME_MARKET_PAPER_LOSSES"
+    trader.close()
+
+
+def test_strat_dashboard_shows_fee_and_price_components():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    page = render_strat_page()
+    assert "Fee estimate" in page
+    assert "Gross price P&amp;L" in page
+    assert "Break-even move" in page

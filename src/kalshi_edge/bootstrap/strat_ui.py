@@ -78,6 +78,7 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="kv"><span>Market</span><span id="ticker">Waiting for feed</span></div>
 <div class="kv"><span>Executable UP ask</span><strong id="upAsk">—</strong></div>
 <div class="kv"><span>Executable DOWN ask</span><strong id="downAsk">—</strong></div>
+<div class="kv"><span>Break-even move (UP / DOWN)</span><strong id="breakEven">—</strong></div>
 <div class="kv"><span>Entry window</span><span id="window">—</span></div>
 <div class="kv"><span>Sample count</span><span id="samples">0 / 5</span></div>
 </section>
@@ -100,6 +101,7 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <p class="status" id="feedback" role="status">Arming is required after each restart. Existing simulated holdings remain monitored when paused.</p>
 <div class="kv"><span>Simulated P&amp;L</span><strong id="pnl">—</strong></div>
 <div class="kv"><span>Virtual cash</span><span id="cash">—</span></div>
+<div class="kv"><span>Loss streak this market</span><strong id="lossStreak">0 / 3</strong></div>
 </section>
 <section class="card span"><h2>Exactly four strategy rules</h2><div class="rules">
 <div class="rule"><small>BUY TIME</small><strong>≥ 2:00</strong><small>Never open a new UP or DOWN position below two minutes remaining.</small></div>
@@ -108,9 +110,9 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="rule"><small>SELL TRIGGER</small><strong>Side speed ↓</strong><small>Held-side bid momentum slows or reverses. Exits continue below 2:00.</small></div>
 </div></section>
 <section class="card span"><h2>Experimental round trips · persistent local ledger</h2>
-<div class="scroll"><table><thead><tr><th>Market</th><th>Side</th><th>State</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Net hypothetical P&amp;L</th></tr></thead>
-<tbody id="rounds"><tr><td colspan="7">No simulated rounds yet</td></tr></tbody></table></div>
-<p class="sub">Simulated entry/exit includes one cent slippage on each leg and fee estimates. Paper fills are not evidence of fillability or profitability.</p>
+<div class="scroll"><table><thead><tr><th>Market</th><th>Side</th><th>State</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Gross price P&amp;L</th><th>Fee estimate</th><th>Net hypothetical P&amp;L</th></tr></thead>
+<tbody id="rounds"><tr><td colspan="9">No simulated rounds yet</td></tr></tbody></table></div>
+<p class="sub">Paper prices include 1¢ slippage per leg; fee estimates use Kalshi’s standard taker schedule rather than the conservative order-reserve buffer. Gross price P&amp;L already includes price slippage. Fee assumptions and simulated fills are not verified executions. Historical rows retain their original fee assumptions.</p>
 </section></div></main>
 <script>
 "use strict";
@@ -132,6 +134,7 @@ async function refresh(){
   set("upSpeed",s.side_momentum?.UP==null?"—":Number(s.side_momentum.UP.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("downSpeed",s.side_momentum?.DOWN==null?"—":Number(s.side_momentum.DOWN.speed_cents_per_second).toFixed(2)+" ¢/s");
   set("pnl",money(s.paper_net_pnl_dollars));set("cash",money(s.virtual_cash_dollars));
+  set("lossStreak",(s.market_loss_streak??0)+" / "+(s.max_same_market_loss_streak??3));
   set("held",s.open_position?"LONG "+s.open_position.side+" · "+s.open_position.quantity+" shares":"FLAT");
   const ticker=l.market_ticker||s.market_ticker;set("ticker",ticker||"Waiting");
   const sec=Number(l.seconds_remaining);const valid=Number.isFinite(sec)&&sec>0;
@@ -139,13 +142,21 @@ async function refresh(){
   set("window",valid?(sec>=120?"2-minute window open":"NEW BUYS CLOSED"):"WAIT");
   const b=s.round_trips||[];set("cycles",b.filter(r=>r.ticker===ticker).length);
   const tb=el("rounds");tb.replaceChildren();
-  if(!b.length){row(tb,["No simulated rounds yet","","","","","",""]);}else{
-   b.forEach(r=>row(tb,[r.ticker,r.side,r.status,Number(r.entry_price)*100+"¢",
-     r.exit_price==null?"—":Number(r.exit_price)*100+"¢",
-     r.quantity,r.paper_net_pnl==null?"OPEN":money(r.paper_net_pnl)]))}
+  if(!b.length){row(tb,["No simulated rounds yet","","","","","","","",""]);}else{
+   b.forEach(r=>{
+     const gross=r.exit_price==null?null:
+       (Number(r.exit_price)-Number(r.entry_price))*Number(r.quantity);
+     const fees=r.exit_fee==null?null:Number(r.entry_fee)+Number(r.exit_fee);
+     row(tb,[r.ticker,r.side,r.status,Number(r.entry_price)*100+"¢",
+       r.exit_price==null?"—":Number(r.exit_price)*100+"¢",
+       r.quantity,gross==null?"OPEN":money(gross),
+       fees==null?"OPEN":money(fees),
+       r.paper_net_pnl==null?"OPEN":money(r.paper_net_pnl)])})}
   el("arm").disabled=s.enabled;el("pause").disabled=!s.enabled;
   set("upAsk",s.up_ask_cents==null?"—":s.up_ask_cents+"¢");
   set("downAsk",s.down_ask_cents==null?"—":s.down_ask_cents+"¢");
+  set("breakEven",s.break_even_up_cents==null||s.break_even_down_cents==null?"—":
+    s.break_even_up_cents+"¢ / "+s.break_even_down_cents+"¢");
  }catch(e){set("feedback","Status unavailable: "+e.message)}
 }
 async function action(kind){

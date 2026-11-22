@@ -57,7 +57,8 @@ def evaluate_side_momentum(
 
     Use independently sampled bid/ask series for UP and DOWN, not
     the inverse of a BTC-spot move or the inverse of the opposite bid.
-    Entry evaluates a 5-sample causal window. Exit can occur after 7m.
+    Entry evaluates a 5-sample causal window, including an advancing
+    latest tick. Exit can occur after the 2-minute entry cutoff.
     """
     idle = lambda reason, speed=0., ratio=None: MomentumResult(
         "HOLD" if holding else "WAIT", reason, speed, ratio)
@@ -89,6 +90,12 @@ def evaluate_side_momentum(
             return MomentumResult("SELL", "MOMENTUM_SLOWED_LATCHED", speed, ratio)
         if recent < 0:
             return MomentumResult("SELL", f"{side}_BID_REVERSAL", speed, ratio)
+        # The last tick is the earliest available sign of slowdown; comparing
+        # only 2-second averages can miss a peak and sell after a reversal.
+        previous_tick = window[-2].bid - window[-3].bid
+        latest_tick = last.bid - window[-2].bid
+        if previous_tick > 0 and latest_tick <= previous_tick * D("0.5"):
+            return MomentumResult("SELL", f"{side}_LATEST_BID_STALLED", speed, ratio)
         if prior > 0 and recent <= prior * D("0.25"):
             return MomentumResult("SELL", f"{side}_MOMENTUM_DECELERATED", speed, ratio)
         return idle(f"{side}_MOMENTUM_ACTIVE", speed, ratio)
@@ -98,6 +105,10 @@ def evaluate_side_momentum(
         return idle(f"{side}_ASK_OUTSIDE_65_85", speed, ratio)
     if last.ask - last.bid > MAX_SPREAD:
         return idle("SPREAD_TOO_WIDE", speed, ratio)
+    # An earlier burst may still lift the 2s average while the latest
+    # orderbook is already flat. Never chase that exhausted impulse.
+    if not (last.bid > window[-2].bid and last.ask > window[-2].ask):
+        return idle("LATEST_TICK_NOT_RISING", speed, ratio)
     if recent * now_dt < MIN_BURST or ask_recent * now_dt < MIN_BURST:
         return idle(f"NO_FAST_{side}_BURST", speed, ratio)
     rising = a.bid <= mid.bid < last.bid and a.ask <= mid.ask < last.ask
