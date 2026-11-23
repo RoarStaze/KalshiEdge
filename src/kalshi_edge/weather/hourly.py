@@ -27,6 +27,7 @@ from .hourly_learning import learning_decision, apply_correction
 from .hourly_nowcast import (LEAD_MINUTES, index_nowcast_decision,
                              nowcast_prediction)
 from .hourly_physics import read_hourly_physics
+from .hourly_quotes import read_latest_quote
 from .hourly_physical_learning import (
     physical_live_decision, apply_locked_blend,
 )
@@ -703,13 +704,26 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
             close_at = m.get("close_time_utc")
             if close_at and datetime.fromisoformat(close_at) <= asof:
                 continue
+            # Quote is independent evidence from the individual public
+            # market endpoint. Never treat historical last trade or unvalidated
+            # model chance as a currently purchasable asking price.
+            quote=read_latest_quote(conn,city=city,event=event,ticker=ticker,
+                                   threshold_f=threshold,asof=asof)
+            if quote["status"]=="CLOSED":
+                continue
             probability=max(0.,min(1.,1-normal_cdf(threshold,mean,sigma)))
         except (ValueError,TypeError,KeyError,json.JSONDecodeError):
             continue
         strikes.append({"ticker":ticker,"threshold_f":threshold,
                         "probability_yes":round(probability,6),
-                        "close_time_utc":m.get("close_time_utc"),
-                        "market_metadata_received_at":receipt})
+                        "close_time_utc":quote.get("close_time_utc") or m.get("close_time_utc"),
+                        "market_metadata_received_at":receipt,
+                        "quote_status":quote["status"],
+                        "quote_received_at":quote.get("quote_received_at"),
+                        "yes_ask_dollars":quote["yes_ask_dollars"],
+                        "no_ask_dollars":quote["no_ask_dollars"],
+                        "yes_ask_size_fp":quote["yes_ask_size_fp"],
+                        "no_ask_size_fp":quote["no_ask_size_fp"]})
     if not strikes:
         result["status"]="NO_VERIFIED_HOURLY_MARKETS"
         return result
