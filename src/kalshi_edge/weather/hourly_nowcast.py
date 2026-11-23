@@ -14,6 +14,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from .predictor import normal_cdf
+from .hourly_adaptive import fit_adaptive, predict_adaptive, validate_adaptive
+
+ADAPTIVE_MODEL = "OBSERVATION_ADAPTIVE_V3"
 
 LEAD_MINUTES = (5, 15, 30, 45, 60)
 MIN_TRAIN = 48
@@ -176,7 +179,14 @@ def _cases_from_points(points: list[tuple], asof: datetime,
     return candidates
 
 
-def _estimate(row: dict, model: str) -> float:
+def _estimate(row: dict, model: str, params: dict | None = None) -> float:
+    if model==ADAPTIVE_MODEL:
+        if not validate_adaptive(params):
+            raise ValueError("INVALID_ADAPTIVE_NOWCAST_PARAMETERS")
+        return predict_adaptive(
+            row["current_index_f"],row["baseline_sigma_f"],
+            row["fast_slope"],row["slow_slope"],row["hours_ahead"],
+            params)[0]
     fast,slow=MODELS[model]
     return row["current_index_f"]+row["hours_ahead"]*(
         fast*row["fast_slope"]+slow*row["slow_slope"])
@@ -191,11 +201,12 @@ def _crps(mean: float, sigma: float, actual: float) -> float:
                   2*phi-1/math.sqrt(math.pi))
 
 
-def _score(cases: list[dict], model: str | None, scale: float) -> dict:
+def _score(cases: list[dict], model: str | None, scale: float,
+           params: dict | None = None) -> dict:
     total_mae=total_crps=0.
     covered=0
     for row in cases:
-        mean=row["baseline_mean_f"] if model is None else _estimate(row,model)
+        mean=row["baseline_mean_f"] if model is None else _estimate(row,model,params)
         sigma=max(.05,row["baseline_sigma_f"]*scale)
         actual=row["observed_index_f"]
         total_mae+=abs(actual-mean)
@@ -218,7 +229,7 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
     count=len(ordered)
     base={"enabled":False,"status":"INSUFFICIENT_INDEX_HOURS",
           "history_hours":count,"training_hours":0,"validation_hours":0,
-          "model":None,"sigma_scale":1.,"validation":None}
+          "model":None,"sigma_scale":1.,"parameters":None,"validation":None}
     if count<MIN_TRAIN+HOLDOUT:
         return base
     train=ordered[:-HOLDOUT]
@@ -227,12 +238,22 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
     for name in MODELS:
         scale=_train_scale(train,name)
         scores=_score(train,name,scale)
-        alternatives.append((scores["crps"],scores["mae_f"],name,scale))
-    _,_,name,scale=min(alternatives)
+        alternatives.append((scores["crps"],scores["mae_f"],name,scale,None))
+    # Regularized regression is a *candidate* alongside static trends.
+    # All coefficients and sigma are fitted on older hours ONLY.
+    try:
+        params=fit_adaptive(train)
+        if validate_adaptive(params):
+            score=_score(train,ADAPTIVE_MODEL,params["sigma_scale"],params)
+            alternatives.append((score["crps"],score["mae_f"],
+                                 ADAPTIVE_MODEL,params["sigma_scale"],params))
+    except (ValueError,TypeError,OverflowError,ZeroDivisionError):
+        pass
+    _,_,name,scale,params=min(alternatives,key=lambda r:(r[0],r[1],r[2]))
     baseline=_score(valid,None,1.)
-    challenger=_score(valid,name,scale)
+    challenger=_score(valid,name,scale,params)
     base.update({"training_hours":len(train),"validation_hours":len(valid),
-                 "model":name,"sigma_scale":scale,
+                 "model":name,"sigma_scale":scale,"parameters":params,
                  "validation":{
                    "baseline_mae_f":baseline["mae_f"],
                    "candidate_mae_f":challenger["mae_f"],
@@ -257,6 +278,10 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
                        hours_ahead: float, decision: dict) -> tuple[float,float]:
     if not decision.get("enabled"):
         return current_f,baseline_sigma_f
+    if decision.get("model")==ADAPTIVE_MODEL:
+        return predict_adaptive(
+            current_f,baseline_sigma_f,fast_slope,slow_slope,hours_ahead,
+            decision.get("parameters"))
     row={"current_index_f":current_f,"fast_slope":fast_slope,
          "slow_slope":slow_slope,"hours_ahead":hours_ahead}
     return _estimate(row,decision["model"]),baseline_sigma_f*decision["sigma_scale"]
