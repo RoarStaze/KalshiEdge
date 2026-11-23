@@ -237,6 +237,62 @@ def parse_markets(data: dict, city: str, event: str,
     return sorted(selected, key=lambda x: x["threshold_f"])
 
 
+async def _open_events_market_fallback(
+    client: httpx.AsyncClient, city: str
+) -> tuple[list[dict], int]:
+    """Second independent official exchange listing, not invented events.
+
+    Kalshi's filtered /markets listing may lag. /events?status=open with
+    nested markets is the documented fallback. Reject mismatched series,
+    event tickers and non-market payloads. Truncated pages are failures,
+    not evidence that the market is absent.
+    """
+    markets: list[dict] = []
+    event_count = 0
+    seen: set[str] = set()
+    cursor = ""
+    for page in range(3):
+        params = {"series_ticker": CITIES[city].series,
+                  "status": "open", "with_nested_markets": "true",
+                  "limit": 50}
+        if cursor:
+            params["cursor"] = cursor
+        reply = await client.get(f"{API}/events", params=params)
+        reply.raise_for_status()
+        if len(reply.content) > MAX_SIZE:
+            raise ValueError("OVERSIZED_HOURLY_EVENTS_RESPONSE")
+        payload = reply.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
+            raise ValueError("INVALID_HOURLY_EVENTS_RESPONSE")
+        for item in payload["events"]:
+            if not isinstance(item, dict):
+                continue
+            event_name = item.get("event_ticker")
+            if (item.get("series_ticker") != CITIES[city].series or
+                not isinstance(event_name, str) or
+                listed_event_target(city, event_name) is None):
+                continue
+            event_count += 1
+            nested = item.get("markets")
+            if not isinstance(nested, list):
+                continue
+            for raw in nested:
+                if not isinstance(raw, dict) or raw.get("event_ticker") != event_name:
+                    continue
+                ticker = raw.get("ticker")
+                if not isinstance(ticker, str) or not ticker.startswith(event_name + "-"):
+                    continue
+                if ticker not in seen:
+                    markets.append(raw)
+                    seen.add(ticker)
+        cursor = payload.get("cursor") or ""
+        if not isinstance(cursor, str) or len(cursor) > 2048:
+            raise ValueError("INVALID_HOURLY_EVENT_CURSOR")
+        if not cursor:
+            return markets, event_count
+    raise ValueError("INCOMPLETE_HOURLY_EVENT_LISTING")
+
+
 def _init(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("""CREATE TABLE IF NOT EXISTS weather_hourly_index(
@@ -329,51 +385,127 @@ async def collect_hourly_once(
                 else:
                     raise ValueError("INCOMPLETE_HOURLY_SERIES_LISTING")
 
-                candidates_by_event: dict[str, list[dict]] = {}
-                targets: dict[str, datetime] = {}
-                for raw in listed:
-                    event_name = raw.get("event_ticker")
-                    target_time = listed_event_target(city, event_name)
-                    if (target_time is None or not receipt < target_time <=
-                            receipt + timedelta(hours=3)):
-                        continue
-                    targets[event_name] = target_time
-                    candidates_by_event.setdefault(event_name, []).append(raw)
+                # Find true target hours using the exchange event ticker
+                # (Eastern clock hour). Do not treat future market close_time
+                # as the index target hour.
+                def classify(rows_to_scan: list[dict]):
+                    by_event: dict[str, list[dict]] = {}
+                    times: dict[str, datetime] = {}
+                    count = {"unparseable": 0, "past": 0, "out_of_horizon": 0}
+                    nearest: tuple[str, datetime] | None = None
+                    for raw in rows_to_scan:
+                        event_name = raw.get("event_ticker")
+                        target_time = listed_event_target(city, event_name)
+                        if target_time is None:
+                            count["unparseable"] += 1
+                            continue
+                        if target_time <= receipt:
+                            count["past"] += 1
+                            continue
+                        if target_time > receipt + timedelta(hours=3):
+                            count["out_of_horizon"] += 1
+                            if nearest is None or target_time < nearest[1]:
+                                nearest = (event_name, target_time)
+                            continue
+                        times[event_name] = target_time
+                        by_event.setdefault(event_name, []).append(raw)
+                    return by_event, times, count, nearest
 
+                def choose(by_event: dict[str, list[dict]],
+                           times: dict[str, datetime]):
+                    for candidate in sorted(times, key=lambda key: times[key]):
+                        parsed = parse_markets(
+                            {"markets": by_event[candidate], "cursor": ""},
+                            city, candidate)
+                        # A cached open status can outlive the actual close.
+                        valid = [item for item in parsed
+                                 if item["close_time_utc"] is None or
+                                 datetime.fromisoformat(item["close_time_utc"]) > receipt]
+                        if valid:
+                            return candidate, times[candidate], valid
+                    return None
+
+                grouped, targets, rejected, next_listed = classify(listed)
                 selected: list[dict] = []
                 event, target = event_for(city, receipt)
-                for candidate_event in sorted(targets, key=lambda x: targets[x]):
-                    parsed = parse_markets(
-                        {"markets": candidates_by_event[candidate_event], "cursor": ""},
-                        city, candidate_event)
-                    # Even an API listing cached as 'open' may already be closed.
-                    valid = [item for item in parsed
-                             if item["close_time_utc"] is None or
-                             datetime.fromisoformat(item["close_time_utc"]) > receipt]
-                    if valid:
-                        event = candidate_event
-                        target = targets[event]
-                        selected = valid
-                        break
+                match = choose(grouped, targets)
+                lookup_source = "markets"
+                fallback_state = "NOT_NEEDED"
+                fallback_error = None
+                fallback_market_count = 0
+                fallback_event_count = 0
+
+                if match is None:
+                    # Kalshi documents short-lived cached listing lag;
+                    # independently check the official open-events endpoint
+                    # rather than assuming 10 old markets are tradable now.
+                    try:
+                        additional, fallback_event_count = (
+                            await _open_events_market_fallback(client, city))
+                        fallback_market_count = len(additional)
+                        fallback_state = (
+                            "READY" if additional else
+                            "NO_OPEN_EVENTS" if not fallback_event_count
+                            else "NO_ELIGIBLE_EVENT_MARKETS")
+                        extra_grouped, extra_targets, extra_rejected, extra_next = (
+                            classify(additional))
+                        for name, rows_for_event in extra_grouped.items():
+                            grouped.setdefault(name, []).extend(rows_for_event)
+                        targets.update(extra_targets)
+                        for key in rejected:
+                            rejected[key] += extra_rejected[key]
+                        if extra_next is not None and (
+                            next_listed is None or extra_next[1] < next_listed[1]):
+                            next_listed = extra_next
+                        match = choose(grouped, targets)
+                        if match is not None:
+                            lookup_source = "events_fallback"
+                    except (httpx.HTTPError, ValueError, TypeError,
+                            OverflowError, KeyError, json.JSONDecodeError) as exc:
+                        fallback_state = "UNAVAILABLE"
+                        fallback_error = f"{type(exc).__name__}: {exc}"[:180]
+
+                if match is not None:
+                    event, target, selected = match
+                reason = None
+                reason_code = None
+                if not selected:
+                    if not listed and not fallback_market_count:
+                        reason_code = "NO_OPEN_INDEX_MARKETS"
+                        reason = "Kalshi has no eligible open hourly contracts for this city."
+                    elif targets:
+                        reason_code = "NO_ACCEPTED_CONTRACTS"
+                        reason = ("Kalshi listed an upcoming hourly index event, "
+                                  "but no open contract passed threshold and close-time checks.")
+                    elif next_listed is not None:
+                        reason_code = "LISTED_OUTSIDE_FORECAST_HORIZON"
+                        reason = ("The next listed hourly Kalshi market is beyond "
+                                  "the verified three-hour forecast window.")
+                    else:
+                        reason_code = "NO_FUTURE_INDEX_EVENT"
+                        reason = "No eligible future hourly Kalshi event is currently listed."
 
                 for item in selected:
                     markets.append((
                         item["ticker"], city, event, target.isoformat(),
                         item["threshold_f"], receipt.isoformat(),
                         json.dumps(item, sort_keys=True)))
-                reason = None
-                if not selected:
-                    reason = (
-                        "Kalshi returned no open contracts for this index series"
-                        if not listed else
-                        "Kalshi returned open contracts, but none matched a "
-                        "future HS index event and accepted threshold")
                 results[city] = {
                     "state": "READY" if rows and selected else
                     ("NO_ACTIVE_HOURLY_MARKET" if rows else "NO_INDEX_POINTS"),
                     "index_points": len(rows), "market_strikes": len(selected),
                     "source_market_count": len(listed),
-                    "future_event_count": len(candidates_by_event),
+                    "fallback_market_count": fallback_market_count,
+                    "fallback_event_count": fallback_event_count,
+                    "fallback_state": fallback_state,
+                    "fallback_error": fallback_error,
+                    "lookup_source": lookup_source,
+                    "future_event_count": len(grouped),
+                    "rejected_listings": rejected,
+                    "next_listed_target_utc": (
+                        next_listed[1].isoformat() if next_listed else None),
+                    "next_listed_event_ticker": next_listed[0] if next_listed else None,
+                    "reason_code": reason_code,
                     "listed_event_tickers": list(dict.fromkeys(
                         str(x.get("event_ticker", "")) for x in listed))[:4],
                     "event_ticker": event, "reason": reason,
