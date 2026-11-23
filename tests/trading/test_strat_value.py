@@ -102,7 +102,7 @@ def test_no_trade_if_price_is_fair_expensive_or_fees_erase_edge():
     ({"p_yes":0.1,"p_no":0.9}, "MODEL_DIRECTION_CONFLICT"),
     ({"checkpoint_seconds":240}, "NOT_480_SECOND_FROZEN_CHECKPOINT"),
     ({"prediction_ts_ns":BASE+4*NS}, "CHECKPOINT_TIMESTAMP_MISMATCH"),
-    ({"market_ticker":"KXBTC15M-WRONG"}, "FORECAST_MARKET_MISMATCH"),
+    ({"market_ticker":"KXBTC15M-WRONG"}, "QUOTE_MARKET_MISMATCH"),
 ])
 def test_frozen_forecast_fail_closed(overrides, reason):
     outcome = evaluate_value_entry(final(**overrides), quote(),
