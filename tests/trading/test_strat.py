@@ -84,10 +84,10 @@ class FakeMarketClient:
         self.closed = True
 
 
-def test_paper_cycle_uses_both_legs_and_durable_ledger(tmp_path: Path):
+def test_paper_cycle_sells_only_at_positive_net_slowdown_and_durable_ledger(tmp_path: Path):
     bids = list(map(D, [
         "0.64", "0.64", "0.65", "0.66", "0.68",
-        "0.68", "0.68", "0.68",
+        "0.78", "0.78", "0.78", "0.78",
     ]))
     asks = [bid + D("0.02") for bid in bids]
     now = [BASE]
@@ -115,7 +115,7 @@ def test_paper_cycle_uses_both_legs_and_durable_ledger(tmp_path: Path):
     assert history[0]["status"] == "CLOSED"
     assert history[0]["side"] == "UP"
     assert history[0]["exit_reason"] == "UP_MOMENTUM_SLOWED"
-    assert D(history[0]["paper_net_pnl"]) < 0  # drag is not fabricated away
+    assert D(history[0]["paper_net_pnl"]) > 0  # real after-cost paper profit
     trader.close()
     assert client.closed is True
 
@@ -182,10 +182,10 @@ class FakeDownClient:
         pass
 
 
-def test_bidirectional_trader_paper_buys_and_sells_down(tmp_path):
+def test_bidirectional_trader_paper_takes_positive_net_down_profit(tmp_path):
     values = list(map(D, [
         "0.64", "0.64", "0.65", "0.66", "0.68",
-        "0.68", "0.68", "0.68",
+        "0.78", "0.78", "0.78", "0.78",
     ]))
     client = FakeDownClient([(x, x + D("0.02")) for x in values])
     now = [BASE]
@@ -211,7 +211,7 @@ def test_bidirectional_trader_paper_buys_and_sells_down(tmp_path):
     assert history[0]["status"] == "CLOSED"
     assert history[0]["exit_reason"] == "DOWN_MOMENTUM_SLOWED"
     assert client.calls == len(values)
-    assert D(history[0]["paper_net_pnl"]) < D("0")
+    assert D(history[0]["paper_net_pnl"]) > D("0")
     assert trader.status()["down_ask_cents"] is not None
     assert trader.status()["open_position"] is None
     trader.close()
@@ -256,7 +256,7 @@ def test_one_inventory_can_switch_from_up_to_down_after_prior_exit(tmp_path):
     """Alternating momentum is allowed, simultaneous UP and DOWN is not."""
     up = list(map(D, [
         "0.64", "0.64", "0.65", "0.66", "0.68",
-        "0.68", "0.68", "0.68",
+        "0.78", "0.78", "0.78", "0.78",
     ]))
     down = list(map(D, [
         "0.64", "0.64", "0.64", "0.64", "0.64",
@@ -365,15 +365,15 @@ def test_fee_model_has_no_unsupported_extra_one_cent_per_leg():
     assert standard_taker_fee_estimate(D("0.70"), D("0")) == D("0")
 
 
-def test_same_market_loss_streak_is_informational_and_fourth_paper_cycle_allowed(tmp_path):
+def test_same_market_four_positive_profit_gated_cycles_remain_allowed(tmp_path):
     import sqlite3
     now = [BASE]
     close = BASE + 700 * NS
     bids = list(map(D, [
         "0.64", "0.64", "0.65", "0.66", "0.68",
-        "0.68", "0.68", "0.68",
+        "0.78", "0.78", "0.78", "0.78",
     ]))
-    # Repeat enough price bursts with cooldown to trigger another entry.
+    # Repeat profitable price bursts with cooldown to trigger another entry.
     stream = []
     for _ in range(4):
         stream.extend((bid, bid + D("0.02")) for bid in bids)
@@ -408,9 +408,9 @@ def test_same_market_loss_streak_is_informational_and_fourth_paper_cycle_allowed
         trader.tick(now[0])
     history = trader.ledger.recent()
     assert len(history) == 4
-    assert all(r["status"] == "CLOSED" and D(r["paper_net_pnl"]) < 0
+    assert all(r["status"] == "CLOSED" and D(r["paper_net_pnl"]) > 0
                for r in history)
-    assert trader.status()["market_loss_streak"] == 4
+    assert trader.status()["market_loss_streak"] == 0
     assert trader.status()["entry_block_reason"] is None
     trader.close()
 
@@ -663,7 +663,7 @@ def test_three_consecutive_flat_updates_confirm_slowdown_both_sides():
         assert signal.reason == f"{side}_MOMENTUM_FLAT_CONFIRMED"
 
 
-def test_single_flat_rest_poll_does_not_force_negative_spread_roundtrip(tmp_path):
+def test_single_flat_rest_poll_and_longer_negative_slowdown_hold(tmp_path):
     now = [BASE]
     close = BASE + 600*NS
     bids = list(map(D, [
@@ -695,10 +695,11 @@ def test_single_flat_rest_poll_does_not_force_negative_spread_roundtrip(tmp_path
     for i in range(6, len(bids)):
         now[0] = BASE + i*NS
         trader.tick(now[0])
-    assert trader.ledger.open_position() is None
+    assert trader.ledger.open_position() is not None
     history = trader.ledger.recent()
-    assert history[0]["exit_reason"] == "UP_MOMENTUM_SLOWED"
-    assert history[0]["exit_ns"] > BASE + 5*NS
+    assert history[0]["status"] == "OPEN"
+    assert trader.status()["last_signal"] == "MOMENTUM_SLOWED_BUT_NOT_PROFITABLE"
+    assert D(trader.status()["projected_exit_net_pnl_dollars"]) < 0
     trader.close()
 
 
@@ -1025,3 +1026,149 @@ def test_dashboard_exposes_evidence_gate_and_unverified_maker_comparison():
     assert "Negative historical taker markout" in html
     assert "Maker entry (unverified)" in html
     assert "entry_evidence" in html
+
+
+
+def test_slowdown_exit_requires_positive_net_after_fees_and_slippage(tmp_path):
+    now = [BASE]
+    close = BASE + 600*NS
+    # Entry after bid 0.68, then flat at 0.72: still negative after full
+    # round trip. At 0.78, a new confirmed slowdown can exit profitably.
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.72", "0.72", "0.72", "0.72",
+        "0.76", "0.78", "0.78", "0.78", "0.78",
+    ]))
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0]
+            }
+        }
+    trader = StratPaperTrader(
+        tmp_path, live,
+        client=FakeMarketClient([(x, x+D("0.02")) for x in values]),
+        clock=lambda: now[0],
+    )
+    trader.arm("1.00")
+    for i in range(9):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is not None
+    assert trader.status()["last_signal"] == "MOMENTUM_SLOWED_BUT_NOT_PROFITABLE"
+    assert D(trader.status()["projected_exit_net_pnl_dollars"]) < 0
+    for i in range(9, len(values)):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    closed = trader.ledger.recent()[0]
+    assert closed["status"] == "CLOSED"
+    assert closed["side"] == "UP"
+    assert closed["exit_reason"] == "UP_MOMENTUM_SLOWED_PROFIT"
+    assert D(closed["paper_net_pnl"]) > 0
+    assert trader.status()["open_position"] is None
+    trader.close()
+
+
+def test_unprofitable_up_slowdown_stays_open_and_can_lose_at_verified_settlement(tmp_path):
+    now = [BASE]
+    close = BASE + 600*NS
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0]
+            }
+        }
+    trader = StratPaperTrader(
+        tmp_path, live,
+        client=FakeMarketClient([(x, x+D("0.02")) for x in values]),
+        clock=lambda: now[0],
+        settlement_reader=lambda ticker: "no",
+    )
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is not None
+    assert trader.status()["last_signal"] == "MOMENTUM_SLOWED_BUT_NOT_PROFITABLE"
+    assert trader.status()["projected_exit_net_pnl_dollars"].startswith("-")
+    now[0] = close+NS
+    trader.tick(now[0])
+    row = trader.ledger.recent()[0]
+    assert row["status"] == "SETTLED"
+    assert row["exit_reason"] == "OFFICIAL_SETTLEMENT"
+    assert D(row["paper_net_pnl"]) == -D(row["total_paid"])
+    assert trader.ledger.open_position() is None
+    trader.close()
+
+
+def test_down_slowdown_never_closes_at_loss(tmp_path):
+    now = [BASE]
+    close = BASE+600*NS
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.68", "0.68", "0.68",
+    ]))
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0]
+            }
+        }
+    client = FakeDownClient([(x,x+D("0.02")) for x in values])
+    trader = StratPaperTrader(tmp_path, live, client=client, clock=lambda: now[0])
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is not None
+    assert trader.status()["last_signal"] == "MOMENTUM_SLOWED_BUT_NOT_PROFITABLE"
+    assert D(trader.status()["projected_exit_net_pnl_dollars"]) < 0
+    trader.close()
+
+
+def test_profit_gate_uses_execution_depth_and_momentum_not_price_alone(tmp_path):
+    now = [BASE]
+    close = BASE+600*NS
+    # Profitable bid appears while still increasing; sell only after slowdown.
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68",
+        "0.78", "0.80", "0.82",
+    ]))
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0]
+            }
+        }
+    trader = StratPaperTrader(
+        tmp_path, live, client=FakeMarketClient([
+            (x,x+D("0.02")) for x in values
+        ]), clock=lambda: now[0],
+    )
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert trader.ledger.open_position() is not None
+    assert D(trader.status()["projected_exit_net_pnl_dollars"]) > 0
+    assert trader.status()["last_signal"] in ("UP_MOMENTUM_ACTIVE", "UP_LATEST_RISE_SLOWED")
+    # Still no SELL because profitable price alone isn't slowdown.
+    assert trader.ledger.recent()[0]["status"] == "OPEN"
+    trader.close()
+
+
+def test_profit_only_slowdown_rule_visible_on_strat_page():
+    from kalshi_edge.bootstrap.strat_ui import render_strat_page
+    page = render_strat_page()
+    assert "Positive net P&amp;L" in page
+    assert 'id="projectedExitPnl"' in page
+    assert "profit only" in page.lower()
+    assert "settlement" in page.lower()
