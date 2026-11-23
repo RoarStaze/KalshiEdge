@@ -218,8 +218,8 @@ def test_daily_risk_limit_and_bankroll_stop_repeated_losses(tmp_path):
     trader=ValuePaperTrader(tmp_path,lambda:live(now[0]),
                             client=Feed(),clock=lambda:now[0])
     trader.arm("1.00")
-    for i in range(3):
-        t=BASE-(90-i)*NS
+    for i in range(4):
+        t=BASE
         trader.ledger.insert(ticker=f"KXBTC15M-LOSS{i}",
             side="UP",quantity=D("1"),price=D("0.65"),fee=D("0.01"),
             paid=D("0.66"),now_ns=t,close_ns=CLOSE)
