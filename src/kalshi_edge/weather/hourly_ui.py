@@ -183,10 +183,16 @@ SCRIPT = r"""<script>
  const card=el("wx-hourly-city");
  let forecasts={};
  let activeCloseMs=null, serverClockBiasMs=0, activeLean="Model leans —";
+ let marketListed=false, forecastApiOk=true;
  function tickMarketClose(){
     if(!Number.isFinite(activeCloseMs)){
-       put("wx-hourly-close-clock","UNAVAILABLE");
-       put("wx-hourly-close-note","Kalshi close time unavailable; verify directly on Kalshi");
+       put("wx-hourly-close-clock",!forecastApiOk?"FEED OFFLINE":
+           marketListed?"CLOSE TIME UNKNOWN":"NO OPEN MARKET");
+       put("wx-hourly-close-note",!forecastApiOk?
+           "Official hourly forecast feed is unavailable.":
+           marketListed?
+           "Kalshi did not publish a valid closing timestamp; verify on Kalshi.":
+           "No eligible open hourly contract has been verified. Temperature prediction still runs.");
        put("wx-hourly-lean",activeLean);
        return;
     }
@@ -208,7 +214,7 @@ SCRIPT = r"""<script>
     target.replaceChildren();
     if(!Array.isArray(rows)||rows.length===0){
        const div=document.createElement("div");div.className="wx-empty";
-       div.textContent="No matching open hourly contracts available. Waiting for Kalshi.";
+       div.textContent="No eligible hourly contract is currently listed for this forecast. Index predictions remain available.";
        target.append(div);return;
     }
     for(const x of rows){
@@ -303,10 +309,11 @@ SCRIPT = r"""<script>
        return Number(bc)-Number(ac);
     });
     const focus=ordered[0];
+    marketListed=Boolean(focus);
     activeCloseMs=focus && focus.close_time_utc?Date.parse(focus.close_time_utc):null;
     if(!Number.isFinite(activeCloseMs))activeCloseMs=null;
     activeLean="Model leans —";
-    put("wx-hourly-contract",focus?focus.threshold_f+" °F or above":"No open contract");
+    put("wx-hourly-contract",focus?focus.threshold_f+" °F or above":"No listed market");
     put("wx-hourly-focus-ticker",focus?"Kalshi ticker: "+focus.ticker:"");
     if(focus){
        const yesPct=100*focus.probability_yes, noPct=100-yesPct;
@@ -315,7 +322,9 @@ SCRIPT = r"""<script>
        put("wx-hourly-model-chance","Estimated YES "+yesPct.toFixed(1)+
           "% · NO "+noPct.toFixed(1)+"% (unvalidated)");
     }else{
-       put("wx-hourly-model-chance","No matching contract / prediction currently ready");
+       put("wx-hourly-model-chance",row.predicted_index_f!=null?
+         "Temperature forecast available; no verified YES/NO contract.":
+         "Waiting for a reliable hourly temperature prediction.");
     }
     tickMarketClose();
     put("wx-hourly-diagnostic",row.status==="READY_RESEARCH"?
@@ -334,8 +343,9 @@ SCRIPT = r"""<script>
       const data=await res.json();
       forecasts={};
       for(const row of data.forecasts||[])forecasts[row.city]=row;
+      forecastApiOk=true;
       draw();
-   }catch(err){forecasts={};draw();put("wx-hourly-state","FEED UNAVAILABLE");}
+   }catch(err){forecastApiOk=false;forecasts={};draw();put("wx-hourly-state","FEED UNAVAILABLE");}
    try{
       const [status,calibration]=await Promise.all([
         fetch("/api/weather/hourly/status",{cache:"no-store"}),
@@ -364,6 +374,10 @@ SCRIPT = r"""<script>
             " · accepted: "+(x.market_strikes??0):"")+
           (Array.isArray(x.listed_event_tickers)&&x.listed_event_tickers.length?
             " · events: "+x.listed_event_tickers.join(", "):"")+
+          (x.fallback_state&&x.fallback_state!=="NOT_NEEDED"?
+             " · events fallback: "+x.fallback_state+
+             " · nested markets: "+(x.fallback_market_count??0):"")+
+          (x.reason_code?" · "+x.reason_code:"")+
           (x.reason?" ("+x.reason+")":""));
       }
       summary.push("Physical HRRR/NBM: "+(physical.state||"WAITING")+
@@ -376,10 +390,16 @@ SCRIPT = r"""<script>
       put("wx-hourly-health",summary.join(" · "));
       const selectedHealth=feed[card?.value]||{};
       if(selectedHealth.state==="NO_ACTIVE_HOURLY_MARKET"){
+         const upcoming=selectedHealth.next_listed_target_utc?
+           " · next listed event: "+t(selectedHealth.next_listed_target_utc)+
+           " (outside short-horizon forecast)":"";
          put("wx-hourly-diagnostic",
-           "Market discovery: "+(selectedHealth.reason||"No eligible contract")+
+           "Market discovery: "+(selectedHealth.reason||
+             "No eligible future hourly Kalshi event is currently listed.")+
            " · Kalshi open: "+(selectedHealth.source_market_count??"unknown")+
-           " · matching future events: "+(selectedHealth.future_event_count??"unknown"));
+           " · in-horizon events: "+(selectedHealth.future_event_count??"unknown")+
+           " · second source: "+(selectedHealth.fallback_state||"NOT CHECKED")+
+           upcoming);
       }
    }catch(err){
       put("wx-hourly-health","Hourly index health endpoint unavailable.");
