@@ -110,6 +110,28 @@ class ValuePaperTrader:
         if (not isinstance(meta,dict) or meta.get("ticker")!=ticker or
                 meta.get("status") not in ("active","open")):
             raise ValueError("Unverified public market identity/status")
+        # Cross-check public contract metadata when supplied by the venue.
+        # Some archived public responses omit these optional fields; absence
+        # is never replaced with a fabricated strike or close time.
+        if "floor_strike" in meta:
+            try:
+                actual_strike=D(str(meta["floor_strike"]))
+                expected_strike=D(str(final["strike"]))
+                if (not actual_strike.is_finite() or
+                        abs(actual_strike-expected_strike)>D("0.011")):
+                    raise ValueError("Frozen strike differs from public market")
+            except (InvalidOperation,KeyError,TypeError) as exc:
+                raise ValueError("Bad public market strike") from exc
+        if "close_time" in meta:
+            try:
+                closing=datetime.fromisoformat(
+                    meta["close_time"].replace("Z","+00:00")
+                )
+                if (closing.tzinfo is None or
+                        abs(int(closing.timestamp()*NS)-expected_close_ns)>NS):
+                    raise ValueError("Public market close differs from frozen close")
+            except (TypeError,AttributeError,OverflowError) as exc:
+                raise ValueError("Bad public market close time") from exc
         receipt=self.clock()  # after HTTP response, never before
         q=quote_from_kalshi(book,side,timestamp_ns=receipt)
         return UpQuote(ticker,receipt,q.bid,q.ask,q.bid_available,q.ask_available)
