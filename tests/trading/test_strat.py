@@ -114,7 +114,7 @@ def test_paper_cycle_sells_only_at_positive_net_slowdown_and_durable_ledger(tmp_
     assert len(history) == 1
     assert history[0]["status"] == "CLOSED"
     assert history[0]["side"] == "UP"
-    assert history[0]["exit_reason"] == "UP_MOMENTUM_SLOWED"
+    assert history[0]["exit_reason"] == "UP_MOMENTUM_SLOWED_PROFIT"
     assert D(history[0]["paper_net_pnl"]) > 0  # real after-cost paper profit
     trader.close()
     assert client.closed is True
@@ -209,7 +209,7 @@ def test_bidirectional_trader_paper_takes_positive_net_down_profit(tmp_path):
     assert len(history) == 1
     assert history[0]["side"] == "DOWN"
     assert history[0]["status"] == "CLOSED"
-    assert history[0]["exit_reason"] == "DOWN_MOMENTUM_SLOWED"
+    assert history[0]["exit_reason"] == "DOWN_MOMENTUM_SLOWED_PROFIT"
     assert client.calls == len(values)
     assert D(history[0]["paper_net_pnl"]) > D("0")
     assert trader.status()["down_ask_cents"] is not None
@@ -1133,13 +1133,13 @@ def test_down_slowdown_never_closes_at_loss(tmp_path):
     trader.close()
 
 
-def test_profit_gate_uses_execution_depth_and_momentum_not_price_alone(tmp_path):
+def test_profitable_held_price_without_slowdown_does_not_trigger_sale(tmp_path):
     now = [BASE]
     close = BASE+600*NS
     # Profitable bid appears while still increasing; sell only after slowdown.
     values = list(map(D, [
         "0.64", "0.64", "0.65", "0.66", "0.68",
-        "0.78", "0.80", "0.82",
+        "0.75", "0.82", "0.89",  # uniform 7c/tick rise; no slowdown
     ]))
     def live():
         return {
