@@ -32,7 +32,7 @@ th{color:var(--muted)}
 </style></head><body><main>
 <nav><a href="/trade">Trade</a><a href="/train">Train</a><a href="/history">History</a><a href="/api">API</a><a class="active" href="/strat">Strat</a></nav>
 <h1>Settlement Value · Strat V2</h1>
-<p class="note">15-minute BTC · Frozen forecast at 8 minutes remaining · fee-aware order-book value, one entry per market, held to independently Verified settlement. <strong>PAPER ONLY. No verified profitable edge.</strong></p>
+<p class="note">15-minute BTC · Frozen forecast at 8 minutes remaining · fee-aware order-book value, one entry per market, held to locally integrity-checked Kalshi API results (Verified settlement record; independent BRTI reconstruction not yet certified). <strong>PAPER ONLY. No verified profitable edge.</strong></p>
 <div class="grid">
 <section class="card"><h2>Current Market</h2><div id="timer" class="big">—</div><p class="note">Time until market closes</p>
 <div class="kv"><span>Market</span><strong id="ticker">Waiting</strong></div>
