@@ -26,7 +26,7 @@ from .final_forecast import FINAL_CHECKPOINT_SECONDS, FinalForecastRecord
 from .dashboard_ui import PAGE as _PAGE
 from .round_price_ui import integrate_round_price_hero
 from .site_pages import render_site_page
-from .strat_ui import render_strat_page
+from .strat_ui import render_value_strat_page
 from kalshi_edge.gold.research_ui import render_gold_page
 from kalshi_edge.gold.experiment import gold_experiment_status
 from kalshi_edge.weather.research_ui import render_weather_page
@@ -375,7 +375,7 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
     )
 
     strat = strat_trader
-    strat_page = render_strat_page().encode("utf-8")
+    strat_page = render_value_strat_page().encode("utf-8")
 
     # Build the three local routes once. Do not inject AutoTrader UI;
     # legacy signed API routes remain available to authorized localhost tools.
@@ -974,8 +974,15 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         root, lambda: read_live_dashboard(root),
         settlement_reader=verified_paper_settlement,
     )
+    # Keep V1 disarmed and settling any outstanding legacy paper position.
+    # No V1 new buys, and historical V1 ledger remains untouched.
     from kalshi_edge.trading.strat_paper import StratPaperTrader
-    strat_trader = StratPaperTrader(
+    legacy_strat_trader = StratPaperTrader(
+        root, lambda: read_live_dashboard(root),
+        settlement_reader=verified_paper_settlement,
+    )
+    from kalshi_edge.trading.strat_value import ValuePaperTrader
+    strat_trader = ValuePaperTrader(
         root, lambda: read_live_dashboard(root),
         settlement_reader=verified_paper_settlement,
     )
@@ -990,7 +997,11 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     )
     strat_worker = threading.Thread(
         target=strat_trader.run_forever, args=(stop,),
-        name="kalshiedge-experimental-strat", daemon=True,
+        name="kalshiedge-experimental-strat-v2", daemon=True,
+    )
+    legacy_strat_worker = threading.Thread(
+        target=legacy_strat_trader.run_forever, args=(stop,),
+        name="kalshiedge-legacy-strat-settlement-only", daemon=True,
     )
     scalp_worker = threading.Thread(
         target=paper_scalper.run_forever, args=(stop,),
@@ -1014,6 +1025,7 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
     paper_worker.start()
     scalp_worker.start()
     strat_worker.start()
+    legacy_strat_worker.start()
     print(f"KalshiEdge final history: http://127.0.0.1:{port}/", flush=True)
     print("Read-only local webpage; Ctrl+C to stop.", flush=True)
     try:
@@ -1025,13 +1037,16 @@ def run_final_history(root: Path, base_url: str, *, port: int = 8899, once: bool
         paper_trader.enable(False)
         paper_scalper.pause()
         strat_trader.pause()
+        legacy_strat_trader.pause()
         controller.stop()
         server.server_close()
         worker.join(timeout=2)
         paper_worker.join(timeout=3)
         scalp_worker.join(timeout=3)
         strat_worker.join(timeout=3)
+        legacy_strat_worker.join(timeout=3)
         strat_trader.close()
+        legacy_strat_trader.close()
         paper_scalper.close()
         paper_trader.market_client.close()
         if auto_trader is not None:

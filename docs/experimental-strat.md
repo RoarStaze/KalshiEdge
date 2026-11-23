@@ -1,5 +1,7 @@
 # Experimental Strat: bidirectional UP and DOWN momentum scalping (paper only)
 
+**LEGACY V1 — NO LONGER THE ACTIVE /strat STRATEGY.** V2 is documented in [Settlement Value Strat](strat-value-v2.md). V1 code and trades are preserved for audit. Existing V1 paper holdings may still settle; no new V1 entries are armed by the V2 dashboard.
+
 **State:** isolated experiment; no live Kalshi order submission. In the KalshiEdge localhost dashboard, select **Strat** in the primary navigation or open `http://127.0.0.1:8899/strat`.
 
 This strategy makes **multiple separate UP or DOWN purchases and sales per KXBTC15M market** without consulting the BTC forecast model or confidence gate. It uses the same entry/exit policy on both independent executable bid/ask quote series. Only one side is held at a time; a later round trip may use the opposite side.
