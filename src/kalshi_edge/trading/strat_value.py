@@ -104,7 +104,7 @@ class ValuePaperTrader:
         )
         self._last_signal="SETTLED_"+row["side"]+"_"+result.upper()
 
-    def _quote(self,ticker:str,side:str)->UpQuote:
+    def _quote(self,ticker:str,side:str,*,final:dict,expected_close_ns:int)->UpQuote:
         market,book=self.client.quote(ticker)
         meta=market.get("market") if isinstance(market,dict) else None
         if (not isinstance(meta,dict) or meta.get("ticker")!=ticker or
