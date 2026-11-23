@@ -63,6 +63,8 @@ MAIN = """
     <span>Closest Kalshi contract</span><strong id="wx-hourly-contract">—</strong>
     <b id="wx-hourly-lean">Model leans —</b>
     <small id="wx-hourly-model-chance">Waiting for an open matching Kalshi market</small>
+    <small id="wx-hourly-kalshi-ask">Kalshi ask YES / NO · waiting for verified quote</small>
+    <small id="wx-hourly-quote-state">Observed quote status · waiting</small>
     <small id="wx-hourly-focus-ticker"></small>
    </div>
    <div class="wx-stat wx-hourly-current-stat">
@@ -70,7 +72,7 @@ MAIN = """
     <small>Latest published index value, not the prediction</small>
    </div>
   </div>
-  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi prices or proof of a profitable bet. Not a verified accuracy claim. No automatic weather trading.</p>
+  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi asking prices or proof of a profitable bet. Verified asks are exchange snapshots, not guaranteed executable, and fees, liquidity and fill risk matter. No automatic weather trading.</p>
   <details class="wx-hourly-details"><summary>Forecast uncertainty and technical details</summary>
    <div class="wx-rows">
     <div class="wx-row"><span>90% modeled interval (not validated)</span><strong id="wx-hourly-interval">—</strong></div>
@@ -184,7 +186,23 @@ SCRIPT = r"""<script>
  let forecasts={};
  let activeCloseMs=null, serverClockBiasMs=0, activeLean="Model leans —";
  let marketListed=false, forecastApiOk=true;
+ let activeQuoteReceivedMs=null, activeQuoteStatus="QUOTE_PENDING", activeAskText=null;
+ function tickQuote(){
+    const serverNow=Date.now()-serverClockBiasMs;
+    const fresh=Number.isFinite(activeQuoteReceivedMs) &&
+      serverNow>=activeQuoteReceivedMs && serverNow-activeQuoteReceivedMs<=35000;
+    const status=activeQuoteStatus==="VALID_ASK"&&!fresh?
+      "STALE_QUOTE":activeQuoteStatus;
+    put("wx-hourly-kalshi-ask",status==="VALID_ASK"&&activeAskText?
+      "Kalshi ask YES / NO · "+activeAskText:
+      "Kalshi ask YES / NO · no current verified executable ask");
+    put("wx-hourly-quote-state","Observed quote status · "+status+
+      (status==="VALID_ASK"?
+         " · refreshed "+Math.max(0,Math.floor((serverNow-activeQuoteReceivedMs)/1000))+
+         "s ago (not guaranteed executable)":""));
+ }
  function tickMarketClose(){
+    tickQuote();
     if(!Number.isFinite(activeCloseMs)){
        put("wx-hourly-close-clock",!forecastApiOk?"FEED OFFLINE":
            marketListed?"CLOSE TIME UNKNOWN":"NO OPEN MARKET");
@@ -310,6 +328,14 @@ SCRIPT = r"""<script>
     });
     const focus=ordered[0];
     marketListed=Boolean(focus);
+    const asks=(value,size)=>typeof value==="string"&&typeof size==="string"?
+      (100*Number(value)).toFixed(1)+"¢ (size "+size+")":"no visible ask";
+    activeQuoteStatus=focus?.quote_status||"QUOTE_PENDING";
+    activeQuoteReceivedMs=focus?.quote_received_at?
+      Date.parse(focus.quote_received_at):null;
+    if(!Number.isFinite(activeQuoteReceivedMs))activeQuoteReceivedMs=null;
+    activeAskText=focus?asks(focus.yes_ask_dollars,focus.yes_ask_size_fp)+
+      " / "+asks(focus.no_ask_dollars,focus.no_ask_size_fp):null;
     activeCloseMs=focus && focus.close_time_utc?Date.parse(focus.close_time_utc):null;
     if(!Number.isFinite(activeCloseMs))activeCloseMs=null;
     activeLean="Model leans —";
