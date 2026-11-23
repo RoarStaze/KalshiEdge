@@ -288,7 +288,10 @@ SCRIPT = r"""<script>
     put("wx-hourly-learning",row.learning_status||"WAITING FOR EVIDENCE");
     put("wx-hourly-learning-hours",row.learning_verified_hours??0);
     put("wx-hourly-nowcast-state",row.index_nowcast_status||"WAITING FOR INDEX");
-    put("wx-hourly-nowcast-model",row.model_kind==="HISTORICAL_INDEX_NOWCAST_V2"?
+    put("wx-hourly-nowcast-model",[
+         "HISTORICAL_INDEX_NOWCAST_V2",
+         "HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
+         ].includes(row.model_kind)?
          (row.index_nowcast_selected_model||"UNKNOWN MODEL"):
          (row.model_kind||"BASELINE"));
     put("wx-hourly-nowcast-hours",row.index_nowcast_history_hours??0);
