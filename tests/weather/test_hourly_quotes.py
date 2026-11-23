@@ -203,3 +203,11 @@ def test_supervisor_automatically_refreshes_quotes_in_separate_loop(tmp_path):
     assert state["hourly_quotes"]["state"]=="READY"
     assert state["hourly_quotes"]["valid_asks"]==1
     assert state["real_orders_enabled"] is False
+
+
+def test_feed_status_discloses_separate_quote_health_and_unavailable_reasons():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("forecast","")
+    assert "Kalshi quote feed" in html
+    assert "hourly_quotes" in html
+    assert "NO_VISIBLE_ASK" in html
