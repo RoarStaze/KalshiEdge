@@ -130,7 +130,8 @@ async function action(which){
   const amount=Number(el("amount").value);
   if(which==="arm"&&!(amount>=.10&&amount<=2))throw Error("Budget must be $0.10–$2.00");
   const payload=which==="arm"?{amount:amount.toFixed(2)}:{};
-  const r=await fetch("/api/strat/"+which,{method:"POST",credentials:"same-origin",
+  const endpoint=which==="arm"?"/api/strat/arm":"/api/strat/pause";
+  const r=await fetch(endpoint,{method:"POST",credentials:"same-origin",
    headers:{"Content-Type":"application/json","X-KalshiEdge-Action":"strat"},
    body:JSON.stringify(payload)});
   const s=await r.json();if(!r.ok)throw Error(s.error||"Request rejected");
