@@ -169,7 +169,7 @@ def test_future_but_out_of_horizon_market_is_reported_not_used(tmp_path):
     status=asyncio.run(task())["cities"]["chicago"]
     assert status["state"]=="NO_ACTIVE_HOURLY_MARKET"
     assert status["reason_code"]=="LISTED_OUTSIDE_FORECAST_HORIZON"
-    assert status["next_listed_target_utc"]==six_hours.replace(minute=0).isoformat() or status["next_listed_target_utc"]==(datetime(2026,11,23,0,tzinfo=timezone.utc)).isoformat()
+    assert status["next_listed_target_utc"]==datetime(2026,11,23,0,tzinfo=timezone.utc).isoformat()
     assert status["market_strikes"]==0
 
 
