@@ -472,6 +472,7 @@ class StratPaperTrader:
                     self._exit_latched = False
 
             if close <= now:
+                self._projected_exit_pnl = None
                 if opened is not None and not self._settle(opened, now):
                     self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
                 return self.status()
@@ -484,11 +485,13 @@ class StratPaperTrader:
             try:
                 quotes = self._quote(ticker, now)
             except Exception as exc:
+                self._projected_exit_pnl = None
                 self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
                 return self.status()
 
             observed_ns = quotes["UP"].observed_ns
             if observed_ns >= close:
+                self._projected_exit_pnl = None
                 self._last_signal = "MARKET_CLOSED_DURING_QUOTE"
                 return self.status()
             for side in ("UP", "DOWN"):
