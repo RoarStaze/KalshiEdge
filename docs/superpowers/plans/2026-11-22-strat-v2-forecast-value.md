@@ -25,7 +25,7 @@ https://doi.org/10.1287/mnsc.2023.03371
 ## Design decision
 
 Replace the *active* /strat page/worker with **V2 frozen-checkpoint, fee-aware
-positive-value hold-to-verified-settlement PAPER trading**. Preserve V1
+positive-value hold-to-locally-integrity-checked-Kalshi-API-settlement PAPER trading**. Preserve V1
 StratPaperTrader/legacy UI and SQLite file intact for audit and regression.
 
 1. Eligible at most once per KXBTC15M ticker; only within **30s of the sealed
