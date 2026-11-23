@@ -72,7 +72,7 @@ MAIN = """
     <small>Latest published index value, not the prediction</small>
    </div>
   </div>
-  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi asking prices or proof of a profitable bet. Verified asks are exchange snapshots, not guaranteed executable, and fees, liquidity and fill risk matter. No automatic weather trading.</p>
+  <p class="wx-hourly-caution">Calibration not verified. Model probabilities are research estimates, not Kalshi asking prices or proof of a profitable bet. Not a verified accuracy claim. Verified asks are exchange snapshots, not guaranteed executable, and fees, liquidity and fill risk matter. No automatic weather trading.</p>
   <details class="wx-hourly-details"><summary>Forecast uncertainty and technical details</summary>
    <div class="wx-rows">
     <div class="wx-row"><span>90% modeled interval (not validated)</span><strong id="wx-hourly-interval">—</strong></div>
@@ -196,7 +196,12 @@ SCRIPT = r"""<script>
     put("wx-hourly-kalshi-ask",status==="VALID_ASK"&&activeAskText?
       "Kalshi ask YES / NO · "+activeAskText:
       "Kalshi ask YES / NO · no current verified executable ask");
-    put("wx-hourly-quote-state","Observed quote status · "+status+
+    const readable=status==="NO_VISIBLE_ASK"?"No posted asking liquidity":
+      status==="QUOTE_PENDING"?"Waiting for first exchange quote":
+      status==="STALE_QUOTE"?"Quote expired; waiting for refresh":
+      status==="QUOTE_UNAVAILABLE"?"Exchange quote unavailable":
+      status==="CLOSED"?"Market confirmed closed":status;
+    put("wx-hourly-quote-state","Observed quote status · "+readable+
       (status==="VALID_ASK"?
          " · refreshed "+Math.max(0,Math.floor((serverNow-activeQuoteReceivedMs)/1000))+
          "s ago (not guaranteed executable)":""));
