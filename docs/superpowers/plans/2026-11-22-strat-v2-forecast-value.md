@@ -43,7 +43,9 @@ StratPaperTrader/legacy UI and SQLite file intact for audit and regression.
    depth must be valid, spread ≤3c. No apparent edge = SKIP. No implied profit.
 4. Limit total hypothetical paid amount to min(user amount $0.10–$2.00,
    1% of starting/remaining virtual equity); max 1 outstanding position;
-   at most one completed/entered position per ticker. Pause/new process
+   at most one completed/entered position per ticker. Public market strike
+   and close metadata are cross-checked against the frozen forecast when present.
+   Pause/new process
    disables new entry. If daily realized loss >=$2, stop new paper buys.
 5. One hypothetical taker buy (actual fill not verified), hold through
    *verified* official settlement; no manufactured sale or assumed payout.
