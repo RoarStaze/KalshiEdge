@@ -98,6 +98,11 @@ nav{justify-content:center}.grid{grid-template-columns:1fr}.rules{grid-template-
 <div class="kv"><span>Acceleration ratio</span><strong id="ratio">—</strong></div>
 <div class="kv"><span>Decision</span><strong id="signal">DISARMED</strong></div>
 <div class="kv"><span>Paper position</span><span id="held">FLAT</span></div>
+<div class="kv"><span>Projected net if sold now</span><strong id="projectedExitPnl">—</strong></div>
+<p class="sub">Held-side executable BID less 1¢ modeled exit slippage,
+the estimated exit fee, and all entry costs. Based on the latest observed
+quote; not a guaranteed fill. An unprofitable position may stay open through
+settlement and lose its entire entry cost.</p>
 <div class="kv"><span>Round trips this market</span><strong id="cycles">0</strong></div>
 </section>
 <section class="card"><h2>Experiment Controls</h2>
@@ -133,7 +138,7 @@ still apply. This setting resets after pause/restart; it never enables real orde
 <div class="rule"><small>BUY TIME</small><strong>≥ 2:00</strong><small>Never open a new UP or DOWN position below two minutes remaining.</small></div>
 <div class="rule"><small>SIDE PRICE</small><strong>65¢–85¢</strong><small>Buy only when the chosen UP or DOWN executable ask qualifies.</small></div>
 <div class="rule"><small>BUY TRIGGER</small><strong>Side speed ↑</strong><small>Fresh UP or DOWN bid/ask acceleration, measured on that side.</small></div>
-<div class="rule"><small>SELL TRIGGER</small><strong>Side speed ↓</strong><small>Held-side bid momentum slows or reverses. Exits continue below 2:00.</small></div>
+<div class="rule"><small>SELL TRIGGER</small><strong>Side speed ↓ + Positive net P&amp;L</strong><small>Sell when momentum slows AND the executable held-side exit would yield strictly positive net profit after fees and slippage. Otherwise HOLD; no profit guaranteed at settlement.</small></div>
 </div></section>
 <section class="card span"><h2>Future quote evidence · paper research</h2>
 <button id="auditBtn" type="button">Analyze captured momentum</button>
@@ -143,7 +148,7 @@ still apply. This setting resets after pause/restart; it never enables real orde
 <section class="card span"><h2>Experimental round trips · persistent local ledger</h2>
 <div class="scroll"><table><thead><tr><th>Market</th><th>Side</th><th>State</th><th>Entry</th><th>Exit</th><th>Shares</th><th>Gross price P&amp;L</th><th>Fee estimate</th><th>Net hypothetical P&amp;L</th></tr></thead>
 <tbody id="rounds"><tr><td colspan="9">No simulated rounds yet</td></tr></tbody></table></div>
-<p class="sub">Paper prices include 1¢ slippage per leg; fee estimates use Kalshi’s standard taker schedule rather than the conservative order-reserve buffer. Gross price P&amp;L already includes price slippage. Fee assumptions and simulated fills are not verified executions. Historical rows retain their original fee assumptions.</p>
+<p class="sub">Current profit-taking rule: momentum slowdown + positive net P&amp;L (profit only on modeled paper sale). A trade may instead remain open through official settlement and lose; profit is never guaranteed. Paper prices include 1¢ slippage per leg and estimated taker fees. Gross price P&amp;L includes price slippage; simulated fills are not verified executions. Historical rows retain their original fee assumptions.</p>
 </section></div></main>
 <script>
 "use strict";
@@ -185,6 +190,11 @@ async function refresh(){
   set("quoteTapeSamples",s.quote_tape_samples??0);
   set("quoteTapeMarkets",s.quote_tape_markets??0);
   set("held",s.open_position?"LONG "+s.open_position.side+" · "+s.open_position.quantity+" shares":"FLAT");
+  const projected=s.projected_exit_net_pnl_dollars;
+  set("projectedExitPnl",s.open_position?
+    (projected==null?"NO FULL-DEPTH EXIT QUOTE":money(projected)):
+    "NO POSITION");
+  el("projectedExitPnl").className=projected==null?"":Number(projected)>0?"positive":"negative";
   const ticker=l.market_ticker||s.market_ticker;set("ticker",ticker||"Waiting");
   const sec=Number(l.seconds_remaining);const valid=Number.isFinite(sec)&&sec>0;
   set("remain",valid?Math.floor(sec/60)+":"+String(Math.floor(sec%60)).padStart(2,"0"):"—");
