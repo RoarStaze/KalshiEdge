@@ -404,8 +404,21 @@ async def collect_hourly_once(
                             continue
                         if target_time > receipt + timedelta(hours=3):
                             count["out_of_horizon"] += 1
-                            if nearest is None or target_time < nearest[1]:
-                                nearest = (event_name, target_time)
+                            # An event ticker alone is not evidence that its
+                            # associated contract is still tradable. Only show
+                            # next-listed timing when Kalshi provided an
+                            # explicit closing timestamp after this receipt.
+                            close_raw = raw.get("close_time")
+                            try:
+                                close = (datetime.fromisoformat(
+                                    close_raw.replace("Z", "+00:00"))
+                                    if isinstance(close_raw, str) else None)
+                                if (close is not None and close.utcoffset() is not None
+                                    and close.astimezone(timezone.utc) > receipt
+                                    and (nearest is None or target_time < nearest[1])):
+                                    nearest = (event_name, target_time)
+                            except (ValueError, OverflowError):
+                                pass
                             continue
                         times[event_name] = target_time
                         by_event.setdefault(event_name, []).append(raw)
@@ -477,7 +490,7 @@ async def collect_hourly_once(
                         reason_code = "NO_ACCEPTED_CONTRACTS"
                         reason = ("Kalshi listed an upcoming hourly index event, "
                                   "but no open contract passed threshold and close-time checks.")
-                    elif next_listed is not None:
+                    elif rejected["out_of_horizon"]:
                         reason_code = "LISTED_OUTSIDE_FORECAST_HORIZON"
                         reason = ("The next listed hourly Kalshi market is beyond "
                                   "the verified three-hour forecast window.")
