@@ -83,6 +83,9 @@ def evaluate_value_entry(
             not ticker.startswith("KXBTC15M-") or
             not ticker.replace("-", "").isalnum()):
         return _reject("FORECAST_MARKET_MISMATCH")
+    if (_num(forecast.get("strike")) is None or
+            _num(forecast.get("strike")) <= 0):
+        return _reject("INVALID_FROZEN_STRIKE")
     if forecast.get("forecast") not in ("ABOVE", "BELOW"):
         return _reject("INVALID_FROZEN_FORECAST")
     side = "UP" if forecast["forecast"] == "ABOVE" else "DOWN"
