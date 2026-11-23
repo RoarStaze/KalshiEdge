@@ -257,7 +257,7 @@ class ValuePaperTrader:
                 return self.status()
             side="UP" if final["forecast"]=="ABOVE" else "DOWN"
             try:
-                quote=self._quote(ticker,side)
+                quote=self._quote(ticker,side,final=final,expected_close_ns=close)
             except Exception:
                 LOG.debug("V2 public book unavailable",exc_info=True)
                 self._last_signal="PUBLIC_ORDERBOOK_UNAVAILABLE"
