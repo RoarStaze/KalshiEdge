@@ -88,6 +88,7 @@ class StratPaperTrader:
         self._last_signal = "DISARMED"
         self._last_speed = 0.0
         self._last_ratio: float | None = None
+        self._projected_exit_pnl: D | None = None
         self._last_ask_cents: str | None = None
         self._last_down_ask_cents: str | None = None
         self._side_speeds = {"UP": 0.0, "DOWN": 0.0}
@@ -155,6 +156,7 @@ class StratPaperTrader:
             fee=D("0"), now_ns=now, reason="OFFICIAL_SETTLEMENT",
             pnl=pnl, settled=True)
         self._exit_latched = False
+        self._projected_exit_pnl = None
         self._last_signal = "OFFICIALLY_SETTLED_" + row["side"] + "_" + side.upper()
         return True
 
@@ -282,6 +284,12 @@ class StratPaperTrader:
                 "break_even_up_cents": self._breakeven_cents["UP"],
                 "break_even_down_cents": self._breakeven_cents["DOWN"],
                 "open_position": position,
+                "projected_exit_net_pnl_dollars": (
+                    _cash(self._projected_exit_pnl)
+                    if position is not None and self._projected_exit_pnl is not None
+                    else None
+                ),
+                "profit_take_requires_positive_net": True,
                 "round_trips": self.ledger.recent(25),
                 "last_signal": self._last_signal,
                 "speed_cents_per_second": round(self._last_speed, 3),
@@ -303,7 +311,7 @@ class StratPaperTrader:
                     "side_ask_cents_range": [65, 85],
                     "sides": ["UP", "DOWN"],
                     "entry": "NEW_EXECUTABLE_SIDE_ACCELERATION",
-                    "exit": "HELD_SIDE_BID_MOMENTUM_DECELERATION_OR_REVERSAL",
+                    "exit": "HELD_SIDE_MOMENTUM_SLOWS_AND_POSITIVE_MODELED_NET_PNL",
                 },
                 "warning": ("Signal has no verified positive expectancy. "
                             "Cross-market loss streak is informational only; "
@@ -315,6 +323,11 @@ class StratPaperTrader:
                             "Paper only: top-of-book hypothetical fills with 1c "
                             "slippage per leg and indicative standard taker fees. "
                             "Market-specific fees and actual fills are unverified. "
+                            "Slowing momentum only triggers a paper sell if the "
+                            "current held-side executable bid covers entry cost, "
+                            "exit slippage and fee with strictly positive net. "
+                            "A position with no profitable exit may expire and "
+                            "settle as a loss. "
                             "No demonstrated positive after-fee expectancy; "
                             "an unfilled or illiquid exit can remain open."),
             }
@@ -388,27 +401,48 @@ class StratPaperTrader:
         )
         self._last_signal = f"PAPER_BOUGHT_{side}_FAST_MOMENTUM"
 
-    def _exit(self, row: dict, quote: UpQuote, now: int) -> None:
+    def _projected_exit(self, row: dict, quote: UpQuote) -> tuple[D, D, D] | None:
+        """Conservative modeled taker sale from executable HELD-side bid.
+
+        This is not a guaranteed fill. Partial/absent top-book depth is
+        insufficient: never synthesize an exit when it cannot fill in full.
+        """
         qty = D(row["quantity"])
         if quote.bid_depth < qty or quote.bid <= SLIPPAGE:
-            self._last_signal = "EXIT_SIGNAL_LATCHED_WAITING_FOR_BID_DEPTH"
-            return
+            return None
         sale = quote.bid - SLIPPAGE
         fee = standard_taker_fee_estimate(sale, qty)
         pnl = qty * sale - fee - D(row["total_paid"])
+        return sale, fee, pnl
+
+    def _exit(self, row: dict, quote: UpQuote, now: int) -> bool:
+        projection = self._projected_exit(row, quote)
+        if projection is None:
+            self._last_signal = "PROFIT_EXIT_LATCHED_WAITING_FOR_BID_DEPTH"
+            return False
+        sale, fee, pnl = projection
+        # Re-check immediately against the exact quote used by the ledger;
+        # a previously profitable trigger must NEVER close at a later loss.
+        if pnl <= D("0"):
+            self._last_signal = "PROFIT_EXIT_LATCHED_WAITING_FOR_POSITIVE_NET"
+            return False
         self.ledger.close(
             row["id"], price=sale, fee=fee, now_ns=now,
-            reason=f"{row['side']}_MOMENTUM_SLOWED", pnl=pnl,
+            reason=f"{row['side']}_MOMENTUM_SLOWED_PROFIT", pnl=pnl,
         )
         self._last_exit_ns = now
         self._exit_latched = False
-        self._last_signal = f"PAPER_SOLD_{row['side']}_MOMENTUM_SLOWED"
+        self._projected_exit_pnl = None
+        self._last_signal = f"PAPER_SOLD_{row['side']}_POSITIVE_NET_PROFIT"
+        return True
 
     def tick(self, now_ns: int | None = None) -> dict:
         with self._lock:
             now = self.clock() if now_ns is None else now_ns
             stats = self._stats(now)
             opened = stats["open"]
+            if opened is None:
+                self._projected_exit_pnl = None
             market_info = self._market(now)
             if opened is not None:
                 ticker, close = opened["ticker"], opened["close_ns"]
@@ -438,6 +472,7 @@ class StratPaperTrader:
                     self._exit_latched = False
 
             if close <= now:
+                self._projected_exit_pnl = None
                 if opened is not None and not self._settle(opened, now):
                     self._last_signal = "WAITING_FOR_OFFICIAL_SETTLEMENT"
                 return self.status()
@@ -450,11 +485,13 @@ class StratPaperTrader:
             try:
                 quotes = self._quote(ticker, now)
             except Exception as exc:
+                self._projected_exit_pnl = None
                 self._last_signal = "QUOTE_UNAVAILABLE_" + type(exc).__name__
                 return self.status()
 
             observed_ns = quotes["UP"].observed_ns
             if observed_ns >= close:
+                self._projected_exit_pnl = None
                 self._last_signal = "MARKET_CLOSED_DURING_QUOTE"
                 return self.status()
             for side in ("UP", "DOWN"):
@@ -526,12 +563,29 @@ class StratPaperTrader:
             if opened is not None:
                 held = opened["side"]
                 if held not in ("UP", "DOWN"):
+                    self._projected_exit_pnl = None
                     self._last_signal = "INVALID_OPEN_POSITION_SIDE"
-                elif signals[held].action == "SELL" or self._exit_latched:
-                    self._exit_latched = True
-                    self._exit(opened, quotes[held], observed_ns)
                 else:
-                    self._last_signal = signals[held].reason
+                    projection = self._projected_exit(opened, quotes[held])
+                    self._projected_exit_pnl = (
+                        projection[2] if projection is not None else None
+                    )
+                    # Both conditions must hold on the slowdown trigger:
+                    # momentum has slowed AND modeled net liquidation > $0.
+                    # Never latch a losing signal for a later forced sale.
+                    if (signals[held].action == "SELL" and projection is not None
+                            and projection[2] > D("0")):
+                        self._exit_latched = True
+                    if self._exit_latched:
+                        self._exit(opened, quotes[held], observed_ns)
+                    elif signals[held].action == "SELL":
+                        self._last_signal = (
+                            "MOMENTUM_SLOWED_BUT_NOT_PROFITABLE"
+                            if projection is not None
+                            else "MOMENTUM_SLOWED_NO_EXECUTABLE_BID"
+                        )
+                    else:
+                        self._last_signal = signals[held].reason
             elif self._market(observed_ns) != (ticker, close):
                 self._last_signal = "MARKET_IDENTITY_NOT_FRESH"
             elif self.ledger.ticker_count(ticker) >= MAX_CYCLES:

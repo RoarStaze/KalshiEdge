@@ -9,7 +9,7 @@ This strategy makes **multiple separate UP or DOWN purchases and sales per KXBTC
 1. **Only buy when 2:00 or more remains** in the current 15-minute contract. Selling an existing holding remains permissible at any time the market is open.
 2. **Only buy UP or DOWN at 65¢–85¢.** Each entry uses that chosen side's executable ask reconstructed from Kalshi's YES/NO order book, not the last completed trade. The paper simulator also refuses any modeled entry fill above 85¢.
 3. **Buy on newly accelerating fast momentum in the chosen side.** The same deterministic detector evaluates five consecutive orderbook snapshots covering 2–12 seconds for either UP or DOWN. Both that side's executable bid and ask must rise, each gaining at least 2¢ over the latest two-sample segment, and the bid's recent increase per second must be at least 1.5 times its earlier rate when that earlier rate was positive. **The newest snapshot must also show a fresh bid AND ask increase over the immediately preceding snapshot**: prior-window bursts that have already stalled are rejected. Simultaneous conflicting buy signals cause a skip.
-4. **Sell when momentum slows in the side actually held.** A held-side bid reversal or declining positive bid speed triggers an exit. **One flat public REST quote no longer triggers an immediate exit**: an unchanged bid requires three consecutive flat intervals across at least two seconds to confirm that momentum has stalled. A positive latest bid rise that falls to half or less of the prior positive rise can still trigger a faster exit. Once triggered, exits remain latched through temporary lack of liquidity. This debounce reduces mechanical spread-churn but does not guarantee profits or prevent losses.
+4. **Sell on confirmed held-side momentum slowdown AND positive after-cost P&L.** The momentum slowdown detector remains unchanged (held-side bid reversal, slower positive rise, or three consecutive flat bid intervals spanning at least two seconds). It now triggers a simulated sale **only if the held-side executable bid minus 1¢ modeled slippage, minus estimated exit taker fee, minus the original total entry cost including entry fees, yields strictly positive dollar P&L**. A positive unrealized quote alone is insufficient without a slowdown. A slowdown that would sell at breakeven or a loss leaves the position open. Actual full-size bid depth is required, and a previously latched positive-profit signal cannot force a later negative sale.
 
 The detector samples approximately every 0.75 seconds via public REST requests. This polling scheme is not an exchange-tick or low-latency momentum feed; missed moves and stale quotes are material limitations.
 
@@ -23,8 +23,27 @@ The detector samples approximately every 0.75 seconds via public REST requests. 
 - The dashboard displays one-contract **illustrative break-even move**, gross simulated trade-price P&L, estimated entry/exit fees, and net paper P&L independently. The break-even illustration accounts for spread and two one-cent slippage assumptions and is **not a short-term price forecast**.
 - **Existing ledger entries are never backfilled or rewritten**. The informational cross-market loss streak reads existing paper history (including earlier fee assumptions) but does not prevent new paper entries or rewrite the recorded P&L. The UI shows old and new trades together with their original fees. For an apples-to-apples historical comparison, export/analyze them by implementation version and fee assumption.
 - These changes are improvements to signal timing and accounting transparency, **not empirical proof of positive expectancy**. Testing with real captured quote streams, timestamp-correct replay, and observed manual fill evidence is still required.
-- Stop/slowdown signals are not execution guarantees. If liquidity is absent, the paper position stays open; if the market expires it can only settle using the application's **verified official settlement** helper.
+- Profit-only slowdown exits are **not a guarantee that any trade wins**. When no profitable executable exit becomes available, the paper holding remains open; if the market expires it can only settle using the application's **verified official settlement** helper. It may lose the **entire entry cost** at settlement, and a missing verified settlement can leave the position pending. This version intentionally has **no protective loss-cutting sell**; do not treat lower realized SELL losses as higher economic profitability.
+- The **Projected net if sold now** figure is modeled against the most recently observed held-side executable bid, available full-size bid depth, estimated fees and 1¢ exit slippage. A live order could receive a different price or no fill at all. The paper ledger records only strictly positive net P&L on slowdown sales; real settlement losses are preserved rather than rewritten.
 - Pausing disables new entries but keeps observing open paper positions. A restart always disables new entries until the user re-arms.
+
+## Profit-gated exit experiment
+
+The user-requested exit variant requires **both** (1) a held-side slowdown
+signal and (2) an estimated strictly positive full-size executable paper
+exit after all modeled costs. This changes **exit timing only**, not the
+existing UP/DOWN entry signal, the >=2:00 new-entry rule or 65–85¢
+entry range. It does not fix the historically negative signal expectancy.
+Momentum can reverse without ever offering a profitable exit, causing
+the full paper position to remain open until official verified settlement.
+There is no stop-loss in this experiment. The project retains all old
+losing paper trades and does not backfill old outcomes.
+
+This is an intentionally high-risk *paper-only* counterfactual: deciding
+not to recognize a loss today does not eliminate the risk of a loss later.
+It should be evaluated on full lifecycle P&L including all settlement
+outcomes, capital tied up, and trade coverage—not just the percentage
+of completed profit-taking exits.
 
 ## Audit capture and limitations
 
