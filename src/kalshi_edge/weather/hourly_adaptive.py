@@ -97,13 +97,8 @@ def fit_adaptive(rows: list[dict]) -> dict:
         beta=_bound(_solve3(gram,rhs))
     # Train-only uncertainty, robustly estimated then shrunk toward the
     # incumbent. Holdout outcomes must never tune the uncertainty factor.
-    residuals=[abs((y-sum(x[j]*beta[j] for j in range(3)))*h)/sigma
-               for x,y,sigma in cases
-               for h in (1.,)]
-    # Fast/slow predictions are in degrees per hour; normalized by the
-    # observed baseline uncertainty. The hours_to_target factor comes
-    # from each original case, reconstructed from (actual-current)/h.
-    # Re-read the lead explicitly to avoid compressing short-lead residuals.
+    # Residuals are degrees per hour; multiply by their original lead
+    # before normalizing by the incumbent baseline's temperature sigma.
     residuals=[]
     for row,(x,y,sigma) in zip(rows,cases):
         h=float(row["hours_ahead"])
