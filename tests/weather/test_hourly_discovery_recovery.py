@@ -179,3 +179,25 @@ def test_no_open_market_has_explicit_no_market_clock_not_unavailable():
     assert '"NO OPEN MARKET"' in html
     assert '"CLOSE TIME UNKNOWN"' in html
     assert "No eligible future hourly Kalshi event is currently listed." in html
+
+
+
+def test_expired_distant_hour_is_not_advertised_as_next_available(tmp_path):
+    future_event="KXTEMPCHIHS-26NOV2219"
+    def transport(request):
+        if "/live_data/weather/" in request.url.path:
+            return httpx.Response(200,json=index())
+        if request.url.path.endswith("/markets"):
+            return httpx.Response(200,json={
+                "markets":[m(future_event,close=NOW-timedelta(minutes=1))],
+                "cursor":""})
+        if request.url.path.endswith("/events"):
+            return httpx.Response(200,json={"events":[],"cursor":""})
+        return httpx.Response(404)
+    async def task():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            return await collect_hourly_once(tmp_path/"weather.sqlite3",
+                client=client,cities=("chicago",),clock=lambda:NOW)
+    result=asyncio.run(task())["cities"]["chicago"]
+    assert result["state"]=="NO_ACTIVE_HOURLY_MARKET"
+    assert result["next_listed_target_utc"] is None
