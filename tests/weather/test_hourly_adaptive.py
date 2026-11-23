@@ -120,3 +120,34 @@ def test_weather_forecast_technical_panel_shows_chosen_actual_nowcast_model():
     assert "index_nowcast_selected_model" in html
     assert "Not a verified accuracy claim" in html
     assert "Research only; not independently certified" in html
+
+
+def test_real_hourly_forecast_version_marks_adaptive_model_for_downstream_validation(monkeypatch):
+    import json
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from kalshi_edge.weather import hourly
+    now=datetime(2026,10,5,17,30,tzinfo=timezone.utc)
+    observed=now-timedelta(minutes=2)
+    raw={"t":int(observed.timestamp()*1000),
+         "v":52.,"status":"normal","contributors":4}
+    conn=sqlite3.connect(":memory:")
+    hourly._init(conn)
+    conn.execute("""INSERT INTO weather_hourly_index
+      (city,event_ms,received_at,temp_f,status,config_version,source_sha,payload)
+      VALUES(?,?,?,?,?,?,?,?)""",(
+        "chicago",raw["t"],(observed+timedelta(minutes=1)).isoformat(),
+        52.,"normal","chicago-temperature-v1.1","a"*64,json.dumps(raw)))
+    fitted=fit_adaptive(samples(80))
+    monkeypatch.setattr(hourly,"index_nowcast_decision",
+        lambda *args,**kwargs:{
+            "enabled":True,"status":"HISTORICAL_INDEX_HOLDOUT_IMPROVED_UNCERTIFIED",
+            "history_hours":80,"validation_hours":24,
+            "model":"OBSERVATION_ADAPTIVE_V3",
+            "parameters":fitted,"live_slopes":(1.5,-.5,52.,raw["t"]),
+            "validation":None})
+    result=hourly._forecast(conn,"chicago",now)
+    assert result["model_kind"]=="HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
+    assert result["index_nowcast_selected_model"]=="OBSERVATION_ADAPTIVE_V3"
+    assert result["real_orders_enabled"] is False
+    assert result["calibration_certified"] is False
