@@ -81,6 +81,7 @@ MAIN = """
     <div class="wx-row"><span>Verified learning hours</span><strong id="wx-hourly-learning-hours">0</strong></div>
     <div class="wx-row"><span>Historical holdout scores</span><strong id="wx-hourly-learning-scores">NOT AVAILABLE</strong></div>
     <div class="wx-row"><span>Index nowcast evidence</span><strong id="wx-hourly-nowcast-state">WAITING</strong></div>
+    <div class="wx-row"><span>Selected hourly prediction model</span><strong id="wx-hourly-nowcast-model">BASELINE</strong></div>
     <div class="wx-row"><span>Historical index hours</span><strong id="wx-hourly-nowcast-hours">0</strong></div>
     <div class="wx-row"><span>Nowcast lead-time model</span><strong id="wx-hourly-nowcast-lead">—</strong></div>
     <div class="wx-row"><span>Nowcast holdout (MAE / CRPS / interval coverage)</span><strong id="wx-hourly-nowcast-scores">NOT MEASURED</strong></div>
@@ -287,6 +288,12 @@ SCRIPT = r"""<script>
     put("wx-hourly-learning",row.learning_status||"WAITING FOR EVIDENCE");
     put("wx-hourly-learning-hours",row.learning_verified_hours??0);
     put("wx-hourly-nowcast-state",row.index_nowcast_status||"WAITING FOR INDEX");
+    put("wx-hourly-nowcast-model",[
+         "HISTORICAL_INDEX_NOWCAST_V2",
+         "HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
+         ].includes(row.model_kind)?
+         (row.index_nowcast_selected_model||"UNKNOWN MODEL"):
+         (row.model_kind||"BASELINE"));
     put("wx-hourly-nowcast-hours",row.index_nowcast_history_hours??0);
     put("wx-hourly-nowcast-lead",row.index_nowcast_lead_minutes!=null?
         row.index_nowcast_lead_minutes+" minutes":"—");

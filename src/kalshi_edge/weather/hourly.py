@@ -660,7 +660,13 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                     live[3]/1000,tz=timezone.utc)).total_seconds()/3600
                 mean,sigma=nowcast_prediction(live[2],sigma,live[0],live[1],
                             nowcast_hours,nowcast)
-                result["model_kind"]="HISTORICAL_INDEX_NOWCAST_V2"
+                # A changed live baseline must have a distinct version so
+                # V4's future physical-ensemble locks cannot inherit the old
+                # model's validation evidence.
+                result["model_kind"]=(
+                    "HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
+                    if nowcast["model"]=="OBSERVATION_ADAPTIVE_V3"
+                    else "HISTORICAL_INDEX_NOWCAST_V2")
                 result["index_nowcast_selected_model"]=nowcast["model"]
         else:
             result["index_nowcast_status"]="UNSUPPORTED_LEAD_TIME"
