@@ -272,3 +272,9 @@ el("arm").addEventListener("click",()=>action("arm"));
 el("pause").addEventListener("click",()=>action("pause"));
 refresh();setInterval(refresh,900);
 </script></body></html>"""
+
+
+def render_value_strat_page() -> str:
+    """New active V2 page; preserve legacy render_strat_page for V1 audits."""
+    from .strat_value_ui import render_value_strat_page as render
+    return render()
