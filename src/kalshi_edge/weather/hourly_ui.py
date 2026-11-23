@@ -390,6 +390,7 @@ SCRIPT = r"""<script>
       put("wx-hm-state",c.status||"UNAVAILABLE");
       const h=s.collector||{},feed=h.hourly||{},outcome=h.hourly_settlement||{};
       const physical=h.hourly_physics||{};
+      const quotes=h.hourly_quotes||{};
       put("wx-hd-settlement",outcome.state||"NOT STARTED");
       const summary=["Automatic Kalshi hourly collector: "+(h.state||"STARTING")];
       for(const city of ["chicago","nyc","miami","la-coastal"]){
@@ -406,6 +407,11 @@ SCRIPT = r"""<script>
           (x.reason_code?" · "+x.reason_code:"")+
           (x.reason?" ("+x.reason+")":""));
       }
+      summary.push("Kalshi quote feed: "+(quotes.state||"WAITING")+
+        " · current asks: "+(quotes.valid_asks??0)+
+        " · no visible liquidity: "+(quotes.no_visible_ask??0)+
+        " · errors: "+(quotes.unavailable??0)+
+        (quotes.reason?" ("+quotes.reason+")":""));
       summary.push("Physical HRRR/NBM: "+(physical.state||"WAITING")+
         (physical.cities&&physical.cities[card?.value]?
           " · "+(physical.cities[card.value].state||"WAITING")+
