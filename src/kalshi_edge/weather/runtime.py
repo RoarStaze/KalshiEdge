@@ -30,6 +30,7 @@ from .hourly_physics import collect_hourly_physics_once
 from .hourly_physical_learning import (
     journal_physical_pairs, freeze_candidate_locks,
 )
+from .hourly_quotes import collect_hourly_quotes_once
 from .status import weather_database_path
 
 
@@ -46,6 +47,7 @@ FORECAST_JOURNAL_SECONDS = 600
 SETTLEMENT_POLL_SECONDS = 6 * 3600
 HOURLY_INDEX_SECONDS = 120
 HOURLY_SETTLE_SECONDS = 300
+HOURLY_QUOTES_SECONDS = 20
 PHYSICAL_NWP_SECONDS = 3600
 
 
@@ -139,6 +141,7 @@ class WeatherSupervisor:
         hourly_collect: Callable[[Path], Awaitable[dict]] = collect_hourly_once,
         hourly_settle: Callable[[Path], Awaitable[dict]] = settle_hourly_once,
         hourly_physics_collect: Callable[[Path], Awaitable[dict]] = collect_hourly_physics_once,
+        hourly_quotes_collect: Callable[[Path], Awaitable[dict]] = collect_hourly_quotes_once,
     ):
         self.db_path = Path(db_path)
         self.status_path = collector_health_path(self.db_path)
@@ -149,6 +152,8 @@ class WeatherSupervisor:
         self._collect_hourly = hourly_collect
         self._settle_hourly = hourly_settle
         self._collect_hourly_physics = hourly_physics_collect
+        self._collect_hourly_quotes = hourly_quotes_collect
+        self._hourly_quotes = {"state":"STARTING"}
         self._hourly_physics = {"state":"STARTING"}
         self._hourly = {city: {"state":"STARTING"} for city in
                         ("chicago","nyc","la-coastal","miami")}
@@ -177,6 +182,7 @@ class WeatherSupervisor:
             "hourly": self._hourly,
             "hourly_settlement": self._hourly_settlement,
             "hourly_physics": self._hourly_physics,
+            "hourly_quotes": self._hourly_quotes,
             "real_orders_enabled": False,
         }
         temp_path = None
@@ -411,6 +417,28 @@ class WeatherSupervisor:
         finally:
             self._persist()
 
+    async def poll_hourly_quotes(self) -> None:
+        """Independent price evidence never blocks the official index feed."""
+        try:
+            report=await asyncio.wait_for(
+                self._collect_hourly_quotes(self.db_path),timeout=65)
+            if (not isinstance(report,dict) or
+                report.get("mode")!="HOURLY_QUOTES_READ_ONLY" or
+                report.get("real_orders_enabled") is not False):
+                raise ValueError("invalid read-only Kalshi quote response")
+            self._hourly_quotes={
+                "state":report.get("state","READY" if report.get("valid_asks") else "UNAVAILABLE"),
+                "checked":int(report.get("checked",0)),
+                "valid_asks":int(report.get("valid_asks",0)),
+                "no_visible_ask":int(report.get("no_visible_ask",0)),
+                "unavailable":int(report.get("unavailable",0)),
+                "errors":report.get("errors",[])[:4],
+                "checked_at":datetime.now(timezone.utc).isoformat()}
+        except Exception as exc:
+            self._hourly_quotes={"state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:190]}
+        self._persist()
+
     async def poll_hourly_settlements(self) -> None:
         try:
             report=await asyncio.wait_for(
@@ -436,6 +464,7 @@ class WeatherSupervisor:
         # for reproducible archives but is NEVER scheduled by kalshiedge start.
         await asyncio.gather(
             every(self.poll_hourly, HOURLY_INDEX_SECONDS),
+            every(self.poll_hourly_quotes, HOURLY_QUOTES_SECONDS),
             every(self.poll_hourly_settlements, HOURLY_SETTLE_SECONDS),
             every(self.poll_hourly_physics, PHYSICAL_NWP_SECONDS),
         )
