@@ -96,6 +96,7 @@ def test_no_trade_if_price_is_fair_expensive_or_fees_erase_edge():
     ({"forecast":"SKIP"}, "INVALID_FROZEN_FORECAST"),
     ({"model_hash":None}, "UNVERIFIED_MODEL_PROVENANCE"),
     ({"model_hash":"abc"}, "UNVERIFIED_MODEL_PROVENANCE"),
+    ({"strike":None}, "INVALID_FROZEN_STRIKE"),
     ({"coin_flip_assessment":"HIGH"}, "NEAR_STRIKE_RISK"),
     ({"coin_flip_assessment":"UNAVAILABLE"}, "NEAR_STRIKE_RISK"),
     ({"p_yes":0.8,"p_no":0.15}, "INCONSISTENT_MODEL_PROBABILITIES"),
