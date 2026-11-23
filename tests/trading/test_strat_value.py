@@ -18,7 +18,7 @@ SHA = "a" * 64
 
 def final(ticker=TICKER, close=CLOSE, **overrides):
     f = {
-        "market_ticker": ticker, "forecast": "ABOVE",
+        "market_ticker": ticker, "forecast": "ABOVE", "strike": 65000.0,
         "checkpoint_seconds": 480, "scheduled_ts_ns": close - 480*NS,
         "prediction_ts_ns": close - 480*NS,
         "p_yes": 0.96, "p_no": 0.04, "confidence": 0.96,
@@ -243,3 +243,35 @@ def test_v2_page_uses_separate_value_strategy_and_unvalidated_profit_label():
         assert token in html
     assert "PAPER ONLY" in html
     assert "No verified profitable edge" in html
+
+
+
+def test_public_market_strike_and_close_must_match_frozen_signal_when_available(tmp_path):
+    from datetime import datetime, timezone
+    now=[BASE+3*NS]
+    class ConflictingFeed(Feed):
+        def __init__(self, mismatch):
+            super().__init__()
+            self.mismatch=mismatch
+        def quote(self,ticker):
+            market,book=super().quote(ticker)
+            market["market"]["floor_strike"]=(
+                "66000.00" if self.mismatch=="strike" else "65000.00"
+            )
+            market["market"]["close_time"]=datetime.fromtimestamp(
+                (CLOSE + (60*NS if self.mismatch=="close" else 0))/NS,
+                timezone.utc
+            ).isoformat()
+            return market,book
+
+    for mismatch in ("strike","close"):
+        root=tmp_path/mismatch
+        trader=ValuePaperTrader(
+            root,lambda:live(now[0]),client=ConflictingFeed(mismatch),
+            clock=lambda:now[0],
+        )
+        trader.arm("1.00")
+        trader.tick()
+        assert trader.ledger.open_position() is None
+        assert trader.status()["last_signal"]=="PUBLIC_ORDERBOOK_UNAVAILABLE"
+        trader.close()
