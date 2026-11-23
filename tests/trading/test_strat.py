@@ -1172,3 +1172,40 @@ def test_profit_only_slowdown_rule_visible_on_strat_page():
     assert 'id="projectedExitPnl"' in page
     assert "profit only" in page.lower()
     assert "settlement" in page.lower()
+
+
+
+def test_projected_profit_does_not_survive_missing_or_expired_quotes(tmp_path):
+    now = [BASE]
+    close = BASE + 600*NS
+    values = list(map(D, [
+        "0.64", "0.64", "0.65", "0.66", "0.68", "0.80",
+    ]))
+    def live():
+        return {
+            "market_ticker": TICKER, "market_close_ts_ns": close,
+            "latest_prediction": {
+                "market_ticker": TICKER, "prediction_ts_ns": now[0],
+            }
+        }
+    trader = StratPaperTrader(
+        tmp_path, live,
+        client=FakeMarketClient([(x,x+D("0.02")) for x in values]),
+        clock=lambda: now[0],
+        settlement_reader=lambda _: None,
+    )
+    trader.arm("1.00")
+    for i in range(len(values)):
+        now[0] = BASE+i*NS
+        trader.tick(now[0])
+    assert D(trader.status()["projected_exit_net_pnl_dollars"]) > 0
+    assert trader.ledger.open_position() is not None
+    now[0] = BASE+len(values)*NS
+    trader.tick(now[0])  # exhausted live quote feed
+    assert trader.status()["projected_exit_net_pnl_dollars"] is None
+    now[0] = close + NS
+    trader.tick(now[0])  # no official result; do not infer a settlement
+    assert trader.status()["projected_exit_net_pnl_dollars"] is None
+    assert trader.status()["last_signal"] == "WAITING_FOR_OFFICIAL_SETTLEMENT"
+    assert trader.ledger.open_position() is not None
+    trader.close()
