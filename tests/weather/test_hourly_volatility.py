@@ -94,3 +94,35 @@ def test_volatility_candidate_can_change_real_nowcast_distribution_when_validate
     hi_mean, hi_sigma = nowcast_prediction(55., .8, 1., 4., .5, decision)
     assert hi_sigma > lo_sigma
     assert lo_mean != hi_mean
+
+
+def test_live_forecast_exposes_distinct_v8_model_version_and_remains_paper_only(monkeypatch):
+    import json
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+    from kalshi_edge.weather import hourly
+
+    now = datetime(2026,10,5,17,30,tzinfo=timezone.utc)
+    observed = now-timedelta(minutes=2)
+    raw = {"t":int(observed.timestamp()*1000),
+           "v":52.,"status":"normal","contributors":4}
+    conn = sqlite3.connect(":memory:")
+    hourly._init(conn)
+    conn.execute("""INSERT INTO weather_hourly_index
+       (city,event_ms,received_at,temp_f,status,config_version,source_sha,payload)
+       VALUES(?,?,?,?,?,?,?,?)""",
+       ("chicago",raw["t"],(observed+timedelta(minutes=1)).isoformat(),
+        52.,"normal","chicago-temperature-v1.1","a"*64,json.dumps(raw)))
+    fitted = fit_volatility(cases(120))
+    monkeypatch.setattr(hourly,"index_nowcast_decision",
+        lambda *args, **kwargs:{
+            "enabled":True,"status":"HISTORICAL_INDEX_HOLDOUT_IMPROVED_UNCERTIFIED",
+            "history_hours":120,"validation_hours":24,
+            "model":VOLATILITY_MODEL,"parameters":fitted,
+            "live_slopes":(1.5,-.5,52.,raw["t"]),"validation":None})
+    forecast = hourly._forecast(conn,"chicago",now)
+    assert forecast["model_kind"]=="HISTORICAL_REGIME_SIGMA_INDEX_NOWCAST_V8"
+    assert forecast["index_nowcast_selected_model"]==VOLATILITY_MODEL
+    assert forecast["pre_physical_model_kind"]==forecast["model_kind"]
+    assert forecast["calibration_certified"] is False
+    assert forecast["real_orders_enabled"] is False
