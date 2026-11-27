@@ -347,3 +347,28 @@ def test_future_publication_cannot_promote_on_lookahead_fit():
     report=compare_models(rows)
     assert report["eligible_for_live_promotion"] is False
     assert report["status"]=="INSUFFICIENT_CAUSAL_TRAINING"
+
+
+def test_live_diurnal_feature_uses_actual_contract_hour_not_rounded_lead(monkeypatch):
+    from kalshi_edge.weather import hourly_nowcast as hn
+    observed=[]
+    asof=datetime(2026,8,1,17,38,tzinfo=UTC)
+    actual_target=datetime(2026,8,1,18,0,tzinfo=UTC)
+    points=[(int((asof-timedelta(minutes=4)).timestamp()*1000),
+             int((asof-timedelta(minutes=3)).timestamp()*1000),
+             56.,"normal")]
+    monkeypatch.setattr(hn,"_load_points",lambda *args,**kwargs:(points,None))
+    monkeypatch.setattr(hn,"_slopes_from_points",
+                        lambda *args,**kwargs:(1.,1.,56.,points[0][0]))
+    monkeypatch.setattr(hn,"choose_index_nowcast",lambda *args,**kwargs:{
+        "enabled":True,"model":hn.DIURNAL_MODEL,"history_hours":144,
+        "status":"HISTORICAL_INDEX_HOLDOUT_IMPROVED_UNCERTIFIED"})
+    monkeypatch.setattr(hn,"_diurnal_delta",
+                        lambda pts,ts,now_ms,target_ms:
+                            observed.append(target_ms) or 1.2)
+    with sqlite3.connect(":memory:") as conn:
+        d=hn.index_nowcast_decision(conn,"chicago",asof,lead_minutes=30,
+                                   config_version="v1",target_utc=actual_target)
+    assert d["enabled"]
+    assert d["live_diurnal_delta_f"]==1.2
+    assert observed==[int(actual_target.timestamp()*1000)]
