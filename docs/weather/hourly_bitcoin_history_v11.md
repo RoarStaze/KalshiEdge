@@ -1,0 +1,16 @@
+# WeatherEdge V11 — Bitcoin-style hourly History
+
+The user approved the Bitcoin History screenshot (November 27, 2026), with four summary KPIs and a single full-width seven-column table. Implement that same visual hierarchy on /weather/history; reuse existing dark/neon styles, typography, pills, and responsive table. The Weather History page currently repeats Calibration, which must move to Train only.
+
+Grounding: SQLite weather_hourly_snapshots/weather_hourly_settlements (legacy one-per-hour first forecast) and weather_hourly_forward_snapshots/weather_hourly_forward_outcomes (V9 five lead checkpoints). All data local and read-only. No external API requests when reading history.
+
+- **One decision per (city, event)**: Prefer V9 when available, selecting the latest already-frozen lead-time checkpoint by lowest lead_bucket, independent of outcomes. Fall back to legacy first-frozen snapshot if no V9 row. Do not count all 5 V9 checkpoints as 5 independent events. V9 and legacy cannot both count for one event.
+- Accuracy = correct / (correct + incorrect), from actual frozen YES/NO direction vs settlement result; exclude PENDING and SKIP. No recorded hourly SKIP decisions currently exist: show SKIP=0 with explicit 'not recorded' caption; do not call missing markets SKIP.
+- V9 outcomes must be audited with existing `hourly_forward._frozen/_outcome`, which verify hashes, source index and exact event/contract/threshold. Legacy outcomes must be individually replayed with canonical index and market response plus stored hashes, consistent with `hourly_calibration`. Missing source tables are empty; corrupted sources fail closed, never show false accuracy.
+- The screenshot's columns: Market closes (local), Market (city + ticker), Forecast (ABOVE/BELOW from frozen directional p), Probability (favored-side probability), Confidence (—, separate calibrated confidence is not recorded), Settled outcome (ABOVE/BELOW/awaiting settlement), Result (CORRECT/INCORRECT/PENDING). Show actual close_time_utc from the frozen selected market; never construct it from the index target hour. Never invent live prices or balances.
+- Read-only GET /api/weather/hourly/history on real server and synthetic preview (zero counts). Response JSON {mode,status,summary,forecasts,real_orders_enabled:false}; strict source-audited data only. Do not expose source raw payloads or secrets. Count all eligible observations but return bounded latest 500 rows. If total exceeds bounded audit scope, fail closed rather than make incorrect totals.
+- UI: four equal cards in top row, full-width striped result table, Show dropdown All/Correct/Incorrect/Pending/Skip, local browser timezone timestamp formatting, fetch with no-store every 20 seconds and on filter change. Empty/offline/error states explicit. No navigation to BTC history; training/calibration still at /weather/train.
+- Frontend escapes untrusted ticker/city strings via textContent. No innerHTML with API content. Mobile table scroll horizontally.
+- No changes to trading, predictor, settlement writer, BTC/Gold, or any automatic weather order behavior.
+
+Verification: pytest history reader, audit/tamper/dedup/pending, page and preview/production routes, frontend JS syntax; full GitHub Actions and Docker build on exact commit; merge main only after green.
