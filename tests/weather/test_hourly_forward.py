@@ -51,6 +51,17 @@ def seed(db,row):
             (row["city"],row["source_event_ms"],row["source_received_at"],
              54.,"normal",row["source_config_version"],"a"*64,
              json.dumps(source,sort_keys=True)))
+        chosen=row["markets"][0]
+        metadata={"city":row["city"],"event_ticker":row["event_ticker"],
+                  "ticker":chosen["ticker"],"threshold_f":chosen["threshold_f"],
+                  "source":"KALSHI_WEATHER_INDEX",
+                  "close_time_utc":chosen["close_time_utc"]}
+        conn.execute("""INSERT OR IGNORE INTO weather_hourly_markets
+            (ticker,city,event_ticker,target_utc,threshold_f,received_at,metadata)
+            VALUES(?,?,?,?,?,?,?)""",
+            (chosen["ticker"],row["city"],row["event_ticker"],row["target_utc"],
+             chosen["threshold_f"],chosen["market_metadata_received_at"],
+             json.dumps(metadata,sort_keys=True)))
 
 
 def exchange(target,city="chicago",settlement_f=56.,strike=55.,outcome="yes",
