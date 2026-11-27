@@ -126,3 +126,27 @@ def test_live_forecast_exposes_distinct_v8_model_version_and_remains_paper_only(
     assert forecast["pre_physical_model_kind"]==forecast["model_kind"]
     assert forecast["calibration_certified"] is False
     assert forecast["real_orders_enabled"] is False
+
+
+def test_v8_must_not_displace_a_v7_model_that_passes_when_regime_sigma_fails(monkeypatch):
+    """The V7 champion remains available if a V8 challenger overfits sigma."""
+    from kalshi_edge.weather import hourly_nowcast as impl
+
+    def controlled_scores(rows, model, scale, params=None):
+        if len(rows) > 24:  # training scores favor the V8 challenger
+            crps = (.1 if model == VOLATILITY_MODEL else
+                    .2 if model == impl.ADAPTIVE_MODEL else .5)
+            return {"mae_f":.4, "crps":crps, "coverage_90":.9}
+        if model is None:
+            return {"mae_f":1.2, "crps":1.0, "coverage_90":.90}
+        if model == impl.ADAPTIVE_MODEL:
+            return {"mae_f":.7, "crps":.6, "coverage_90":.88}
+        if model == VOLATILITY_MODEL:
+            return {"mae_f":.7, "crps":1.05, "coverage_90":.9}
+        return {"mae_f":1.1, "crps":.95, "coverage_90":.85}
+
+    monkeypatch.setattr(impl, "_score", controlled_scores)
+    chosen = impl.choose_index_nowcast(cases())
+    assert chosen["model"] == impl.ADAPTIVE_MODEL
+    assert chosen["enabled"] is True
+    assert chosen["validation"]["candidate_crps"] == .6
