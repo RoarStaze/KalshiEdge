@@ -453,7 +453,8 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
 
 def index_nowcast_decision(conn: sqlite3.Connection, city: str,
                            asof: datetime, *, lead_minutes: int,
-                           config_version: str) -> dict:
+                           config_version: str,
+                           target_utc: datetime | None = None) -> dict:
     fail={"enabled":False,"status":"UNSUPPORTED_LEAD_TIME",
           "history_hours":0,"training_hours":0,"validation_hours":0,
           "model":None,"sigma_scale":1.,"validation":None,
@@ -470,9 +471,14 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
         decision["live_slopes"]=_slopes_from_points(points,now)
         times=[r[0] for r in points]
         ms=int(now.timestamp()*1000)
+        exact_target=(_utc(target_utc) if target_utc is not None else
+                      now+timedelta(minutes=lead_minutes))
+        actual_target_ms=int(exact_target.timestamp()*1000)
+        if (actual_target_ms<=ms or actual_target_ms-ms>3600000):
+            return {**fail,"status":"INVALID_HOURLY_TARGET"}
         if decision.get("model")==DIURNAL_MODEL:
             decision["live_diurnal_delta_f"]=_diurnal_delta(
-                points,times,ms,ms+lead_minutes*60000)
+                points,times,ms,actual_target_ms)
 
         # Promotion cannot be decided from training MAE or imagined
         # settlement: only the collector's saved, checksum-verified
@@ -498,7 +504,7 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
                 validate_hybrid(match.get("parameters")) and
                 decision["live_slopes"] is not None):
                 live_delta=_diurnal_delta(
-                    points,times,ms,ms+lead_minutes*60000)
+                    points,times,ms,actual_target_ms)
                 if live_delta is not None:
                     # Keep the original incumbent's score metadata separate.
                     decision["incumbent_model"]=decision["model"]
