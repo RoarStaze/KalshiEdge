@@ -28,6 +28,7 @@ from kalshi_edge.weather.predictor import read_weather_forecasts
 from kalshi_edge.weather.calibration import calibration_status
 from kalshi_edge.weather.hourly import read_hourly_forecasts, hourly_calibration, hourly_status
 from kalshi_edge.weather.hourly_history import read_hourly_history
+from kalshi_edge.weather.hourly_model_comparison import _load_cached_for_root
 
 PREVIEW_PORT = 8900
 _RESERVED_PORTS = frozenset((8898, 8899))
@@ -279,6 +280,9 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
                 return
             if path == "/api/weather/hourly/history":
                 self._json(200, read_hourly_history(Path("."), preview=True))
+                return
+            if path == "/api/weather/hourly/model-comparison":
+                self._json(200, _load_cached_for_root(Path("."),preview=True))
                 return
             if path == "/api/weather/hourly/calibration":
                 self._json(200, hourly_calibration(Path("."), preview=True))
