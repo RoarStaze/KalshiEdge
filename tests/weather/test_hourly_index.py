@@ -279,8 +279,12 @@ def test_weather_ui_only_displays_hourly_index_markets():
             assert "KXTEMPCHIHS" in page
         assert 'data-market="weather"' in page
         assert "PAPER ONLY" in page
-        assert "/api/weather/hourly/forecast" in page
-        assert "/api/weather/hourly/calibration" in page
+        if section=="history":
+            assert "/api/weather/hourly/history" in page
+            assert "/api/weather/hourly/forecast" not in page
+        else:
+            assert "/api/weather/hourly/forecast" in page
+            assert "/api/weather/hourly/calibration" in page
         assert "Predicted daily maximum" not in page
         assert "Daily high · airport" not in page
         assert "/api/manual-trade/" not in page

@@ -77,10 +77,14 @@ def test_forecast_navigation_and_technical_evidence_are_preserved():
     assert "row.status" in html
     assert "quote_received_at" in html
     assert "close_time_utc" in html
-    for section in ("train","history","data"):
+    for section in ("train","data"):
         other=render_hourly_page(section,"")
         assert 'class="wx-trade-grid"' not in other
         assert "/api/weather/hourly/calibration" in other
+    history=render_hourly_page("history","")
+    assert 'class="wx-trade-grid"' not in history
+    assert "/api/weather/hourly/history" in history
+    assert "/api/weather/hourly/calibration" not in history
 
 
 def test_weather_trade_preview_only_uses_fresh_verified_ask():

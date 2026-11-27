@@ -125,7 +125,7 @@ def test_wilson_interval_contains_observed_rate():
 
 def test_weather_calibration_pages_show_missing_evidence_not_guaranteed_90_percent():
     from kalshi_edge.weather.research_ui import render_weather_page
-    for page in ("forecast","train","history"):
+    for page in ("forecast","train"):
         html=render_weather_page(page)
         assert "/api/weather/hourly/calibration" in html
         assert 'id="wx-hm-state"' in html
@@ -134,6 +134,11 @@ def test_weather_calibration_pages_show_missing_evidence_not_guaranteed_90_perce
         assert "NOT CERTIFIED" in html or "not" in html
         assert "hourly" in html.lower()
         assert "/api/manual-trade/" not in html
+    history=render_weather_page("history")
+    assert "/api/weather/hourly/history" in history
+    assert 'id="wx-history-accuracy"' in history
+    assert 'id="wx-hm-matched"' not in history
+    assert "/api/manual-trade/" not in history
     assert "90% modeled interval (not validated)" in render_weather_page("forecast")
 
 

@@ -37,7 +37,11 @@ def test_weather_pages_use_isolated_paper_only_navigation(section):
     assert 'PAPER ONLY' in page
     for path in ("/weather", "/weather/train", "/weather/history", "/weather/data"):
         assert f'href="{path}"' in page
-    assert '/api/weather/hourly/status' in page
+    if section=="history":
+        assert '/api/weather/hourly/history' in page
+        assert '/api/weather/hourly/status' not in page
+    else:
+        assert '/api/weather/hourly/status' in page
     assert '/api/live' not in page
     assert '/api/manual-trade/' not in page
     assert '/api/armed-trade/' not in page
