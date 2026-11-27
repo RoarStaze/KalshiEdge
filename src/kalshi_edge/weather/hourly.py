@@ -653,7 +653,8 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
         if 0<lead<=60:
             bucket=min(LEAD_MINUTES,key=lambda k:abs(k-lead))
             nowcast=index_nowcast_decision(conn,city,asof,
-                  lead_minutes=bucket,config_version=last[4])
+                  lead_minutes=bucket,config_version=last[4],
+                  target_utc=target)
             result["index_nowcast_lead_minutes"]=bucket
             result["index_nowcast_status"]=nowcast["status"]
             result["index_nowcast_history_hours"]=nowcast["history_hours"]
