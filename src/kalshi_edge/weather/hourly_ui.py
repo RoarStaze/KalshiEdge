@@ -794,12 +794,13 @@ SCRIPT = r"""<script>
              const base=item.incumbent||{},candidate=item.candidate||{};
              line((item.city||"city")+" · "+(item.lead_minutes||"?")+"min"+
                   " · matched hours "+(item.matched_hours||0)+
+                  " · frozen current-model hours "+(item.frozen_live_hours||0)+
                   " · verified contracts "+(item.verified_market_hours||0)+
-                  " · V12 MAE "+metric(base.mae_f,2)+"°F"+
+                  " · Current MAE "+metric(base.mae_f,2)+"°F"+
                   " / V13 "+metric(candidate.mae_f,2)+"°F"+
-                  " · V12 CRPS "+metric(base.crps)+
+                  " · Current CRPS "+metric(base.crps)+
                   " / V13 "+metric(candidate.crps)+
-                  " · V12 Brier "+metric(base.brier)+
+                  " · Current Brier "+metric(base.brier)+
                   " / V13 "+metric(candidate.brier)+
                   " · "+(item.eligible_for_live_promotion?
                         "GATED PASS":"NO PROMOTION")+
