@@ -6,6 +6,7 @@ from kalshi_edge.bootstrap.site_pages import (
     STYLE, MARKET_SELECTOR_STYLE, render_market_selector,
 )
 from kalshi_edge.bootstrap.site_motion import MOTION_STYLE, MOTION_SCRIPT
+from .hourly_history_ui import HISTORY_STYLE, HISTORY_MARKUP, HISTORY_SCRIPT
 
 PAGES = {
     "forecast": ("Hourly temperature", "Predict the next Kalshi Weather Index observation and every listed hourly YES threshold."),
@@ -822,7 +823,7 @@ def render_hourly_page(section: str, weather_style: str) -> str:
     if section not in PAGES:
         raise ValueError("Unknown WeatherEdge hourly page")
     base_css = PAGE.split("<style>",1)[1].split("</style>",1)[0]
-    css = "\n".join((base_css,STYLE,MOTION_STYLE,MARKET_SELECTOR_STYLE,weather_style,HOURLY_STYLE))
+    css = "\n".join((base_css,STYLE,MOTION_STYLE,MARKET_SELECTOR_STYLE,weather_style,HOURLY_STYLE,HISTORY_STYLE))
     links=[]
     for key,label,url in NAV:
         selected = " is-active" if key==section else ""
@@ -832,8 +833,14 @@ def render_hourly_page(section: str, weather_style: str) -> str:
     selector=render_market_selector("weather")
     # The Trade route mirrors Bitcoin: exactly two equal-height main panels.
     # V9/V1 calibration metrics remain available on Train and History.
-    details = MAIN if section=="forecast" else (
-        CALIBRATION if section in ("train","history") else DATA)
+    details = (
+        MAIN if section=="forecast" else
+        CALIBRATION if section=="train" else
+        HISTORY_MARKUP +
+        '<details class="wx-hourly-details wx-history-proof"><summary>'
+        'Prospective calibration and source evidence</summary>' +
+        CALIBRATION + '</details>' if section=="history" else DATA
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -851,4 +858,4 @@ def render_hourly_page(section: str, weather_style: str) -> str:
 <footer class="wx-footer">Hourly Kalshi Weather Index research · paper only.
 Canonical published minute-index values are the contract underlyings.
 All probabilities are unvalidated research estimates until forward evidence supports them.</footer>
-</div>{SCRIPT}{MOTION_SCRIPT}</body></html>"""
+</div>{SCRIPT}{HISTORY_SCRIPT if section=="history" else ""}{MOTION_SCRIPT}</body></html>"""
