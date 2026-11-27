@@ -173,3 +173,58 @@ def test_local_comparison_only_reads_original_timestamped_evidence(tmp_path):
     with sqlite3.connect(db) as c:
         assert c.execute("SELECT COUNT(*) FROM weather_hourly_snapshots").fetchone()[0]==0
         assert c.execute("SELECT COUNT(*) FROM weather_hourly_forward_snapshots").fetchone()[0]==0
+
+
+def test_cache_report_is_read_only_and_fail_closed_if_corrupted(tmp_path):
+    from kalshi_edge.weather.hourly_model_comparison import (
+        write_local_comparison,read_local_comparison)
+    db=tmp_path/"data"/"weather"/"weatheredge.sqlite3"
+    db.parent.mkdir(parents=True)
+    report=compare_models(cases())
+    stored={"mode":"HOURLY_MODEL_PAIRED_COMPARISON_V13",
+            "status":"RESEARCH_SCORED","groups":[
+                {"city":"chicago","lead_minutes":30,**report}],
+            "real_orders_enabled":False,"calibration_certified":False,
+            "any_promoted":report["eligible_for_live_promotion"]}
+    write_local_comparison(db,stored)
+    loaded=read_local_comparison(db)
+    assert loaded["status"]=="RESEARCH_SCORED"
+    assert len(loaded["groups"])==1
+    assert loaded["real_orders_enabled"] is False
+    p=db.parent/"hourly-model-comparison.json"
+    import json
+    data=json.loads(p.read_text())
+    data["groups"][0]["eligible_for_live_promotion"]=False
+    p.write_text(json.dumps(data))
+    assert read_local_comparison(db)["status"]=="INVALID_COMPARISON_CACHE"
+
+
+def test_weather_train_renders_real_comparison_and_explicit_no_proof_state():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("train","")
+    assert "Incumbent vs challenger" in html
+    assert 'id="wx-model-comparison"' in html
+    assert "/api/weather/hourly/model-comparison" in html
+    assert "No verified market comparison" in html
+
+
+def test_paired_comparison_api_returns_no_fabricated_preview_scores(tmp_path):
+    from http.server import ThreadingHTTPServer
+    import threading
+    import httpx
+    from kalshi_edge.bootstrap.preview_site import make_preview_handler
+    server=ThreadingHTTPServer(("127.0.0.1",0),make_preview_handler())
+    worker=threading.Thread(target=server.serve_forever,daemon=True)
+    worker.start()
+    try:
+        with httpx.Client(timeout=5,trust_env=False) as c:
+            r=c.get(f"http://127.0.0.1:{server.server_port}/api/weather/hourly/model-comparison")
+            assert r.status_code==200
+            data=r.json()
+            assert data["real_orders_enabled"] is False
+            assert data["any_promoted"] is False
+            assert data["groups"]==[]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
