@@ -155,7 +155,7 @@ def test_ten_unique_verified_events_unlock_accuracy_without_double_count(tmp_pat
     db=tmp_path/"wx.sqlite3"
     for i in range(10):
         target=START+timedelta(hours=i)
-        _record(db,target,lead=15,prob=.7,yes="yes")
+        _record(db,target,lead=15,prob=.7,yes=None)  # No outcome until final 5-minute fixture.
         _record(db,target,lead=5,prob=.9,yes="yes" if i<8 else "no")
     out=read_hourly_history(tmp_path,db_path=db)
     assert out["summary"]["total_final_forecasts"]==10
