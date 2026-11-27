@@ -122,10 +122,10 @@ def test_analogue_never_uses_latest_receipt_or_post_anchor_data():
     anchor=target-timedelta(minutes=30)
     points=[]
     for day in range(3):
-        base=datetime(2026,11,23+day,18,20,tzinfo=UTC)
-        for i in range(9):
+        base=datetime(2026,11,23+day,18,0,tzinfo=UTC)
+        for i in range(13):
             t=base+timedelta(minutes=i*5)
-            v=50.+(i/8)*4 if day==0 else 55.+(i/8)*3 if day==1 else 58.+(i/8)*5
+            v=50.+(i/12)*4 if day==0 else 55.+(i/12)*3 if day==1 else 58.+(i/12)*5
             received=t+timedelta(minutes=1)
             points.append((int(t.timestamp()*1000),int(received.timestamp()*1000),v,"normal"))
     # Current hour available, prior-day analogue must be drawn only from
