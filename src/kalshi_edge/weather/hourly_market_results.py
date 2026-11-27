@@ -91,19 +91,23 @@ async def collect_final_market_results_once(
         conn.commit()
         # Match exact market ticker and frozen evidence. The fallback preserves
         # older pre-V9 snapshots as well as all V9 prospective lead checkpoints.
-        rows=conn.execute("""SELECT city,event_ticker,market_ticker,target_utc,
-                               forecast_json,forecast_sha,'v9' AS kind
-             FROM weather_hourly_forward_snapshots
-             WHERE target_utc>=? AND target_utc<=?
-             UNION ALL
-             SELECT city,event_ticker,market_ticker,target_utc,
-                    forecast_json,forecast_sha,'legacy' AS kind
-             FROM weather_hourly_snapshots
-             WHERE target_utc>=? AND target_utc<=?""",
-             ((now-timedelta(days=7)).isoformat(),
-              (now-timedelta(minutes=6)).isoformat(),
-              (now-timedelta(days=7)).isoformat(),
-              (now-timedelta(minutes=6)).isoformat())).fetchall()
+        tables={r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        parts=[]
+        params=[]
+        for table,kind in (
+            ("weather_hourly_forward_snapshots","v9"),
+            ("weather_hourly_snapshots","legacy"),
+        ):
+            if table not in tables:
+                continue
+            # Table identifiers are fixed literals, never request-derived.
+            parts.append(f"""SELECT city,event_ticker,market_ticker,target_utc,
+                forecast_json,forecast_sha,'{kind}' AS kind
+                FROM {table} WHERE target_utc>=? AND target_utc<=?""")
+            params.extend(((now-timedelta(days=7)).isoformat(),
+                           (now-timedelta(minutes=6)).isoformat()))
+        rows=conn.execute(" UNION ALL ".join(parts),params).fetchall() if parts else []
         existing={tuple(x) for x in conn.execute(
            "SELECT city,event_ticker,market_ticker FROM weather_hourly_final_market_results")}
     pending={}
