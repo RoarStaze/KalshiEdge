@@ -13,6 +13,9 @@ HISTORY_STYLE = r"""
   padding-top:7px;color:#aebbc3;font-size:11px}
 .wx-history-meta .wx-history-marker{font-size:10px;letter-spacing:1px;
   font-weight:800;color:#a4e6d1}
+.wx-history-collector-warning{border-left:3px solid #efa45d;
+  background:#37271b;border-radius:8px;color:#ffd7a1;
+  padding:10px 14px;font-size:12px;line-height:1.5}
 .wx-history-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .wx-history-kpi{min-width:0;min-height:132px;display:flex;flex-direction:column;
   justify-content:center;padding:17px 18px;
@@ -59,6 +62,9 @@ HISTORY_STYLE = r"""
 .wx-history-pill.BELOW,.wx-history-pill.INCORRECT{color:#ff8aa5;border-color:#92516e;background:#3c2533}
 .wx-history-pill.SKIP{color:#f3c476;border-color:#815f30;background:#372b1d}
 .wx-history-pill.PENDING{color:#b5c9f7;border-color:#576a9c;background:#222b47}
+.wx-history-pill.FETCH_ERROR{color:#ffc98a;border-color:#93612c;background:#43311c}
+.wx-history-pill.AWAITING_FINALIZATION{color:#b5c9f7;border-color:#576a9c;background:#222b47}
+.wx-history-pill.INVALID_OFFICIAL_EVIDENCE{color:#ff9fba;border-color:#92516e;background:#3c2533}
 .wx-history-pill.EVEN,.wx-history-pill.UNSCORED{color:#c6d5d4;border-color:#4f6971;background:#28353b}
 .wx-history-table .wx-history-empty{padding:26px;color:#9fb8c2;text-align:center;white-space:normal}
 .wx-history-footnote{font-size:11px;line-height:1.7;color:#9ebac2;
@@ -88,6 +94,8 @@ HISTORY = """
   <span id="wx-history-status" role="status" aria-live="polite">Loading recorded weather forecasts…</span>
   <span class="wx-history-marker">KALSHI WEATHER INDEX · PAPER ONLY</span>
  </div>
+ <div id="wx-history-collector-warning" class="wx-history-collector-warning"
+      role="status" aria-live="polite" hidden>COLLECTOR STATUS UNAVAILABLE</div>
  <div class="wx-history-kpis" aria-label="Weather forecast outcome summary">
   <article class="wx-history-kpi">
    <span class="wx-history-kpi-label">Settled forecast accuracy</span>
@@ -153,7 +161,8 @@ HISTORY = """
   and settled contract agreed; KALSHI_FINALIZED_MARKET means the exact official
   market's finalized result was verified without independent index reconciliation.
   Pending means the market is upcoming or official final verification is still
-  outstanding. Forecast probabilities are unvalidated research estimates; this
+  outstanding; FEED ERROR and VERIFY ERROR identify failures rather than
+  pretending the exchange has not settled. Forecast probabilities are unvalidated research estimates; this
   is not proof of profitable trading. No weather orders.
  </div>
 </div>
@@ -185,7 +194,8 @@ HISTORY_SCRIPT = r"""<script>
    const chip=document.createElement("span");
    const raw=safeString(value);
    const kind=["ABOVE","BELOW","CORRECT","INCORRECT","SKIP",
-               "PENDING","EVEN","UNSCORED"].includes(raw)?raw:"UNSCORED";
+               "PENDING","EVEN","UNSCORED","FETCH_ERROR",
+               "AWAITING_FINALIZATION","INVALID_OFFICIAL_EVIDENCE"].includes(raw)?raw:"UNSCORED";
    chip.className="wx-history-pill "+kind;
    chip.textContent=label||raw;cell.append(chip);tr.append(cell);
  }
@@ -211,6 +221,26 @@ HISTORY_SCRIPT = r"""<script>
        summary.total_final_forecasts>data.forecasts.length?
        " · displaying latest "+data.forecasts.length:""):
      "FORECAST HISTORY AUDIT ERROR · "+safeString(data.reason));
+   // A browser refresh does not prove the background collector is running.
+   const collector=data.collector||{};
+   const final=collector.hourly_settlement?.final_market||{};
+   const pulse=Date.parse(collector.updated_at||"");
+   const last=Date.parse(final.checked_at||"");
+   let warning="";
+   if(collector.state!=="ACTIVE"||!Number.isFinite(pulse)||
+      Date.now()-pulse>15*60000){
+     warning="COLLECTOR "+String(collector.state||"NOT_STARTED")+
+       " · Recorded results cannot update while the WeatherEdge worker is stopped. "+
+       "Restart using kalshiedge start.";
+   }else if(final.state==="UNAVAILABLE"){
+     warning="COLLECTOR ACTIVE · Official settlement recovery is unavailable. "+
+       String(final.reason||"Check the collector status.");
+   }else if(!Number.isFinite(last)||Date.now()-last>20*60000){
+     warning="COLLECTOR ACTIVE · Official settlement recovery has no recent "+
+       "successful poll. Check the collector status; older forecasts may remain unverified.";
+   }
+   const notice=byId("wx-history-collector-warning");
+   if(notice){notice.hidden=!warning;notice.textContent=warning;}
    tbody.replaceChildren();
    if(!valid){
      const tr=document.createElement("tr");
@@ -239,12 +269,29 @@ HISTORY_SCRIPT = r"""<script>
      badge(tr,x.forecast);
      td(tr,percent(x.directional_probability));
      td(tr,percent(x.confidence));
-     const reason=x.pending_reason==="HOUR_NOT_FINISHED"?
-       "Official index hour has not finished":
-       "Awaiting verified Kalshi final result";
-     td(tr,x.actual_side||reason);
-     badge(tr,x.verdict,x.verdict==="PENDING"?
-       (x.pending_reason==="HOUR_NOT_FINISHED"?"UPCOMING":"VERIFYING"):null);
+     let reason="Official final result not checked";
+     let label="NOT CHECKED";
+     let kind="PENDING";
+     if(x.pending_reason==="HOUR_NOT_FINISHED"){
+       reason="Forecast hour has not finished";label="UPCOMING";
+     }else if(x.settlement_check_state==="AWAITING_FINALIZATION"){
+       reason="Kalshi has not finalized this market";label="NOT FINAL";
+       kind="AWAITING_FINALIZATION";
+     }else if(x.settlement_check_state==="FETCH_ERROR"){
+       reason="Official market API request failed";label="FEED ERROR";
+       kind="FETCH_ERROR";
+     }else if(x.settlement_check_state==="INVALID_OFFICIAL_EVIDENCE"){
+       reason="Official response needs manual verification";label="VERIFY ERROR";
+       kind="INVALID_OFFICIAL_EVIDENCE";
+     }else if(x.settlement_check_state==="VERIFIED"){
+       reason="Final evidence present; refresh or inspect history audit";
+       label="RECHECK";
+     }
+     const outcome=td(tr,x.actual_side||reason);
+     if(x.verdict==="PENDING"&&x.settlement_check_reason)
+       outcome.title=x.settlement_check_reason;
+     badge(tr,x.verdict==="PENDING"?kind:x.verdict,
+           x.verdict==="PENDING"?label:null);
      tbody.append(tr);
    }
  }
