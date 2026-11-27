@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import statistics
 
-MIN_TRAIN=72
+MIN_TRAIN=64
 PRIOR=(.35,.40,0.,0.)
 RIDGE=(4.,4.,5.,12.)
 NAMES=("fast_gain","slow_gain","diurnal_gain","bias_f_per_hour","sigma_scale")
