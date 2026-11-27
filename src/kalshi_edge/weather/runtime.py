@@ -26,6 +26,7 @@ from .nwp_collection import collect_recent
 from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
+from .hourly_forward import journal_forward, settle_forward_once
 from .hourly_physics import collect_hourly_physics_once
 from .hourly_physical_learning import (
     journal_physical_pairs, freeze_candidate_locks,
@@ -344,6 +345,22 @@ class WeatherSupervisor:
             frozen = await asyncio.to_thread(journal_hourly_forecasts,self.db_path)
             self._hourly["journal"]={"state":"READY",
                                      "new_forecasts":frozen["inserted"]}
+            # Freeze independent lead-specific source-audited evaluations.
+            # Failure of the forward journal does not stop the index feed.
+            try:
+                forward=await asyncio.to_thread(journal_forward,self.db_path)
+                if (forward.get("mode")!="HOURLY_FORWARD_READ_ONLY" or
+                    forward.get("real_orders_enabled") is not False):
+                    raise ValueError("INVALID_FORWARD_JOURNAL_STATUS")
+                self._hourly["forward_v9"]={
+                    "state":"COLLECTING",
+                    "new_snapshots":int(forward.get("inserted",0)),
+                    "skipped":int(forward.get("skipped",0)),
+                    "checked_at":datetime.now(timezone.utc).isoformat()}
+            except Exception as exc:
+                self._hourly["forward_v9"]={
+                    "state":"UNAVAILABLE",
+                    "reason":f"{type(exc).__name__}: {exc}"[:180]}
             # Research pairs do not depend on contract availability. Keep this
             # separate from the official-index health path if SQLite is busy.
             try:
@@ -452,6 +469,23 @@ class WeatherSupervisor:
         except Exception as exc:
             self._hourly_settlement={"state":"UNAVAILABLE",
                    "reason":f"{type(exc).__name__}: {exc}"[:220]}
+        # Exact city/event/ticker forward outcomes are independent of the
+        # legacy one-per-hour settlement journal, and fail separately.
+        try:
+            forward=await asyncio.wait_for(
+                settle_forward_once(self.db_path),timeout=180)
+            if (forward.get("mode")!="HOURLY_FORWARD_READ_ONLY" or
+                forward.get("real_orders_enabled") is not False):
+                raise ValueError("INVALID_FORWARD_SETTLEMENT_STATUS")
+            self._hourly_settlement["forward_v9"]={
+                "state":"COLLECTING",
+                "verified":int(forward.get("verified",0)),
+                "unverified":int(forward.get("unverified",0)),
+                "errors":forward.get("errors",[])[:8]}
+        except Exception as exc:
+            self._hourly_settlement["forward_v9"]={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:180]}
         self._persist()
 
     async def run_forever(self) -> None:
