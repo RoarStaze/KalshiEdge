@@ -7,9 +7,12 @@ Brier/log loss use ONLY frozen exact markets and source-audited YES/NO labels.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
 import sqlite3
+import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -291,6 +294,7 @@ def compare_local_weather_models(db_path: Path, *,
                     continue
                 cfg=cfg_row[0]
                 for lead in requested_leads:
+                    cases=[]
                     try:
                         cases=index_cases(conn,city,now,lead_minutes=lead,
                                           config_version=cfg)
@@ -302,8 +306,7 @@ def compare_local_weather_models(db_path: Path, *,
                         paired["reason"]=f"{type(exc).__name__}: {exc}"[:140]
                     report["groups"].append({"city":city,"lead_minutes":lead,
                                                "config_version":cfg,
-                                               "available_index_hours":len(cases)
-                                                 if "cases" in locals() else 0,
+                                               "available_index_hours":len(cases),
                                                **paired})
         report["any_promoted"]=any(g["eligible_for_live_promotion"]
                                    for g in report["groups"])
@@ -314,6 +317,98 @@ def compare_local_weather_models(db_path: Path, *,
         report["any_promoted"]=False
         report["groups"]=[]
     return report
+
+
+
+
+CACHE_NAME="hourly-model-comparison.json"
+MAX_CACHE_BYTES=250_000
+
+
+def _missing_cache(status: str) -> dict:
+    return {"mode":"HOURLY_MODEL_PAIRED_COMPARISON_V13",
+            "status":status,"real_orders_enabled":False,
+            "calibration_certified":False,"any_promoted":False,
+            "groups":[],"asof_utc":None}
+
+
+def _canonical(data: dict) -> str:
+    return json.dumps(data,sort_keys=True,separators=(",",":"),
+                      allow_nan=False,ensure_ascii=True)
+
+
+def write_local_comparison(db_path: Path,report: dict) -> None:
+    """Collector-owned, atomic, checksum-checked summary; no raw local data."""
+    if (not isinstance(report,dict) or
+        report.get("mode")!="HOURLY_MODEL_PAIRED_COMPARISON_V13" or
+        report.get("real_orders_enabled") is not False or
+        report.get("calibration_certified") is not False or
+        not isinstance(report.get("groups"),list) or
+        len(report["groups"])>30):
+        raise ValueError("INVALID_COMPARISON_REPORT")
+    folder=Path(db_path).parent
+    folder.mkdir(parents=True,exist_ok=True)
+    data={**report,"computed_at_utc":datetime.now(timezone.utc).isoformat()}
+    data.pop("cache_sha256",None)
+    data["cache_sha256"]=hashlib.sha256(_canonical(data).encode()).hexdigest()
+    encoded=_canonical(data)
+    if len(encoded.encode())>MAX_CACHE_BYTES:
+        raise ValueError("OVERSIZED_COMPARISON_REPORT")
+    tmp=None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w",encoding="utf-8",
+               dir=folder,prefix=".model-comparison-",suffix=".tmp",
+               delete=False) as f:
+            tmp=Path(f.name)
+            f.write(encoded)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp,folder/CACHE_NAME)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
+def read_local_comparison(db_path: Path,*,preview: bool = False) -> dict:
+    """Never calculate a model on a web GET; read bounded recorded report."""
+    if preview:
+        return _missing_cache("PREVIEW_NO_LOCAL_MODEL_COMPARISON")
+    path=Path(db_path).parent/CACHE_NAME
+    if not path.is_file():
+        return _missing_cache("NO_COMPARISON_REPORT")
+    try:
+        if path.stat().st_size>MAX_CACHE_BYTES:
+            raise ValueError("COMPARISON_CACHE_TOO_LARGE")
+        data=json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data,dict):
+            raise ValueError("INVALID_COMPARISON_CACHE")
+        signature=data.pop("cache_sha256",None)
+        if not isinstance(signature,str) or hashlib.sha256(
+                _canonical(data).encode()).hexdigest()!=signature:
+            raise ValueError("CHANGED_COMPARISON_CACHE")
+        if (data.get("mode")!="HOURLY_MODEL_PAIRED_COMPARISON_V13" or
+            data.get("real_orders_enabled") is not False or
+            data.get("calibration_certified") is not False or
+            not isinstance(data.get("groups"),list) or
+            len(data["groups"])>30):
+            raise ValueError("INVALID_COMPARISON_MODE")
+        timestamp=_iso(data["computed_at_utc"])
+        if abs((datetime.now(timezone.utc)-timestamp).total_seconds())>3*3600:
+            # A stale old report may be shown but may NOT authorize a model
+            # to replace the current live predictor.
+            data["status"]="STALE_COMPARISON_REPORT"
+            data["any_promoted"]=False
+            for group in data["groups"]:
+                group["eligible_for_live_promotion"]=False
+        return data
+    except (OSError,ValueError,KeyError,TypeError,OverflowError,
+            json.JSONDecodeError) as exc:
+        return {**_missing_cache("INVALID_COMPARISON_CACHE"),
+                "reason":f"{type(exc).__name__}: {exc}"[:150]}
+
+
+def _load_cached_for_root(root: Path, *,preview: bool = False) -> dict:
+    return read_local_comparison(weather_database_path(root),preview=preview)
 
 
 def main() -> int:
