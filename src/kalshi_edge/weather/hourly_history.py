@@ -309,21 +309,23 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
             "settled_directional_forecasts":n,
             "correct":correct,"incorrect":incorrect,
             "pending_settlement":pending,
-            "pending_unchecked":sum(
-                1 for x in rows if x["verdict"]=="PENDING" and
-                x["settlement_check_state"]=="NOT_CHECKED"),
-            "pending_feed_errors":sum(
-                1 for x in rows if x["verdict"]=="PENDING" and
-                x["settlement_check_state"] in
-                    ("FETCH_ERROR","INVALID_OFFICIAL_EVIDENCE")),
-            "pending_waiting_exchange":sum(
-                1 for x in rows if x["verdict"]=="PENDING" and
-                x["settlement_check_state"]=="AWAITING_FINALIZATION"),
             # Show observed, source-verified arithmetic from the first
             # settled round. Under ten, label it as a small, uncalibrated
             # sample rather than hiding a real correct/incorrect ratio.
             "accuracy":round(correct/n,6) if n else None,
         })
+        # Operational retry diagnostics are NOT part of the established
+        # prediction-score summary schema, and can never change accuracy.
+        out["recovery"]={
+            "pending_unchecked":sum(1 for x in rows if
+                x["verdict"]=="PENDING" and x["settlement_check_state"]=="NOT_CHECKED"),
+            "pending_feed_errors":sum(1 for x in rows if
+                x["verdict"]=="PENDING" and x["settlement_check_state"] in
+                ("FETCH_ERROR","INVALID_OFFICIAL_EVIDENCE")),
+            "pending_waiting_exchange":sum(1 for x in rows if
+                x["verdict"]=="PENDING" and
+                x["settlement_check_state"]=="AWAITING_FINALIZATION"),
+        }
         out["forecasts"]=rows[:MAX_DISPLAY_ROWS]
         if rows:
             out["status"]=("MEASURED_PROSPECTIVE_RESEARCH" if n>=MIN_ACCURACY_HOURS
