@@ -266,6 +266,10 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
                                  ADAPTIVE_MODEL,params["sigma_scale"],params))
     except (ValueError,TypeError,OverflowError,ZeroDivisionError):
         pass
+    # Preserve the prior V7 training champion before introducing an
+    # uncertainty-only challenger. A failed V8 candidate must not disable
+    # the valid predecessor just because it won on older training hours.
+    incumbent_choice=min(alternatives,key=lambda r:(r[0],r[1],r[2]))
     # Separate probabilistic candidate: same adaptive point mean with
     # uncertainty rising only when fast and slow index trends disagree.
     # It must have both calm and divergent training hours, then beat the
@@ -284,6 +288,16 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
     _,_,name,scale,params=min(alternatives,key=lambda r:(r[0],r[1],r[2]))
     baseline=_score(valid,None,1.)
     challenger=_score(valid,name,scale,params)
+    if name==VOLATILITY_MODEL:
+        # A new sigma model is promoted only when it improves the same
+        # untouched held-out hours against the V7 incumbent, not merely
+        # the untouched persistence baseline. Otherwise keep V7's result.
+        _,_,old_name,old_scale,old_params=incumbent_choice
+        old_scores=_score(valid,old_name,old_scale,old_params)
+        if (challenger["crps"]>old_scores["crps"]-.01 or
+            challenger["coverage_90"]<old_scores["coverage_90"]-.15):
+            name,scale,params=old_name,old_scale,old_params
+            challenger=old_scores
     base.update({"training_hours":len(train),"validation_hours":len(valid),
                  "model":name,"sigma_scale":scale,"parameters":params,
                  "validation":{
