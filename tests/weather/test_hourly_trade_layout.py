@@ -81,7 +81,7 @@ def test_forecast_navigation_and_technical_evidence_are_preserved():
 
 def test_weather_trade_preview_only_uses_fresh_verified_ask():
     html=render_hourly_page("forecast","")
-    assert 'quote_status==="VALID_ASK"' in html
+    assert 'activeQuoteStatus==="VALID_ASK"' in html
     assert "activeQuoteReceivedMs" in html
     assert "serverClockBiasMs" in html
     assert "function updatePaperPreview(" in html
