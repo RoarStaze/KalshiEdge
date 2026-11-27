@@ -376,7 +376,7 @@ CALIBRATION = """
  </div>
  <details class="wx-hourly-details">
   <summary>Incumbent vs challenger · paired model benchmark</summary>
-  <h3>Current V12 predictor vs experimental V13</h3>
+  <h3>Frozen full WeatherEdge forecast vs experimental V13</h3>
   <p>Three chronological 24-hour blocks compare the same hourly Index targets.
    Temperature MAE/CRPS use only timely source observations. Brier requires
    originally frozen matching contracts and verified YES/NO settlements.
