@@ -308,7 +308,7 @@ MAIN = """
   <div class="wx-paper-amount-wrap"><input id="wx-paper-amount" type="number" min="0.01" max="100000" step="0.01" inputmode="decimal" placeholder="Enter amount" autocomplete="off"><span>$</span></div>
   <p class="wx-paper-account">PAPER MARKET PREVIEW · no live balance or order permissions</p>
   <div class="wx-paper-metrics">
-   <div><span>Selected quote (YES / NO)</span><strong id="wx-hourly-kalshi-ask">No verified ask</strong></div>
+   <div><span>Kalshi ask YES / NO</span><strong id="wx-hourly-kalshi-ask">No verified ask</strong></div>
    <div><span>Quote status</span><strong id="wx-hourly-quote-state">Waiting for exchange quote</strong></div>
    <div><span>Indicative contracts · before fees</span><strong id="wx-paper-cost">—</strong></div>
    <div><span>Maximum gross payout · before fees</span><strong id="wx-paper-payout">—</strong></div>
@@ -325,7 +325,7 @@ MAIN = """
   </details>
   <div class="wx-paper-note">
    <strong>Read-only WeatherEdge</strong>
-   <p>Calibration not verified. Model probabilities remain unvalidated. Prices and sizes reflect exchange snapshots, not guaranteed fills; fees, liquidity and settlement rules matter. No automatic or manual weather trading is enabled.</p>
+   <p>Calibration not verified. Not a verified accuracy claim. Model probabilities remain unvalidated. Prices and sizes reflect exchange snapshots, not guaranteed fills; fees, liquidity and settlement rules matter. No automatic or manual weather trading is enabled.</p>
   </div>
  </article>
 </div>
