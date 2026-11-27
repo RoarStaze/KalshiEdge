@@ -198,6 +198,8 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
                         preview: bool = False) -> dict:
     """Return source-audited history, newest-first, without writing data."""
     out = _base_report()
+    from .status import read_collector_health
+    out["collector"]=read_collector_health(root,preview=preview)
     path = Path(db_path or weather_database_path(root))
     if preview or not path.is_file():
         return out
