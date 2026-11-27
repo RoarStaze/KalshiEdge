@@ -172,15 +172,28 @@ async def collect_final_market_results_once(
             headers={"User-Agent":"KalshiEdge-HourlyFinalMarketAudit/2.0"})
     assert client is not None
     semaphore=asyncio.Semaphore(MAX_CONCURRENT)
+    # Public API read-limit headroom. Archive fallbacks count as requests too.
+    # Synthetic clients are unthrottled to keep tests deterministic and fast.
+    interval=0.16 if own else 0.
+    pace=asyncio.Lock()
+    next_slot=[asyncio.get_running_loop().time()]
+
+    async def fetch(url: str) -> httpx.Response:
+        async with pace:
+            now_slot=asyncio.get_running_loop().time()
+            if interval and next_slot[0]>now_slot:
+                await asyncio.sleep(next_slot[0]-now_slot)
+            next_slot[0]=asyncio.get_running_loop().time()+interval
+        return await client.get(url)
 
     async def resolve(key: tuple) -> tuple[tuple,str,str,str | None,dict | None]:
         city,event,ticker=key
         threshold,_=pending[key]
         async with semaphore:
             try:
-                response=await client.get(f"{API}/markets/{ticker}")
+                response=await fetch(f"{API}/markets/{ticker}")
                 if response.status_code==404:
-                    response=await client.get(f"{API}/historical/markets/{ticker}")
+                    response=await fetch(f"{API}/historical/markets/{ticker}")
                 response.raise_for_status()
                 if len(response.content)>MAX_SIZE:
                     raise ValueError("OVERSIZED_FINAL_MARKET_RESPONSE")
