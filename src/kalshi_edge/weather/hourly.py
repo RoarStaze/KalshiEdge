@@ -660,7 +660,8 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
             result["index_nowcast_validation"]=nowcast.get("validation")
             live=nowcast.get("live_slopes")
             analogue_available=(
-                nowcast.get("model")!="DIURNAL_ANALOGUE_V5" or
+                nowcast.get("model") not in (
+                    "DIURNAL_ANALOGUE_V5","REGULARIZED_HOURLY_HYBRID_V13") or
                 isinstance(nowcast.get("live_diurnal_delta_f"),(int,float)))
             if nowcast["enabled"] and live is not None and analogue_available:
                 nowcast_hours=(target-datetime.fromtimestamp(
@@ -671,13 +672,15 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                 # A changed live model gets an independent identity so
                 # earlier physical lockbox evidence cannot be inherited.
                 result["model_kind"]=(
-                    "HISTORICAL_DIURNAL_INDEX_NOWCAST_V12"
+                    "HISTORICAL_PAIRED_HYBRID_INDEX_NOWCAST_V13"
+                    if nowcast["model"]=="REGULARIZED_HOURLY_HYBRID_V13"
+                    else ("HISTORICAL_DIURNAL_INDEX_NOWCAST_V12"
                     if nowcast["model"]=="DIURNAL_ANALOGUE_V5"
                     else ("HISTORICAL_REGIME_SIGMA_INDEX_NOWCAST_V8"
                     if nowcast["model"]=="OBSERVATION_REGIME_SIGMA_V4"
                     else ("HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
                           if nowcast["model"]=="OBSERVATION_ADAPTIVE_V3"
-                          else "HISTORICAL_INDEX_NOWCAST_V2")))
+                          else "HISTORICAL_INDEX_NOWCAST_V2"))))
                 result["index_nowcast_selected_model"]=nowcast["model"]
             elif nowcast["enabled"] and not analogue_available:
                 result["index_nowcast_status"]="DIURNAL_LIVE_FEATURE_UNAVAILABLE"
