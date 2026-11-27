@@ -92,7 +92,7 @@ HISTORY = """
   <article class="wx-history-kpi">
    <span class="wx-history-kpi-label">Settled forecast accuracy</span>
    <strong class="wx-history-kpi-num is-accuracy" id="wx-history-accuracy">—</strong>
-   <span class="wx-history-kpi-caption" id="wx-history-accuracy-detail">Requires 10 verified distinct hours</span>
+   <span class="wx-history-kpi-caption" id="wx-history-accuracy-detail">Observed verified results · small sample until 10 hours</span>
   </article>
   <article class="wx-history-kpi">
    <span class="wx-history-kpi-label">Correct / Incorrect</span>
@@ -144,7 +144,11 @@ HISTORY = """
  <div class="wx-history-footnote">
   Only the latest immutable precommitted checkpoint per city and hour is shown (legacy first-frozen records are used when V9 is absent).
   Accuracy uses verified official Kalshi Index and matching settled contract results.
-  Pending and unscored records are excluded. No independent confidence score is recorded, so Confidence shows —.
+  Pending and unscored records are excluded. Confidence is derived from the
+  saved predicted-side probability: 2 × probability − 1, the same directional
+  strength formula displayed on Bitcoin History. This is not observed win rate
+  or independently validated confidence. Early percentages are a small sample
+  until at least 10 distinct settled hours and do not certify calibration.
   Forecast probabilities are unvalidated research estimates; this is not proof of profitable trading. No weather orders.
  </div>
 </div>
@@ -189,7 +193,9 @@ HISTORY_SCRIPT = r"""<script>
    set("wx-history-accuracy-detail",valid?
      (summary.settled_directional_forecasts||0)+
        " verified directional forecasts"+(summary.accuracy==null?
-         " · at least 10 required for accuracy":""):
+         " · awaiting verified settlements":
+         (summary.settled_directional_forecasts||0)<10?
+           " · small sample (not calibrated)":""):
      "Source audit failed; scores withheld");
    set("wx-history-correctness",valid?good+" / "+bad:"— / —");
    set("wx-history-skips",valid?(summary.skipped??0):"—");
