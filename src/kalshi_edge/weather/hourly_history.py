@@ -243,7 +243,9 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
                 **info,
                 "forecast":side,
                 "directional_probability":max(p,1.-p) if side!="EVEN" else None,
-                "confidence":None,  # No independent weather confidence is stored.
+                # Same directional-strength definition used by Bitcoin
+                # history: 2*max(p_yes,p_no)-1. This is NOT measured skill.
+                "confidence":round(2*max(p,1.-p)-1,6) if side!="EVEN" else None,
                 "actual_side":actual,
                 "verdict":verdict,
             })
@@ -255,12 +257,15 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
             "settled_directional_forecasts":n,
             "correct":correct,"incorrect":incorrect,
             "pending_settlement":pending,
-            "accuracy":round(correct/n,6) if n>=MIN_ACCURACY_HOURS else None,
+            # Show observed, source-verified arithmetic from the first
+            # settled round. Under ten, label it as a small, uncalibrated
+            # sample rather than hiding a real correct/incorrect ratio.
+            "accuracy":round(correct/n,6) if n else None,
         })
         out["forecasts"]=rows[:MAX_DISPLAY_ROWS]
         if rows:
             out["status"]=("MEASURED_PROSPECTIVE_RESEARCH" if n>=MIN_ACCURACY_HOURS
-                           else "INSUFFICIENT_VERIFIED_EVIDENCE" if n
+                           else "SMALL_SAMPLE_UNCERTIFIED" if n
                            else "AWAITING_VERIFIED_SETTLEMENTS")
         return out
     except (sqlite3.Error, ValueError, OSError, KeyError, TypeError,
