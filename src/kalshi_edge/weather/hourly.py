@@ -166,7 +166,11 @@ def _valid_market(market: dict, city: str, event: str, *,
         not market["ticker"].startswith(event + "-") or
         market.get("event_ticker") != event):
         return None
-    if market.get("status") not in (("settled",) if settled else ("active", "open")):
+    # Kalshi's *filter* status="settled" corresponds to returned REST
+    # lifecycle status="finalized". Preserve older settled fixtures too.
+    if market.get("status") not in (("finalized", "settled") if settled else ("active", "open")):
+        return None
+    if settled and market.get("is_provisional") is True:
         return None
     if market.get("series_ticker") not in (None, CITIES[city].series):
         return None

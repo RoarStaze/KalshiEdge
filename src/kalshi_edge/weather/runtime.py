@@ -27,6 +27,7 @@ from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
 from .hourly_forward import journal_forward, settle_forward_once
+from .hourly_market_results import collect_final_market_results_once
 from .hourly_physics import collect_hourly_physics_once
 from .hourly_physical_learning import (
     journal_physical_pairs, freeze_candidate_locks,
@@ -457,20 +458,46 @@ class WeatherSupervisor:
         self._persist()
 
     async def poll_hourly_settlements(self) -> None:
+        # Resolve the user's displayed direction as soon as the exact Kalshi
+        # market becomes finalized. Never let slower index/physics audit
+        # loops starve official contract-result collection.
+        self._hourly_settlement={"state":"CHECKING"}
+        try:
+            final=await asyncio.wait_for(
+                collect_final_market_results_once(self.db_path),timeout=180)
+            if (final.get("mode")!="HOURLY_FINAL_MARKET_RESULTS" or
+                final.get("real_orders_enabled") is not False):
+                raise ValueError("INVALID_FINAL_MARKET_AUDIT")
+            self._hourly_settlement["final_market"]={
+                "state":"READY",
+                "verified":int(final.get("verified",0)),
+                "awaiting":int(final.get("awaiting",0)),
+                "unverified":int(final.get("unverified",0)),
+                "errors":final.get("errors",[])[:8]}
+        except Exception as exc:
+            self._hourly_settlement["final_market"]={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:180]}
+        # Persist the result-feed status now; independent index audits can
+        # take longer and must never hide a confirmed official outcome.
+        self._persist()
+
         try:
             report=await asyncio.wait_for(
                 self._settle_hourly(self.db_path),timeout=180)
             if not isinstance(report,dict) or report.get("mode")!="HOURLY_PAPER_ONLY":
                 raise ValueError("unexpected hourly settlement result")
-            self._hourly_settlement={"state":"READY",
-                     "verified":int(report.get("verified",0)),
-                     "unverified":int(report.get("unverified",0)),
-                     "errors":report.get("errors",[])[:8]}
+            self._hourly_settlement.update({
+                "state":"READY",
+                "verified":int(report.get("verified",0)),
+                "unverified":int(report.get("unverified",0)),
+                "errors":report.get("errors",[])[:8]})
         except Exception as exc:
-            self._hourly_settlement={"state":"UNAVAILABLE",
-                   "reason":f"{type(exc).__name__}: {exc}"[:220]}
-        # Exact city/event/ticker forward outcomes are independent of the
-        # legacy one-per-hour settlement journal, and fail separately.
+            self._hourly_settlement.update({
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:220]})
+        # The higher-certainty index-reconciled V9 outcomes remain independent
+        # from the finalized-market-only history evidence.
         try:
             forward=await asyncio.wait_for(
                 settle_forward_once(self.db_path),timeout=180)

@@ -394,3 +394,13 @@ def test_fall_dst_repeated_eastern_hour_never_duplicates_ambiguous_event():
     event,target=event_for("chicago",datetime(2026,11,1,5,40,tzinfo=timezone.utc))
     assert target==datetime(2026,11,1,7,0,tzinfo=timezone.utc)
     assert event=="KXTEMPCHIHS-26NOV0102"
+
+
+def test_market_parser_accepts_actual_finalized_lifecycle_not_only_settled_filter():
+    finalized={**market(status="settled",result="yes"),"status":"finalized",
+               "is_provisional":False}
+    result=parse_markets({"markets":[finalized],"cursor":""},"chicago",EVENT,settled=True)
+    assert len(result)==1 and result[0]["result"]=="yes"
+    assert parse_markets({"markets":[finalized],"cursor":""},"chicago",EVENT)==[]
+    assert parse_markets({"markets":[{**finalized,"is_provisional":True}],
+                          "cursor":""},"chicago",EVENT,settled=True)==[]

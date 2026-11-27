@@ -149,7 +149,12 @@ HISTORY = """
   strength formula displayed on Bitcoin History. This is not observed win rate
   or independently validated confidence. Early percentages are a small sample
   until at least 10 distinct settled hours and do not certify calibration.
-  Forecast probabilities are unvalidated research estimates; this is not proof of profitable trading. No weather orders.
+  Source evidence: INDEX_RECONCILED_SETTLEMENT means official Kalshi Index
+  and settled contract agreed; KALSHI_FINALIZED_MARKET means the exact official
+  market's finalized result was verified without independent index reconciliation.
+  Pending means the market is upcoming or official final verification is still
+  outstanding. Forecast probabilities are unvalidated research estimates; this
+  is not proof of profitable trading. No weather orders.
  </div>
 </div>
 """
@@ -175,14 +180,14 @@ HISTORY_SCRIPT = r"""<script>
    const cell=document.createElement("td");cell.textContent=String(value);
    tr.append(cell);return cell;
  }
- function badge(tr,value){
+ function badge(tr,value,label){
    const cell=document.createElement("td");
    const chip=document.createElement("span");
    const raw=safeString(value);
    const kind=["ABOVE","BELOW","CORRECT","INCORRECT","SKIP",
                "PENDING","EVEN","UNSCORED"].includes(raw)?raw:"UNSCORED";
    chip.className="wx-history-pill "+kind;
-   chip.textContent=raw;cell.append(chip);tr.append(cell);
+   chip.textContent=label||raw;cell.append(chip);tr.append(cell);
  }
  function render(){
    if(!tbody||!history)return;
@@ -234,8 +239,12 @@ HISTORY_SCRIPT = r"""<script>
      badge(tr,x.forecast);
      td(tr,percent(x.directional_probability));
      td(tr,percent(x.confidence));
-     td(tr,x.actual_side||"Awaiting settlement");
-     badge(tr,x.verdict);
+     const reason=x.pending_reason==="HOUR_NOT_FINISHED"?
+       "Official index hour has not finished":
+       "Awaiting verified Kalshi final result";
+     td(tr,x.actual_side||reason);
+     badge(tr,x.verdict,x.verdict==="PENDING"?
+       (x.pending_reason==="HOUR_NOT_FINISHED"?"UPCOMING":"VERIFYING"):null);
      tbody.append(tr);
    }
  }

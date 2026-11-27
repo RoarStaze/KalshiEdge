@@ -16,6 +16,7 @@ from pathlib import Path
 from .hourly import CITIES, listed_event_target, parse_index, parse_markets
 from .hourly_forward import _frozen, _outcome, _utc
 from .status import weather_database_path
+from .hourly_market_results import verify_final_market
 
 MAX_AUDIT_ROWS = 30000
 MAX_DISPLAY_ROWS = 750
@@ -67,7 +68,7 @@ def _rows(conn: sqlite3.Connection, sql: str) -> list[tuple]:
     return rows
 
 
-def _checked_forward(row: tuple) -> tuple[tuple, dict]:
+def _checked_forward(row: tuple, market_evidence: tuple | None = None) -> tuple[tuple, dict]:
     (city, event, ticker, target, lead, asof, raw, digest,
      result, value, event_ms, checked_at, config, index_raw,
      index_sha, market_raw, market_sha) = row
@@ -82,6 +83,13 @@ def _checked_forward(row: tuple) -> tuple[tuple, dict]:
         observed = _outcome((result, value, event_ms, checked_at, config,
                              index_raw, index_sha, market_raw, market_sha),
                             frozen)
+    official = (verify_final_market(city,event,ticker,
+        frozen["threshold_f"],*market_evidence) if market_evidence else None)
+    if observed is not None and official is not None and (
+        bool(observed[0]) != (official=="yes")):
+        raise ValueError("HOURLY_FINAL_MARKET_AND_INDEX_DISAGREE")
+    actual = (("ABOVE" if observed[0] else "BELOW") if observed is not None
+              else ("ABOVE" if official=="yes" else "BELOW") if official else None)
     info = {
         "city": city, "event_ticker": event, "market_ticker": ticker,
         "target_utc": target,
@@ -90,9 +98,10 @@ def _checked_forward(row: tuple) -> tuple[tuple, dict]:
         "model_kind": frozen["model_kind"],
         "probability_yes": _probability(frozen["probability_yes"]),
         "threshold_f": frozen["threshold_f"],
-        "actual": (("ABOVE" if observed[0] else "BELOW")
-                   if observed is not None else None),
+        "actual":actual,
         "observed_index_f": observed[1] if observed is not None else None,
+        "evidence_kind": ("INDEX_RECONCILED_SETTLEMENT" if observed is not None else
+                          "KALSHI_FINALIZED_MARKET" if official else None),
         "source": "V9_FORWARD_CHECKPOINT",
     }
     # Select the smallest available precommitted lead bucket. Selection
@@ -100,7 +109,7 @@ def _checked_forward(row: tuple) -> tuple[tuple, dict]:
     return ((city, event), (0, lead, asof), info)
 
 
-def _checked_legacy(row: tuple) -> tuple[tuple, dict]:
+def _checked_legacy(row: tuple, market_evidence: tuple | None = None) -> tuple[tuple, dict]:
     (city, event, ticker, target_raw, asof_raw, source_ms, receipt,
      raw, digest, actual_result, observed_value, observed_ms, checked_at,
      index_raw, index_sha, market_raw, market_sha, recorded_ticker) = row
@@ -161,6 +170,13 @@ def _checked_legacy(row: tuple) -> tuple[tuple, dict]:
             (canonical["temp_f"] >= strike) != (actual_result == "yes")):
             raise ValueError("LEGACY_HOURLY_SETTLEMENT_RECONCILIATION_CHANGED")
         observed = ("ABOVE" if actual_result == "yes" else "BELOW",observed_value)
+    official=(verify_final_market(city,event,ticker,strike,*market_evidence)
+              if market_evidence else None)
+    if observed is not None and official is not None and (
+        (observed[0]=="ABOVE") != (official=="yes")):
+        raise ValueError("LEGACY_FINAL_MARKET_AND_INDEX_DISAGREE")
+    actual = (observed[0] if observed is not None else
+              ("ABOVE" if official=="yes" else "BELOW") if official else None)
     model = frozen.get("model_kind")
     info = {
         "city": city, "event_ticker": event, "market_ticker": ticker,
@@ -169,8 +185,10 @@ def _checked_legacy(row: tuple) -> tuple[tuple, dict]:
             round((target - asof).total_seconds()/60,3),
         "model_kind": model if isinstance(model,str) else "UNSPECIFIED",
         "probability_yes": p, "threshold_f": strike,
-        "actual": observed[0] if observed is not None else None,
+        "actual": actual,
         "observed_index_f": observed[1] if observed is not None else None,
+        "evidence_kind": ("INDEX_RECONCILED_SETTLEMENT" if observed is not None else
+                          "KALSHI_FINALIZED_MARKET" if official else None),
         "source": "LEGACY_PRECOMMITTED",
     }
     return ((city,event),(1,0,asof_raw),info)
@@ -188,6 +206,15 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro",
                                     uri=True,timeout=3)) as conn:
             conn.execute("PRAGMA query_only=ON")
+            market_evidence={}
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='weather_hourly_final_market_results'").fetchone():
+                for city,event,ticker,result,settled,received,raw,sha in conn.execute(
+                    """SELECT city,event_ticker,market_ticker,result,settled_at,
+                              received_at,market_raw,market_sha
+                       FROM weather_hourly_final_market_results"""):
+                    market_evidence[city,event,ticker]=(
+                        result,settled,received,raw,sha)
             forward = _rows(conn, """SELECT
                 s.city,s.event_ticker,s.market_ticker,s.target_utc,
                 s.lead_bucket,s.asof,s.forecast_json,s.forecast_sha,
@@ -212,12 +239,14 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
 
         selected: dict[tuple[str,str], tuple[tuple,dict]] = {}
         for row in forward:
-            key, preference, info = _checked_forward(row)
+            key, preference, info = _checked_forward(
+                row,market_evidence.get((row[0],row[1],row[2])))
             existing = selected.get(key)
             if existing is None or preference < existing[0]:
                 selected[key] = (preference, info)
         for row in legacy:
-            key, preference, info = _checked_legacy(row)
+            key, preference, info = _checked_legacy(
+                row,market_evidence.get((row[0],row[1],row[2])))
             existing = selected.get(key)
             if existing is None or preference < existing[0]:
                 selected[key] = (preference, info)
@@ -231,9 +260,15 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
             if actual is None:
                 verdict="PENDING"
                 pending+=1
-            elif side == "EVEN":
-                verdict="UNSCORED"  # Never invent a stored SKIP decision.
+                target_dt=_utc(info["target_utc"])
+                now=datetime.now(timezone.utc)
+                info["pending_reason"]=("HOUR_NOT_FINISHED" if target_dt>now else
+                    "AWAITING_OFFICIAL_FINAL_RESULT")
             else:
+                info["pending_reason"]=None
+            if actual is not None and side == "EVEN":
+                verdict="UNSCORED"  # Never invent a stored SKIP decision.
+            elif actual is not None:
                 verdict="CORRECT" if side==actual else "INCORRECT"
                 if verdict=="CORRECT":
                     correct+=1

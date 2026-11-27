@@ -277,3 +277,152 @@ def test_small_sample_one_right_one_wrong_reports_real_ratio(tmp_path):
     assert report["summary"]["accuracy"]==.5
     assert report["status"]=="SMALL_SAMPLE_UNCERTIFIED"
     assert report["calibration_certified"] is False
+
+
+def test_finalized_contract_result_unlocks_correct_and_incorrect_without_index(tmp_path):
+    """The real Kalshi market is authoritative when canonical index publication lags."""
+    import asyncio
+    import httpx
+    from kalshi_edge.weather.hourly_market_results import collect_final_market_results_once
+    db=tmp_path/"wx.sqlite3"
+    _record(db,START,lead=5,prob=.82,yes=None)
+    _record(db,START+timedelta(hours=1),lead=5,prob=.7,yes=None)
+    def transport(request):
+        assert request.url.path.startswith("/trade-api/v2/markets/")
+        ticker=request.url.path.rsplit("/",1)[-1]
+        hour=18 if "2713-" in ticker else 19
+        target=START+timedelta(hours=hour-18)
+        side="yes" if hour==18 else "no"
+        return httpx.Response(200,json={"market":{
+            "ticker":ticker,"event_ticker":ticker.rsplit("-T",1)[0],
+            "status":"finalized","is_provisional":False,"result":side,
+            "yes_sub_title":"55° or above","floor_strike":54.99,
+            "rules_primary":"Resolves based on Kalshi published Weather Index.",
+            "settlement_ts":(target+timedelta(minutes=8)).isoformat()}})
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            return await collect_final_market_results_once(
+                db,client=client,clock=lambda:START+timedelta(hours=1,minutes=15))
+    collected=asyncio.run(go())
+    assert collected["verified"]==2,collected
+    report=read_hourly_history(tmp_path,db_path=db)
+    assert report["summary"]["correct"]==1
+    assert report["summary"]["incorrect"]==1
+    assert report["summary"]["accuracy"]==.5
+    assert report["summary"]["pending_settlement"]==0
+    assert sorted(r["verdict"] for r in report["forecasts"])==["CORRECT","INCORRECT"]
+    assert all(r["evidence_kind"]=="KALSHI_FINALIZED_MARKET" for r in report["forecasts"])
+    # Persisted, not recomputed after restart.
+    assert read_hourly_history(tmp_path,db_path=db)["summary"]["accuracy"]==.5
+
+
+def test_market_result_rejects_unfinalized_provisional_and_wrong_ticker(tmp_path):
+    import asyncio
+    import httpx
+    from kalshi_edge.weather.hourly_market_results import collect_final_market_results_once
+    db=tmp_path/"wx.sqlite3"
+    _record(db,START,lead=5,prob=.82,yes=None)
+    for state,provisional,wrong_ticker in [
+        ("closed",False,False),("determined",False,False),
+        ("finalized",True,False),("finalized",False,True)]:
+        def transport(request):
+            ticker=request.url.path.rsplit("/",1)[-1]
+            return httpx.Response(200,json={"market":{
+                "ticker":"OTHER" if wrong_ticker else ticker,
+                "event_ticker":ticker.rsplit("-T",1)[0],
+                "status":state,"is_provisional":provisional,"result":"yes",
+                "yes_sub_title":"55° or above","floor_strike":54.99,
+                "rules_primary":"Kalshi Weather Index.",
+                "settlement_ts":(START+timedelta(minutes=8)).isoformat()}})
+        async def go():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+                return await collect_final_market_results_once(
+                    db,client=client,clock=lambda:START+timedelta(minutes=15))
+        assert asyncio.run(go())["verified"]==0
+        report=read_hourly_history(tmp_path,db_path=db)
+        assert report["summary"]["pending_settlement"]==1
+        assert report["summary"]["correct"]==0
+        assert report["summary"]["accuracy"] is None
+
+
+def test_market_only_result_tamper_fails_closed(tmp_path):
+    import asyncio
+    import httpx
+    from kalshi_edge.weather.hourly_market_results import collect_final_market_results_once
+    db=tmp_path/"wx.sqlite3"
+    _record(db,START,lead=5,prob=.82,yes=None)
+    def transport(request):
+        ticker=request.url.path.rsplit("/",1)[-1]
+        return httpx.Response(200,json={"market":{
+            "ticker":ticker,"event_ticker":ticker.rsplit("-T",1)[0],
+            "status":"finalized","result":"yes","is_provisional":False,
+            "yes_sub_title":"55° or above","floor_strike":54.99,
+            "rules_primary":"Kalshi Weather Index.",
+            "settlement_ts":(START+timedelta(minutes=8)).isoformat()}})
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            return await collect_final_market_results_once(
+                db,client=client,clock=lambda:START+timedelta(minutes=15))
+    assert asyncio.run(go())["verified"]==1
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE weather_hourly_final_market_results SET market_raw='{}'")
+    report=read_hourly_history(tmp_path,db_path=db)
+    assert report["status"]=="HOURLY_HISTORY_AUDIT_ERROR"
+    assert report["summary"]["correct"]==0
+    assert report["forecasts"]==[]
+
+
+def test_finalized_market_collector_supports_old_legacy_only_databases(tmp_path):
+    import asyncio
+    import httpx
+    from kalshi_edge.weather.hourly_market_results import collect_final_market_results_once
+    db=tmp_path/"legacy.sqlite3"
+    _record(db,START,legacy=True,prob=.8,yes=None)
+    # Simulate databases created before V9 checkpoint tables existed.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TABLE weather_hourly_forward_snapshots")
+        conn.execute("DROP TABLE weather_hourly_forward_outcomes")
+    def transport(request):
+        ticker=request.url.path.rsplit("/",1)[-1]
+        return httpx.Response(200,json={"market":{
+            "ticker":ticker,"event_ticker":ticker.rsplit("-T",1)[0],
+            "status":"finalized","result":"no","is_provisional":False,
+            "yes_sub_title":"55° or above","floor_strike":54.99,
+            "rules_primary":"Kalshi Weather Index.",
+            "settlement_ts":(START+timedelta(minutes=8)).isoformat()}})
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            return await collect_final_market_results_once(
+                db,client=client,clock=lambda:START+timedelta(minutes=15))
+    assert asyncio.run(go())["verified"]==1
+    rows=read_hourly_history(tmp_path,db_path=db)
+    assert rows["summary"]["incorrect"]==1
+    assert rows["forecasts"][0]["evidence_kind"]=="KALSHI_FINALIZED_MARKET"
+
+
+def test_settlement_loop_checks_official_final_markets_before_slow_index_audits(
+        tmp_path,monkeypatch):
+    import asyncio
+    from kalshi_edge.weather import runtime
+    db=tmp_path/"weather.sqlite3"
+    calls=[]
+    async def finalized(_):
+        calls.append("final")
+        return {"mode":"HOURLY_FINAL_MARKET_RESULTS",
+                "real_orders_enabled":False,"verified":2,"awaiting":1,
+                "unverified":0,"errors":[]}
+    async def legacy(_):
+        calls.append("legacy")
+        return {"mode":"HOURLY_PAPER_ONLY","verified":0,"unverified":0}
+    async def forward(_):
+        calls.append("forward")
+        return {"mode":"HOURLY_FORWARD_READ_ONLY",
+                "real_orders_enabled":False,"verified":0,"unverified":0}
+    monkeypatch.setattr(runtime,"collect_final_market_results_once",finalized)
+    monkeypatch.setattr(runtime,"settle_forward_once",forward)
+    worker=runtime.WeatherSupervisor(db,hourly_settle=legacy)
+    asyncio.run(worker.poll_hourly_settlements())
+    assert calls==["final","legacy","forward"]
+    health=json.loads((db.parent/"collector-status.json").read_text())
+    assert health["hourly_settlement"]["final_market"]["verified"]==2
+    assert health["hourly_settlement"]["final_market"]["awaiting"]==1
