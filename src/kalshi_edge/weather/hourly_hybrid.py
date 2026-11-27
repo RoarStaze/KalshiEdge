@@ -103,9 +103,13 @@ def _crps(mean: float,sigma: float,actual: float) -> float:
 
 
 def fit_hybrid(rows: list[dict]) -> dict:
-    if len(rows)<MIN_TRAIN:
+    # The first 1–2 days of an eight-day receipt-safe history may not
+    # contain a complete prior-day analogue. Exclude only genuinely absent
+    # features; a present malformed/nonfinite value must still fail closed.
+    eligible=[r for r in rows if r.get("diurnal_delta_f") is not None]
+    if len(eligible)<MIN_TRAIN:
         raise ValueError("INSUFFICIENT_HYBRID_TRAINING")
-    samples=[_features(row,training=True) for row in rows]
+    samples=[_features(row,training=True) for row in eligible]
     if sum(abs(x[2])>=.35 for x,_,_ in samples)<24:
         raise ValueError("INSUFFICIENT_DIURNAL_DIVERSITY")
     beta=list(PRIOR)
@@ -128,7 +132,7 @@ def fit_hybrid(rows: list[dict]) -> dict:
     best=min(SCALES,key=lambda scale:sum(
         _crps(row["current_index_f"]+max(-8.,min(8.,sum(beta[i]*x[i]
                for i in range(4)))),max(.05,sigma*scale),
-               row["observed_index_f"]) for row,(x,_,sigma) in zip(rows,samples)))
+               row["observed_index_f"]) for row,(x,_,sigma) in zip(eligible,samples)))
     result={name:round(beta[i],6) for i,name in enumerate(NAMES[:4])}
     result["sigma_scale"]=best
     if not validate_hybrid(result):
