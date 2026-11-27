@@ -13,6 +13,9 @@ HISTORY_STYLE = r"""
   padding-top:7px;color:#aebbc3;font-size:11px}
 .wx-history-meta .wx-history-marker{font-size:10px;letter-spacing:1px;
   font-weight:800;color:#a4e6d1}
+.wx-history-collector-warning{border-left:3px solid #efa45d;
+  background:#37271b;border-radius:8px;color:#ffd7a1;
+  padding:10px 14px;font-size:12px;line-height:1.5}
 .wx-history-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .wx-history-kpi{min-width:0;min-height:132px;display:flex;flex-direction:column;
   justify-content:center;padding:17px 18px;
@@ -91,6 +94,8 @@ HISTORY = """
   <span id="wx-history-status" role="status" aria-live="polite">Loading recorded weather forecasts…</span>
   <span class="wx-history-marker">KALSHI WEATHER INDEX · PAPER ONLY</span>
  </div>
+ <div id="wx-history-collector-warning" class="wx-history-collector-warning"
+      role="status" aria-live="polite" hidden>COLLECTOR STATUS UNAVAILABLE</div>
  <div class="wx-history-kpis" aria-label="Weather forecast outcome summary">
   <article class="wx-history-kpi">
    <span class="wx-history-kpi-label">Settled forecast accuracy</span>
@@ -216,6 +221,26 @@ HISTORY_SCRIPT = r"""<script>
        summary.total_final_forecasts>data.forecasts.length?
        " · displaying latest "+data.forecasts.length:""):
      "FORECAST HISTORY AUDIT ERROR · "+safeString(data.reason));
+   // A browser refresh does not prove the background collector is running.
+   const collector=data.collector||{};
+   const final=collector.hourly_settlement?.final_market||{};
+   const pulse=Date.parse(collector.updated_at||"");
+   const last=Date.parse(final.checked_at||"");
+   let warning="";
+   if(collector.state!=="ACTIVE"||!Number.isFinite(pulse)||
+      Date.now()-pulse>15*60000){
+     warning="COLLECTOR "+String(collector.state||"NOT_STARTED")+
+       " · Recorded results cannot update while the WeatherEdge worker is stopped. "+
+       "Restart using kalshiedge start.";
+   }else if(final.state==="UNAVAILABLE"){
+     warning="COLLECTOR ACTIVE · Official settlement recovery is unavailable. "+
+       String(final.reason||"Check the collector status.");
+   }else if(!Number.isFinite(last)||Date.now()-last>20*60000){
+     warning="COLLECTOR ACTIVE · Official settlement recovery has no recent "+
+       "successful poll. Check the collector status; older forecasts may remain unverified.";
+   }
+   const notice=byId("wx-history-collector-warning");
+   if(notice){notice.hidden=!warning;notice.textContent=warning;}
    tbody.replaceChildren();
    if(!valid){
      const tr=document.createElement("tr");
