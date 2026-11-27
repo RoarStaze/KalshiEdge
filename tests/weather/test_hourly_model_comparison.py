@@ -322,3 +322,28 @@ def test_early_hours_without_prior_day_analogue_cannot_poison_later_train():
     assert result["verified_market_hours"]==72
     assert result["frozen_live_hours"]==72
     assert result["parameters"] is not None
+
+
+def test_each_fold_embargoes_labels_not_published_before_first_60m_forecast():
+    # For a 60-minute-ahead forecast at time T-60, the T-60 Index label
+    # may not arrive until T-50. It must never be used to train that fold.
+    rows=cases()
+    for row in rows:
+        target=datetime.fromisoformat(row["target_utc"])
+        row["forecast_asof"]=(target-timedelta(minutes=60)).isoformat()
+        row["label_received_at"]=(target+timedelta(minutes=10)).isoformat()
+    result=compare_models(rows)
+    assert result["matched_hours"]==72
+    assert len(result["folds"])==3
+    assert result["folds"][0]["train_hours"]==len(rows)-72-1
+    assert result["folds"][1]["train_hours"]==len(rows)-48-1
+    assert result["folds"][2]["train_hours"]==len(rows)-24-1
+
+
+def test_future_publication_cannot_promote_on_lookahead_fit():
+    rows=cases()
+    for row in rows[:120]:
+        row["label_received_at"]=(START+timedelta(days=100)).isoformat()
+    report=compare_models(rows)
+    assert report["eligible_for_live_promotion"] is False
+    assert report["status"]=="INSUFFICIENT_CAUSAL_TRAINING"
