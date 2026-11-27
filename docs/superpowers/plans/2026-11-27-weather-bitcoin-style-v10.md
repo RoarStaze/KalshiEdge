@@ -1,7 +1,7 @@
 # WeatherEdge V10 implementation
 
 1. Add TDD HTML contract tests (`tests/weather/test_hourly_trade_layout.py`): accessible twin panels, slot ids, safe trade-disabled state, correct weather index labeling, reset of missing data, preserved calibration navigation; watch initial missing-design failures on CI.
-2. Create `src/kalshi_edge/weather/hourly_trade_layout.py`: isolated main markup and CSS matching two-column Bitcoin Trade. Use real city select, no invented account, trade-side pills are read-only paper estimate selectors, disabled order button. Include hidden/expandable diagnostics IDs needed by existing JS, keep market ladder.
+2. Revise `src/kalshi_edge/weather/hourly_ui.py` in place: rebuild only the forecast `MAIN` markup and scoped CSS, preserving the existing IDs and expandable source diagnostics. Use real city select, no invented account, read-only paper estimate side selectors, disabled order button and retained market ladder. **Ruling:** the existing file owns weather forecast markup, JavaScript, and technical evidence; extracting a second module would duplicate coupled markup and ID contracts. Keep a single source of truth in `hourly_ui.py`.
 3. Modify `src/kalshi_edge/weather/hourly_ui.py`: use new layout only for forecast, compact forecast header, preserve all current forecast/status/calibration polling, wire model probabilities, quote freshness, countdown and paper calculator into new ids. Keep no-order state and have missing data fail closed. Update local side-flip watcher without stored history. Check JS with Node.
 4. Full CI (pytest and Docker build) on final exact SHA. Only merge into main if all tests pass; deliver user's PowerShell git pull/start commands.
 
