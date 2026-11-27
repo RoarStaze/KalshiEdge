@@ -228,3 +228,53 @@ def test_paired_comparison_api_returns_no_fabricated_preview_scores(tmp_path):
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+def test_prospective_live_hybrid_requires_verified_comparison_and_fresh_cache(
+        tmp_path,monkeypatch):
+    from kalshi_edge.weather import hourly_nowcast
+    from kalshi_edge.weather.hourly import _init
+    db=tmp_path/"weatheredge.sqlite3"
+    conn=sqlite3.connect(db)
+    _init(conn)
+    rows=cases()
+    params=fit_hybrid(rows[:-24])
+    score=compare_models(rows)
+    assert score["eligible_for_live_promotion"] is True
+    payload={"mode":"HOURLY_MODEL_PAIRED_COMPARISON_V13",
+             "status":"RESEARCH_SCORED","real_orders_enabled":False,
+             "calibration_certified":False,"any_promoted":True,
+             "asof_utc":datetime(2026,8,10,tzinfo=UTC).isoformat(),
+             "groups":[{"city":"chicago","lead_minutes":30,
+                         "config_version":"test-source-v1",**score}]}
+    from kalshi_edge.weather.hourly_model_comparison import write_local_comparison
+    write_local_comparison(db,payload)
+    # Cache validity is not enough; the replay's source configuration and
+    # no-future timestamp must match the live Index source.
+    monkeypatch.setattr(hourly_nowcast,"_load_points",
+        lambda *args,**kwargs:([
+            (int((START+timedelta(hours=i)).timestamp()*1000),
+             int((START+timedelta(hours=i,minutes=1)).timestamp()*1000),
+             55.,"normal") for i in range(12)],None))
+    # A cached score from a future date cannot authorize an earlier forecast.
+    now=START+timedelta(hours=1)
+    model=hourly_nowcast.index_nowcast_decision(
+        conn,"chicago",now,lead_minutes=30,config_version="test-source-v1")
+    assert model["model"]!=hourly_nowcast.HYBRID_MODEL
+    conn.close()
+
+
+def test_nowcast_hybrid_uses_only_live_features_not_future_observation():
+    from kalshi_edge.weather.hourly_nowcast import (
+        HYBRID_MODEL,nowcast_prediction)
+    params=fit_hybrid(cases(120))
+    d={"enabled":True,"model":HYBRID_MODEL,"parameters":params}
+    kwargs={"diurnal_delta_f":1.8}
+    predicted=nowcast_prediction(55.,1.5,2.,1.,.5,d,**kwargs)
+    expected=predict_hybrid({"current_index_f":55.,"baseline_sigma_f":1.5,
+              "fast_slope":2.,"slow_slope":1.,"hours_ahead":.5,
+              "diurnal_delta_f":1.8},params)
+    assert predicted==expected
+    # No previous-day analogue at decision time => fail closed to incumbent,
+    # not hallucinate future target data.
+    assert nowcast_prediction(55.,1.5,2.,1.,.5,d)==(55.,1.5)
