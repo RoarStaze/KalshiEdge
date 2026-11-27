@@ -664,9 +664,11 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                 # V4's future physical-ensemble locks cannot inherit the old
                 # model's validation evidence.
                 result["model_kind"]=(
-                    "HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
-                    if nowcast["model"]=="OBSERVATION_ADAPTIVE_V3"
-                    else "HISTORICAL_INDEX_NOWCAST_V2")
+                    "HISTORICAL_REGIME_SIGMA_INDEX_NOWCAST_V8"
+                    if nowcast["model"]=="OBSERVATION_REGIME_SIGMA_V4"
+                    else ("HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
+                          if nowcast["model"]=="OBSERVATION_ADAPTIVE_V3"
+                          else "HISTORICAL_INDEX_NOWCAST_V2"))
                 result["index_nowcast_selected_model"]=nowcast["model"]
         else:
             result["index_nowcast_status"]="UNSUPPORTED_LEAD_TIME"
