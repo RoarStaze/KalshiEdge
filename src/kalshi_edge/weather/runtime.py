@@ -473,6 +473,9 @@ class WeatherSupervisor:
                 "verified":int(final.get("verified",0)),
                 "awaiting":int(final.get("awaiting",0)),
                 "unverified":int(final.get("unverified",0)),
+                "checked":int(final.get("checked",0)),
+                "remaining":int(final.get("remaining",0)),
+                "checked_at":datetime.now(timezone.utc).isoformat(),
                 "errors":final.get("errors",[])[:8]}
         except Exception as exc:
             self._hourly_settlement["final_market"]={
