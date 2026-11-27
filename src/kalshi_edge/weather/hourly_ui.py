@@ -190,10 +190,10 @@ MAIN = """
    <label class="wx-trade-city-label" for="wx-hourly-city">
     <span>City</span>
     <select id="wx-hourly-city" aria-label="Hourly Index city">
-     <option value="chicago">Chicago Metro</option>
-     <option value="nyc">New York City</option>
-     <option value="miami">Miami</option>
-     <option value="la-coastal">Coastal Los Angeles</option>
+     <option value="chicago">Chicago Metro · KXTEMPCHIHS</option>
+     <option value="nyc">New York City · KXTEMPNYCHS</option>
+     <option value="miami">Miami · KXTEMPMIAH</option>
+     <option value="la-coastal">Coastal Los Angeles · KXTEMPLAXHS</option>
     </select>
    </label>
   </div>
