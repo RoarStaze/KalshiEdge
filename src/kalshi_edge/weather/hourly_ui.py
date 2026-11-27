@@ -77,6 +77,7 @@ body[data-weather-section="forecast"]{min-height:100vh}
 .wx-trade-time-left{display:flex;align-items:center;gap:12px}
 .wx-trade-time-icon{font-size:30px;color:#ff913a}
 .wx-trade-time-right{border-left:1px solid #78848275;padding-left:15px;display:flex;flex-direction:column}
+.wx-trade-close-note{grid-column:1/-1;font-size:10px;color:#b1bec6;line-height:1.4}
 .wx-trade-time-caption{display:block;font-size:11px;color:#c6d7e5;font-weight:850;letter-spacing:.7px}
 #wx-hourly-close-clock{display:block;color:#fc973e;font-size:clamp(23px,2.7vw,30px);
   font-weight:850;font-variant-numeric:tabular-nums;line-height:1.3}
@@ -222,6 +223,7 @@ MAIN = """
     <span class="wx-trade-time-caption">LATEST FORECAST UPDATE</span>
     <strong id="wx-hourly-last-forecast">—</strong>
    </div>
+   <small id="wx-hourly-close-note" class="wx-trade-close-note">Using Kalshi's actual listed market closing time, not the index target hour.</small>
   </div>
   <div class="wx-trade-hero">
    <div id="wx-hourly-direction" class="wx-trade-direction" aria-live="polite">WAITING</div>
