@@ -393,24 +393,75 @@ SCRIPT = r"""<script>
  let activeCloseMs=null, serverClockBiasMs=0, activeLean="Model leans —";
  let marketListed=false, forecastApiOk=true;
  let activeQuoteReceivedMs=null, activeQuoteStatus="QUOTE_PENDING", activeAskText=null;
+ let activeQuoteYesDollars=null, activeQuoteNoDollars=null;
+ let activeMarketKey=null, previousMarketDirection=null, flipCount=0;
+ let paperSide="YES", paperOnly=true;
+
+ function fmtLocal(isoValue){
+    if(!isoValue)return "—";
+    const stamp=new Date(isoValue);
+    if(!Number.isFinite(stamp.getTime()))return "—";
+    return stamp.toLocaleString("en-US",{timeZone:"America/New_York",
+      hour:"numeric",minute:"2-digit",timeZoneName:"short"});
+ }
+
+ function updatePaperPreview(){
+    const yesButton=el("wx-paper-yes"),noButton=el("wx-paper-no");
+    if(!yesButton||!noButton||!paperOnly)return;
+    const serverNow=Date.now()-serverClockBiasMs;
+    const fresh=activeQuoteStatus==="VALID_ASK" &&
+      Number.isFinite(activeQuoteReceivedMs) &&
+      serverNow>=activeQuoteReceivedMs && serverNow-activeQuoteReceivedMs<=35000 &&
+      Number.isFinite(activeCloseMs) && serverNow<activeCloseMs;
+    const quote=(value)=>fresh&&Number.isFinite(value)&&value>0&&value<=1?
+      (value*100).toFixed(1)+"¢":"—";
+    yesButton.textContent="YES "+quote(activeQuoteYesDollars);
+    noButton.textContent="NO "+quote(activeQuoteNoDollars);
+    yesButton.setAttribute("aria-pressed",String(paperSide==="YES"));
+    noButton.setAttribute("aria-pressed",String(paperSide==="NO"));
+    const current=paperSide==="YES"?activeQuoteYesDollars:activeQuoteNoDollars;
+    const raw=el("wx-paper-amount")?.value;
+    const amount=raw==null||raw.trim()===""?NaN:Number(raw);
+    if(!fresh||!Number.isFinite(current)||current<=0||current>1){
+       put("wx-paper-cost","—");put("wx-paper-payout","—");
+       put("wx-paper-reason","No fresh verified "+paperSide+
+         " asking-price snapshot with an open, timestamped market close. No paper estimate is available.");
+       return;
+    }
+    if(!Number.isFinite(amount)||amount<.01||amount>100000){
+       put("wx-paper-cost","—");put("wx-paper-payout","—");
+       put("wx-paper-reason","Enter a USD amount to calculate an indicative "+
+         paperSide+" paper estimate. No weather order will be placed.");
+       return;
+    }
+    const qty=Math.max(0,Math.floor((amount+1e-9)/current));
+    put("wx-paper-cost",qty+" whole contracts · $"+(qty*current).toFixed(2));
+    put("wx-paper-payout","$"+qty.toFixed(2)+" gross");
+    put("wx-paper-reason","Illustrative whole-contract quantity at a single observed ask, before fees. "+
+      "Not an executable quote; posted size, slippage and fees are NOT modeled. No order will be placed.");
+ }
+
  function tickQuote(){
     const serverNow=Date.now()-serverClockBiasMs;
     const fresh=Number.isFinite(activeQuoteReceivedMs) &&
       serverNow>=activeQuoteReceivedMs && serverNow-activeQuoteReceivedMs<=35000;
-    const status=activeQuoteStatus==="VALID_ASK"&&!fresh?
+    const open=Number.isFinite(activeCloseMs) && serverNow<activeCloseMs;
+    const status=!open?(Number.isFinite(activeCloseMs)?"CLOSED":"CLOSE_UNKNOWN"):
+      activeQuoteStatus==="VALID_ASK"&&!fresh?
       "STALE_QUOTE":activeQuoteStatus;
     put("wx-hourly-kalshi-ask",status==="VALID_ASK"&&activeAskText?
-      "Kalshi ask YES / NO · "+activeAskText:
-      "Kalshi ask YES / NO · no current verified executable ask");
+      "YES / NO · "+activeAskText:"No fresh verified YES / NO ask");
     const readable=status==="NO_VISIBLE_ASK"?"No posted asking liquidity":
       status==="QUOTE_PENDING"?"Waiting for first exchange quote":
       status==="STALE_QUOTE"?"Quote expired; waiting for refresh":
       status==="QUOTE_UNAVAILABLE"?"Exchange quote unavailable":
-      status==="CLOSED"?"Market confirmed closed":status;
+      status==="CLOSED"?"Listed close time reached":
+      status==="CLOSE_UNKNOWN"?"Market close time unavailable":status;
     put("wx-hourly-quote-state","Observed quote status · "+readable+
       (status==="VALID_ASK"?
          " · refreshed "+Math.max(0,Math.floor((serverNow-activeQuoteReceivedMs)/1000))+
          "s ago (not guaranteed executable)":""));
+    updatePaperPreview();
  }
  function tickMarketClose(){
     tickQuote();
@@ -519,6 +570,14 @@ SCRIPT = r"""<script>
         "Not enough verified settled hours");
     put("wx-hourly-current",f(row.current_index_f));
     put("wx-hourly-mean",f(row.predicted_index_f));
+    put("wx-hourly-last-forecast",fmtLocal(row.asof));
+    const labels={"chicago":"Chicago Metro","nyc":"New York City",
+       "miami":"Miami","la-coastal":"Coastal Los Angeles"};
+    const named=labels[card.value]||"Hourly Weather Index";
+    put("wx-paper-market-name",named+" · Temperature");
+    put("wx-paper-target",row.target_utc?
+      "Hourly target "+fmtLocal(row.target_utc)+" · official Kalshi Index":
+      "Waiting for the next published hourly target");
     put("wx-hourly-interval",Array.isArray(row.interval_90_f)?
         row.interval_90_f.map(f).join(" – "):"NOT MEASURED");
     put("wx-hourly-utc",iso(row.target_utc));
@@ -548,6 +607,14 @@ SCRIPT = r"""<script>
     const asks=(value,size)=>typeof value==="string"&&typeof size==="string"?
       (100*Number(value)).toFixed(1)+"¢ (size "+size+")":"no visible ask";
     activeQuoteStatus=focus?.quote_status||"QUOTE_PENDING";
+    activeQuoteYesDollars=(typeof focus?.yes_ask_dollars==="string" &&
+      Number.isFinite(Number(focus.yes_ask_dollars)) &&
+      Number(focus.yes_ask_dollars)>0 && Number(focus.yes_ask_dollars)<=1)?
+      Number(focus.yes_ask_dollars):null;
+    activeQuoteNoDollars=(typeof focus?.no_ask_dollars==="string" &&
+      Number.isFinite(Number(focus.no_ask_dollars)) &&
+      Number(focus.no_ask_dollars)>0 && Number(focus.no_ask_dollars)<=1)?
+      Number(focus.no_ask_dollars):null;
     activeQuoteReceivedMs=focus?.quote_received_at?
       Date.parse(focus.quote_received_at):null;
     if(!Number.isFinite(activeQuoteReceivedMs))activeQuoteReceivedMs=null;
@@ -555,16 +622,55 @@ SCRIPT = r"""<script>
       " / "+asks(focus.no_ask_dollars,focus.no_ask_size_fp):null;
     activeCloseMs=focus && focus.close_time_utc?Date.parse(focus.close_time_utc):null;
     if(!Number.isFinite(activeCloseMs))activeCloseMs=null;
-    activeLean="Model leans —";
-    put("wx-hourly-contract",focus?focus.threshold_f+" °F or above":"No listed market");
-    put("wx-hourly-focus-ticker",focus?"Kalshi ticker: "+focus.ticker:"");
+    activeLean="Waiting for a listed contract";
+    put("wx-hourly-contract",focus?focus.threshold_f+"°F":"—");
+    put("wx-hourly-focus-ticker",focus?"Kalshi ticker: "+focus.ticker:
+       "No verified listed contract");
+    const current=Number.isFinite(row.current_index_f)?row.current_index_f:null;
+    const delta=focus && current!=null?current-focus.threshold_f:null;
+    put("wx-hourly-delta",delta==null?"—":
+       (Math.abs(delta)<.005?"At listed threshold":
+        Math.abs(delta).toFixed(2)+"°F "+(delta>0?"above":"below")+" threshold"));
+    const marketKey=focus?card.value+"|"+row.event_ticker+"|"+focus.ticker:null;
+    const side=focus?focus.probability_yes>.5?"YES":
+       focus.probability_yes<.5?"NO":null:null;
+    if(marketKey!==activeMarketKey){
+       activeMarketKey=marketKey;
+       previousMarketDirection=null;
+       flipCount=0;
+    }
+    if(marketKey && side && previousMarketDirection && side!==previousMarketDirection){
+       flipCount++;
+    }
+    if(marketKey && side)previousMarketDirection=side;
+    put("wx-hourly-flips",marketKey?(flipCount?
+       flipCount+" FLIP"+(flipCount===1?"":"S")+" OBSERVED":"MONITORING"):"NO MARKET");
+    put("wx-hourly-flip-detail",marketKey?
+       (flipCount?"Model-favored side changed "+flipCount+" time(s) while this page was open.":
+       "No model-side flip observed for this ticker in this browser session."):
+       "No selected market to monitor. Browser-only observation; no push alerts.");
+    const hero=el("wx-hourly-direction");
+    if(hero){
+       const label=side==="YES"?"ABOVE":side==="NO"?"BELOW":
+          focus?"EVEN":"WAITING";
+       hero.textContent=label;
+       hero.className="wx-trade-direction "+(side==="YES"?"yes":
+          side==="NO"?"no":"waiting");
+    }
     if(focus){
        const yesPct=100*focus.probability_yes, noPct=100-yesPct;
-       activeLean=Math.abs(yesPct-noPct)<0.01?"Model is evenly split":
-          "Model leans "+(yesPct>noPct?"YES":"NO");
-       put("wx-hourly-model-chance","Estimated YES "+yesPct.toFixed(1)+
-          "% · NO "+noPct.toFixed(1)+"% (unvalidated)");
+       const modeled=Math.max(yesPct,noPct);
+       put("wx-hourly-confidence",modeled.toFixed(1)+"%");
+       const progress=el("wx-hourly-progress");
+       if(progress)progress.style.width=modeled.toFixed(1)+"%";
+       activeLean=side===null?"Model is evenly split":
+          "Model leans "+(side==="YES"?"YES (at least threshold)":"NO (below threshold)");
+       put("wx-hourly-model-chance","Modeled YES "+yesPct.toFixed(1)+"% · NO "+
+          noPct.toFixed(1)+"% · unvalidated research probabilities, NOT Kalshi asking prices.");
     }else{
+       put("wx-hourly-confidence","—");
+       const progress=el("wx-hourly-progress");
+       if(progress)progress.style.width="0%";
        put("wx-hourly-model-chance",row.predicted_index_f!=null?
          "Temperature forecast available; no verified YES/NO contract.":
          "Waiting for a reliable hourly temperature prediction.");
@@ -685,6 +791,11 @@ SCRIPT = r"""<script>
    }
  }
  if(card)card.addEventListener("change",draw);
+ const yesButton=el("wx-paper-yes"),noButton=el("wx-paper-no");
+ if(yesButton)yesButton.addEventListener("click",()=>{paperSide="YES";updatePaperPreview();});
+ if(noButton)noButton.addEventListener("click",()=>{paperSide="NO";updatePaperPreview();});
+ const paperAmount=el("wx-paper-amount");
+ if(paperAmount)paperAmount.addEventListener("input",updatePaperPreview);
  update();setInterval(update,15000);setInterval(tickMarketClose,1000);
 })();
 </script>"""
