@@ -51,7 +51,7 @@ def test_weather_trade_never_claims_real_execution_or_fake_balances():
     assert "8-MIN RECORD SAVED" not in html
     assert "3°F (+4.5%)" not in html
     assert "72°F" not in html
-    assert "74%" not in html
+    assert 'id="wx-hourly-confidence">74%' not in html  # CSS can contain a 74% gradient stop
     assert "live weather orders</span><strong>disabled" not in html.lower()
     assert "/api/manual-trade/" not in html
     assert 'type="submit"' not in html
