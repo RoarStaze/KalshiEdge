@@ -22,7 +22,7 @@ UTC=timezone.utc
 START=datetime(2026,8,1,0,tzinfo=UTC)
 
 
-def cases(n=192, *, analogue_signal=True, market=True):
+def cases(n=192, *, analogue_signal=True, market=True, frozen_live=True):
     """Deterministic sequence; generate strike BEFORE labeling its outcome."""
     result=[]
     for i in range(n):
@@ -47,6 +47,12 @@ def cases(n=192, *, analogue_signal=True, market=True):
             "baseline_sigma_f":1.5,"diurnal_delta_f":delta,
             "observed_index_f":actual,
         }
+        if frozen_live:
+            # This is a SYNTHETIC original forecast; the local benchmark
+            # requires real immutable V9 forward snapshots instead.
+            row.update({"live_frozen_mean_f":current+.35*fast*lead+.40*slow*lead,
+                        "live_frozen_sigma_f":1.5,
+                        "live_frozen_model_kind":"SYNTHETIC_FROZEN_CURRENT"})
         if market:
             row.update({"market_threshold_f":threshold,
                         "market_outcome_yes":actual>=threshold,
@@ -61,6 +67,7 @@ def test_paired_walkforward_shows_model_improvement_on_known_analogue_signal():
     assert result["eligible_for_live_promotion"] is True
     assert result["matched_hours"]==72
     assert result["verified_market_hours"]==72
+    assert result["frozen_live_hours"]==72
     assert len(result["folds"])==3
     assert all(f["hours"]==24 for f in result["folds"])
     assert result["candidate"]["mae_f"]<result["incumbent"]["mae_f"]
@@ -90,6 +97,8 @@ def test_no_real_predictive_edge_does_not_pass_model_upgrade_gate():
         actual=row["current_index_f"]+.02*math.sin(i*1.47)
         row["observed_index_f"]=actual
         row["market_outcome_yes"]=actual>=row["market_threshold_f"]
+        row["live_frozen_mean_f"]=row["current_index_f"]
+        row["live_frozen_sigma_f"]=.65
     result=compare_models(rows)
     assert result["eligible_for_live_promotion"] is False
 
@@ -287,3 +296,15 @@ def test_nowcast_hybrid_uses_only_live_features_not_future_observation():
     # No previous-day analogue at decision time => fail closed to incumbent,
     # not hallucinate future target data.
     assert nowcast_prediction(55.,1.5,2.,1.,.5,d)==(55.,1.5)
+
+
+def test_hypothetical_v12_replay_cannot_replace_frozen_actual_live_forecast():
+    # A new model beating a reconstructed observation component does not
+    # prove superiority to the real live pipeline, which may include V1
+    # settlement correction and the HRRR/NBM physical ensemble.
+    result=compare_models(cases(frozen_live=False))
+    assert result["matched_hours"]==72
+    assert result["verified_market_hours"]==72
+    assert result["frozen_live_hours"]==0
+    assert result["eligible_for_live_promotion"] is False
+    assert result["status"]=="INSUFFICIENT_FROZEN_LIVE_FORECASTS"
