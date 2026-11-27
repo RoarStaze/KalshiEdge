@@ -207,6 +207,15 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
                                     uri=True,timeout=3)) as conn:
             conn.execute("PRAGMA query_only=ON")
             market_evidence={}
+            market_checks={}
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='weather_hourly_final_market_checks'").fetchone():
+                for city,event,ticker,state,detail,checked_at,attempts in conn.execute(
+                    """SELECT city,event_ticker,market_ticker,state,detail,
+                              checked_at,attempt_count
+                       FROM weather_hourly_final_market_checks"""):
+                    market_checks[city,event,ticker]=(
+                        state,detail,checked_at,attempts)
             if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
                             "AND name='weather_hourly_final_market_results'").fetchone():
                 for city,event,ticker,result,settled,received,raw,sha in conn.execute(
@@ -257,6 +266,12 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
             p=info["probability_yes"]
             side="ABOVE" if p>.5 else ("BELOW" if p<.5 else "EVEN")
             actual=info.pop("actual")
+            operational=market_checks.get(
+                (info["city"],info["event_ticker"],info["market_ticker"]))
+            info["settlement_check_state"]=operational[0] if operational else "NOT_CHECKED"
+            info["settlement_check_reason"]=operational[1] if operational else None
+            info["settlement_checked_at"]=operational[2] if operational else None
+            info["settlement_check_attempts"]=operational[3] if operational else 0
             if actual is None:
                 verdict="PENDING"
                 pending+=1
@@ -292,6 +307,16 @@ def read_hourly_history(root: Path, *, db_path: Path | None = None,
             "settled_directional_forecasts":n,
             "correct":correct,"incorrect":incorrect,
             "pending_settlement":pending,
+            "pending_unchecked":sum(
+                1 for x in rows if x["verdict"]=="PENDING" and
+                x["settlement_check_state"]=="NOT_CHECKED"),
+            "pending_feed_errors":sum(
+                1 for x in rows if x["verdict"]=="PENDING" and
+                x["settlement_check_state"] in
+                    ("FETCH_ERROR","INVALID_OFFICIAL_EVIDENCE")),
+            "pending_waiting_exchange":sum(
+                1 for x in rows if x["verdict"]=="PENDING" and
+                x["settlement_check_state"]=="AWAITING_FINALIZATION"),
             # Show observed, source-verified arithmetic from the first
             # settled round. Under ten, label it as a small, uncalibrated
             # sample rather than hiding a real correct/incorrect ratio.
