@@ -487,6 +487,7 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
                         g.get("config_version")==config_version and
                         g.get("eligible_for_live_promotion") is True and
                         g.get("matched_hours",0)>=72 and
+                        g.get("frozen_live_hours",0)>=72 and
                         g.get("verified_market_hours",0)>=24),None)
             if (cache.get("status")=="RESEARCH_SCORED" and
                 cache.get("any_promoted") is True and
