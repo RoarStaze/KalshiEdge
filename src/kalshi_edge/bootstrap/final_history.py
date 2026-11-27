@@ -35,6 +35,7 @@ from kalshi_edge.weather.predictor import read_weather_forecasts
 from kalshi_edge.weather.calibration import calibration_status
 from kalshi_edge.weather.hourly import read_hourly_forecasts, hourly_calibration, hourly_status
 from kalshi_edge.weather.hourly_history import read_hourly_history
+from kalshi_edge.weather.hourly_model_comparison import _load_cached_for_root
 from .api_credentials_ui import integrate_api_credentials
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
@@ -868,6 +869,10 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 kind = "application/json; charset=utf-8"
             elif path == "/api/weather/hourly/history":
                 content = json.dumps(read_hourly_history(root), separators=(",", ":"),
+                                     allow_nan=False).encode("utf-8")
+                kind = "application/json; charset=utf-8"
+            elif path == "/api/weather/hourly/model-comparison":
+                content = json.dumps(_load_cached_for_root(root),separators=(",",":"),
                                      allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
             elif path == "/api/weather/hourly/calibration":

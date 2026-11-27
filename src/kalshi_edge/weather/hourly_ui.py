@@ -374,6 +374,18 @@ CALIBRATION = """
    <div class="wx-empty">Waiting for prospective verified forecasts…</div>
   </div>
  </div>
+ <details class="wx-hourly-details">
+  <summary>Incumbent vs challenger · paired model benchmark</summary>
+  <h3>Frozen full WeatherEdge forecast vs experimental V13</h3>
+  <p>Three chronological 24-hour blocks compare the same hourly Index targets.
+   Temperature MAE/CRPS use only timely source observations. Brier requires
+   originally frozen matching contracts and verified YES/NO settlements.
+   Promotion needs all gates; synthetic tests cannot establish real accuracy.</p>
+  <div id="wx-model-comparison" class="wx-forward-cohorts" aria-live="polite">
+   <div class="wx-empty">No verified market comparison yet. Waiting for
+   the collector's point-in-time evidence.</div>
+  </div>
+ </details>
 </article>
 """
 DATA = """
@@ -756,6 +768,47 @@ SCRIPT = r"""<script>
             " · 90% coverage "+(Number.isFinite(cohort.coverage_90)?
                (100*cohort.coverage_90).toFixed(1)+"%":"NOT MEASURED");
           forwardTarget.append(line);
+        }
+      }
+      // Cached benchmark only; the browser never trains a model.
+      const modelTarget=el("wx-model-comparison");
+      if(modelTarget){
+        modelTarget.replaceChildren();
+        const line=(value)=>{
+          const node=document.createElement("div");
+          node.className="wx-forward-cohort";
+          node.textContent=value;
+          modelTarget.append(node);
+        };
+        try{
+          const reply=await fetch("/api/weather/hourly/model-comparison",
+                                   {cache:"no-store"});
+          if(!reply.ok)throw new Error("Model comparison unavailable");
+          const report=await reply.json();
+          line("Local paired evidence: "+(report.status||"NOT AVAILABLE")+
+               " · research only, not certified accuracy.");
+          const groups=Array.isArray(report.groups)?report.groups:[];
+          const metric=(value,n=3)=>Number.isFinite(value)?
+             value.toFixed(n):"NOT VERIFIED";
+          for(const item of groups.slice(0,20)){
+             const base=item.incumbent||{},candidate=item.candidate||{};
+             line((item.city||"city")+" · "+(item.lead_minutes||"?")+"min"+
+                  " · matched hours "+(item.matched_hours||0)+
+                  " · frozen current-model hours "+(item.frozen_live_hours||0)+
+                  " · verified contracts "+(item.verified_market_hours||0)+
+                  " · Current MAE "+metric(base.mae_f,2)+"°F"+
+                  " / V13 "+metric(candidate.mae_f,2)+"°F"+
+                  " · Current CRPS "+metric(base.crps)+
+                  " / V13 "+metric(candidate.crps)+
+                  " · Current Brier "+metric(base.brier)+
+                  " / V13 "+metric(candidate.brier)+
+                  " · "+(item.eligible_for_live_promotion?
+                        "GATED PASS":"NO PROMOTION")+
+                  " ("+(item.status||"waiting")+")");
+          }
+          if(!groups.length)line("No verified market comparison yet.");
+        }catch(e){
+          line("No verified market comparison available from the local collector.");
         }
       }
       const h=s.collector||{},feed=h.hourly||{},outcome=h.hourly_settlement||{};

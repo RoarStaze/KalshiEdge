@@ -28,6 +28,9 @@ from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
 from .hourly_forward import journal_forward, settle_forward_once
 from .hourly_market_results import collect_final_market_results_once
+from .hourly_model_comparison import (
+    compare_local_weather_models, write_local_comparison,
+)
 from .hourly_physics import collect_hourly_physics_once
 from .hourly_physical_learning import (
     journal_physical_pairs, freeze_candidate_locks,
@@ -50,6 +53,7 @@ SETTLEMENT_POLL_SECONDS = 6 * 3600
 HOURLY_INDEX_SECONDS = 120
 HOURLY_SETTLE_SECONDS = 300
 HOURLY_QUOTES_SECONDS = 20
+HOURLY_COMPARISON_SECONDS = 3600
 PHYSICAL_NWP_SECONDS = 3600
 
 
@@ -156,6 +160,7 @@ class WeatherSupervisor:
         self._collect_hourly_physics = hourly_physics_collect
         self._collect_hourly_quotes = hourly_quotes_collect
         self._hourly_quotes = {"state":"STARTING"}
+        self._hourly_model_comparison = {"state":"STARTING"}
         self._hourly_physics = {"state":"STARTING"}
         self._hourly = {city: {"state":"STARTING"} for city in
                         ("chicago","nyc","la-coastal","miami")}
@@ -185,6 +190,7 @@ class WeatherSupervisor:
             "hourly_settlement": self._hourly_settlement,
             "hourly_physics": self._hourly_physics,
             "hourly_quotes": self._hourly_quotes,
+            "hourly_model_comparison": self._hourly_model_comparison,
             "real_orders_enabled": False,
         }
         temp_path = None
@@ -518,6 +524,35 @@ class WeatherSupervisor:
                 "reason":f"{type(exc).__name__}: {exc}"[:180]}
         self._persist()
 
+    async def poll_hourly_model_comparison(self) -> None:
+        """Run an autonomous read-only 3-fold test on local recorded evidence.
+
+        Collector reads the same locally received Index data as the actual
+        forecaster and publishes only compact scores. It never changes a
+        stored prediction, contract outcome, or account/trading state.
+        """
+        try:
+            report=await asyncio.wait_for(
+                asyncio.to_thread(compare_local_weather_models,self.db_path),
+                timeout=180)
+            if (report.get("mode")!="HOURLY_MODEL_PAIRED_COMPARISON_V13" or
+                report.get("real_orders_enabled") is not False or
+                report.get("calibration_certified") is not False):
+                raise ValueError("INVALID_HOURLY_MODEL_BENCHMARK")
+            await asyncio.to_thread(write_local_comparison,self.db_path,report)
+            self._hourly_model_comparison={
+                "state":report.get("status","UNAVAILABLE"),
+                "groups":len(report.get("groups",[])),
+                "eligible":sum(1 for group in report.get("groups",[])
+                               if group.get("eligible_for_live_promotion")),
+                "checked_at":datetime.now(timezone.utc).isoformat()}
+        except Exception as exc:
+            self._hourly_model_comparison={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:200],
+                "checked_at":datetime.now(timezone.utc).isoformat()}
+        self._persist()
+
     async def run_forever(self) -> None:
         async def every(poll, period: int) -> None:
             while True:
@@ -529,6 +564,7 @@ class WeatherSupervisor:
         await asyncio.gather(
             every(self.poll_hourly, HOURLY_INDEX_SECONDS),
             every(self.poll_hourly_quotes, HOURLY_QUOTES_SECONDS),
+            every(self.poll_hourly_model_comparison, HOURLY_COMPARISON_SECONDS),
             every(self.poll_hourly_settlements, HOURLY_SETTLE_SECONDS),
             every(self.poll_hourly_physics, PHYSICAL_NWP_SECONDS),
         )

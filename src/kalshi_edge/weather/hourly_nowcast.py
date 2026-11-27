@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from .predictor import normal_cdf
 from .hourly_adaptive import fit_adaptive, predict_adaptive, validate_adaptive
+from .hourly_hybrid import predict_hybrid, validate_hybrid
 from .hourly_volatility import (
     MIN_TRAIN as VOLATILITY_MIN_TRAIN, fit_volatility,
     predict_volatility, validate_volatility,
@@ -23,6 +24,7 @@ from .hourly_volatility import (
 ADAPTIVE_MODEL = "OBSERVATION_ADAPTIVE_V3"
 VOLATILITY_MODEL = "OBSERVATION_REGIME_SIGMA_V4"
 DIURNAL_MODEL = "DIURNAL_ANALOGUE_V5"
+HYBRID_MODEL = "REGULARIZED_HOURLY_HYBRID_V13"
 
 LEAD_MINUTES = (5, 15, 30, 45, 60)
 MIN_TRAIN = 48
@@ -202,6 +204,8 @@ def _case(points: list[tuple], times: list[int], target_ms: int,
         "forecast_asof":datetime.fromtimestamp(anchor/1000,tz=timezone.utc).isoformat(),
         "baseline_mean_f":baseline,"baseline_sigma_f":sigma,
         "current_index_f":current,"observed_index_f":label[2],
+        "label_received_at":datetime.fromtimestamp(
+            label[1]/1000,tz=timezone.utc).isoformat(),
         "fast_slope":fast,"slow_slope":slow,"hours_ahead":hours,
         "diurnal_delta_f":_diurnal_delta(points,times,anchor,target_ms),
     }
@@ -419,6 +423,15 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
                        diurnal_delta_f: float | None = None) -> tuple[float,float]:
     if not decision.get("enabled"):
         return current_f,baseline_sigma_f
+    if decision.get("model")==HYBRID_MODEL:
+        if diurnal_delta_f is None:
+            return current_f,baseline_sigma_f
+        row={"current_index_f":current_f,
+             "baseline_sigma_f":baseline_sigma_f,
+             "fast_slope":fast_slope,"slow_slope":slow_slope,
+             "hours_ahead":hours_ahead,
+             "diurnal_delta_f":diurnal_delta_f}
+        return predict_hybrid(row,decision.get("parameters"))
     if decision.get("model")==DIURNAL_MODEL:
         if diurnal_delta_f is None:
             return current_f,baseline_sigma_f
@@ -440,7 +453,8 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
 
 def index_nowcast_decision(conn: sqlite3.Connection, city: str,
                            asof: datetime, *, lead_minutes: int,
-                           config_version: str) -> dict:
+                           config_version: str,
+                           target_utc: datetime | None = None) -> dict:
     fail={"enabled":False,"status":"UNSUPPORTED_LEAD_TIME",
           "history_hours":0,"training_hours":0,"validation_hours":0,
           "model":None,"sigma_scale":1.,"validation":None,
@@ -455,11 +469,78 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
         samples=_cases_from_points(points,now,lead_minutes)
         decision=choose_index_nowcast(samples)
         decision["live_slopes"]=_slopes_from_points(points,now)
+        times=[r[0] for r in points]
+        ms=int(now.timestamp()*1000)
+        exact_target=(_utc(target_utc) if target_utc is not None else
+                      now+timedelta(minutes=lead_minutes))
+        actual_target_ms=int(exact_target.timestamp()*1000)
+        if (actual_target_ms<=ms or actual_target_ms-ms>3600000):
+            return {**fail,"status":"INVALID_HOURLY_TARGET"}
         if decision.get("model")==DIURNAL_MODEL:
-            times=[r[0] for r in points]
-            ms=int(now.timestamp()*1000)
             decision["live_diurnal_delta_f"]=_diurnal_delta(
-                points,times,ms,ms+lead_minutes*60000)
+                points,times,ms,actual_target_ms)
+
+        # Promotion cannot be decided from training MAE or imagined
+        # settlement: only the collector's saved, checksum-verified
+        # three-block paired contest against V12 + exact verified Kalshi
+        # YES/NO probabilities may authorize a V13 candidate.
+        try:
+            from pathlib import Path
+            from .hourly_model_comparison import read_local_comparison
+            name=conn.execute("PRAGMA database_list").fetchone()[2]
+            cache=read_local_comparison(Path(name)) if name else {}
+            match=next((g for g in cache.get("groups",[])
+                        if g.get("city")==city and
+                        g.get("lead_minutes")==lead_minutes and
+                        g.get("config_version")==config_version and
+                        g.get("eligible_for_live_promotion") is True and
+                        g.get("matched_hours",0)>=72 and
+                        g.get("frozen_live_hours",0)>=72 and
+                        g.get("verified_market_hours",0)>=24),None)
+            if (cache.get("status")=="RESEARCH_SCORED" and
+                cache.get("any_promoted") is True and
+                cache.get("asof_utc") and
+                _utc(cache["asof_utc"])<=now and match is not None and
+                validate_hybrid(match.get("parameters")) and
+                decision["live_slopes"] is not None):
+                live_delta=_diurnal_delta(
+                    points,times,ms,actual_target_ms)
+                if live_delta is not None:
+                    # Keep the original incumbent's score metadata separate.
+                    decision["incumbent_model"]=decision["model"]
+                    decision["model"]=HYBRID_MODEL
+                    decision["parameters"]=match["parameters"]
+                    decision["sigma_scale"]=match["parameters"]["sigma_scale"]
+                    decision["live_diurnal_delta_f"]=live_delta
+                    decision["enabled"]=True
+                    decision["status"]="PAIRED_MARKET_BACKTEST_IMPROVED_UNCERTIFIED"
+                    decision["validation_hours"]=match["matched_hours"]
+                    # Do not display the old V12-only validation as if it
+                    # measured the selected V13 against the full live model.
+                    decision["validation"]={
+                        "baseline_mae_f":match["incumbent"]["mae_f"],
+                        "candidate_mae_f":match["candidate"]["mae_f"],
+                        "baseline_crps":match["incumbent"]["crps"],
+                        "candidate_crps":match["candidate"]["crps"],
+                        "baseline_90_coverage":match["incumbent"]["coverage_90"],
+                        "candidate_90_coverage":match["candidate"]["coverage_90"],
+                        "baseline_brier":match["incumbent"]["brier"],
+                        "candidate_brier":match["candidate"]["brier"],
+                        "frozen_full_live_hours":match["frozen_live_hours"],
+                        "market_verified_hours":match["verified_market_hours"]}
+                    decision["paired_comparison"]={
+                        "status":match["status"],
+                        "matched_hours":match["matched_hours"],
+                        "verified_market_hours":match["verified_market_hours"],
+                        "incumbent":match["incumbent"],
+                        "candidate":match["candidate"]}
+            else:
+                decision["paired_comparison_status"]=(
+                    match["status"] if match else cache.get("status",
+                    "INSUFFICIENT_VERIFIED_MARKET_PAIRS"))
+        except (ValueError,TypeError,KeyError,OSError,sqlite3.Error):
+            # A stale, corrupted or absent cache never changes the incumbent.
+            decision["paired_comparison_status"]="PAIRED_EVIDENCE_UNAVAILABLE"
         return decision
     except (ValueError,sqlite3.Error):
         return {**fail,"status":"INVALID_INDEX_EVIDENCE"}
