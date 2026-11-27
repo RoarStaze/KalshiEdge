@@ -107,7 +107,11 @@ async def collect_final_market_results_once(
                 FROM {table} WHERE target_utc>=? AND target_utc<=?""")
             params.extend(((now-timedelta(days=7)).isoformat(),
                            (now-timedelta(minutes=6)).isoformat()))
-        rows=conn.execute(" UNION ALL ".join(parts),params).fetchall() if parts else []
+        # Probe most recent outstanding hours first; a large backlog of
+        # old unresolved markets must not starve the visible latest hour.
+        rows=(conn.execute(" UNION ALL ".join(parts)+
+                           " ORDER BY target_utc DESC",params).fetchall()
+              if parts else [])
         existing={tuple(x) for x in conn.execute(
            "SELECT city,event_ticker,market_ticker FROM weather_hourly_final_market_results")}
     pending={}
