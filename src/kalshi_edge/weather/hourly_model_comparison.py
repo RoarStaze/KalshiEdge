@@ -14,7 +14,7 @@ import os
 import sqlite3
 import tempfile
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .hourly_hybrid import fit_hybrid, predict_hybrid
@@ -133,8 +133,20 @@ def compare_models(cases: list[dict], *,
     last_params=None
     for i in range(FOLDS):
         end_train=start+i*BLOCK
-        older=ordered[:end_train]
         holdout=ordered[end_train:end_train+BLOCK]
+        first_asof=_iso(holdout[0]["forecast_asof"])
+        # Receipt-time embargo: last canonical hour can be published AFTER
+        # a 60-min-ahead forecast begins. Fit only labels actually available
+        # before the first forecast of this *whole* test block.
+        older=[row for row in ordered[:end_train]
+               if _iso(row["label_received_at"])<=first_asof
+               if row.get("label_received_at") is not None] + [
+               row for row in ordered[:end_train]
+               if row.get("label_received_at") is None and
+               _iso(row["target_utc"])+timedelta(minutes=10)<=first_asof]
+        older.sort(key=lambda row:_iso(row["target_utc"]))
+        if len(older)<MIN_PREFIX:
+            return _empty_report("INSUFFICIENT_CAUSAL_TRAINING")
         try:
             incumbent=select(older)
             params=fit_hybrid(older)
