@@ -27,6 +27,7 @@ from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
 from .hourly_forward import journal_forward, settle_forward_once
+from .hourly_history import sync_hourly_history
 from .hourly_physics import collect_hourly_physics_once
 from .hourly_physical_learning import (
     journal_physical_pairs, freeze_candidate_locks,
@@ -484,6 +485,22 @@ class WeatherSupervisor:
                 "errors":forward.get("errors",[])[:8]}
         except Exception as exc:
             self._hourly_settlement["forward_v9"]={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:180]}
+        # Reconcile the one-earliest-forecast-per-hour ledger after the
+        # regular settlement pass. Safe and idempotent on existing histories.
+        # It remains separate from V9's five-lead research lockbox.
+        try:
+            history=await asyncio.to_thread(sync_hourly_history,self.db_path)
+            if (history.get("mode")!="HOURLY_HISTORY_READ_ONLY" or
+                history.get("real_orders_enabled") is not False):
+                raise ValueError("INVALID_WEATHER_HISTORY_JOURNAL_STATUS")
+            self._hourly_settlement["history"]={
+                "state":history.get("status","UNAVAILABLE"),
+                "recorded":int(history.get("recorded",0)),
+                "unverified":int(history.get("unverified",0))}
+        except Exception as exc:
+            self._hourly_settlement["history"]={
                 "state":"UNAVAILABLE",
                 "reason":f"{type(exc).__name__}: {exc}"[:180]}
         self._persist()
