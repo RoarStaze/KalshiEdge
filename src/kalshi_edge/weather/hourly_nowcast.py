@@ -204,6 +204,8 @@ def _case(points: list[tuple], times: list[int], target_ms: int,
         "forecast_asof":datetime.fromtimestamp(anchor/1000,tz=timezone.utc).isoformat(),
         "baseline_mean_f":baseline,"baseline_sigma_f":sigma,
         "current_index_f":current,"observed_index_f":label[2],
+        "label_received_at":datetime.fromtimestamp(
+            label[1]/1000,tz=timezone.utc).isoformat(),
         "fast_slope":fast,"slow_slope":slow,"hours_ahead":hours,
         "diurnal_delta_f":_diurnal_delta(points,times,anchor,target_ms),
     }
