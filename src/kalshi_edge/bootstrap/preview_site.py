@@ -13,7 +13,7 @@ import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 from .dashboard_ui import PAGE
 from .manual_trade_ui import integrate_manual_trade
@@ -27,6 +27,7 @@ from kalshi_edge.weather.status import read_weather_status
 from kalshi_edge.weather.predictor import read_weather_forecasts
 from kalshi_edge.weather.calibration import calibration_status
 from kalshi_edge.weather.hourly import read_hourly_forecasts, hourly_calibration, hourly_status
+from kalshi_edge.weather.hourly_history import read_hourly_history
 
 PREVIEW_PORT = 8900
 _RESERVED_PORTS = frozenset((8898, 8899))
@@ -278,6 +279,24 @@ def make_preview_handler(*, asset_path: Path | None = None) -> type[BaseHTTPRequ
                 return
             if path == "/api/weather/hourly/calibration":
                 self._json(200, hourly_calibration(Path("."), preview=True))
+                return
+            if path == "/api/weather/hourly/history":
+                query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+                if (not set(query).issubset({"city","filter","limit","offset"}) or
+                    any(len(v)!=1 for v in query.values())):
+                    self._json(400,{"error":"Invalid weather history query"})
+                    return
+                try:
+                    result=read_hourly_history(
+                        Path("."),preview=True,
+                        city=query.get("city",["all"])[0],
+                        verdict=query.get("filter",["ALL"])[0],
+                        limit=int(query.get("limit",["50"])[0]),
+                        offset=int(query.get("offset",["0"])[0]))
+                except (ValueError,TypeError,OverflowError):
+                    self._json(400,{"error":"Invalid weather history filters"})
+                    return
+                self._json(200,result)
                 return
             if path == "/api/weather/hourly/status":
                 self._json(200, hourly_status(Path("."), preview=True))
