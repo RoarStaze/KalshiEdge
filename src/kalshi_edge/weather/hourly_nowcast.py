@@ -22,6 +22,7 @@ from .hourly_volatility import (
 
 ADAPTIVE_MODEL = "OBSERVATION_ADAPTIVE_V3"
 VOLATILITY_MODEL = "OBSERVATION_REGIME_SIGMA_V4"
+DIURNAL_MODEL = "DIURNAL_ANALOGUE_V5"
 
 LEAD_MINUTES = (5, 15, 30, 45, 60)
 MIN_TRAIN = 48
@@ -107,6 +108,56 @@ def _select_before(points: list[tuple], times: list[int],
     return available
 
 
+def _diurnal_delta(points: list[tuple], times: list[int],
+                   anchor_ms: int, target_ms: int) -> float | None:
+    """Prior-day same-clock temperature *change*, never same-day future.
+
+    The exact same receipt cutoff is used in historical replay and live.
+    Data must be published promptly and actually available at decision time.
+    """
+    if not points or not times or anchor_ms>=target_ms:
+        return None
+    day=24*3600000
+
+    def before(ms: int) -> float | None:
+        pos=bisect.bisect_right(times,ms)
+        if pos<=0:
+            return None
+        for item in reversed(points[max(0,pos-4):pos]):
+            event,receipt,temp,status=item
+            if (0<=ms-event<=8*60000 and
+                0<=receipt-event<=DATA_RECEIPT_LIMIT_SECONDS*1000 and
+                receipt<=anchor_ms and status=="normal" and
+                math.isfinite(temp)):
+                return float(temp)
+        return None
+
+    # Two previous calendar days; never use the target hour's actual value
+    # as a feature. Bound drift to limit sensitivity to outlier index jumps.
+    changes=[]
+    for lag in (1,2):
+        old_start=before(anchor_ms-lag*day)
+        old_end=before(target_ms-lag*day)
+        if old_start is not None and old_end is not None:
+            changes.append(max(-6.,min(6.,old_end-old_start)))
+    if not changes:
+        return None
+    return round(sum(changes)/len(changes),6)
+
+
+def _diurnal_params(rows: list[dict]) -> dict:
+    deltas=[float(r["diurnal_delta_f"]) for r in rows]
+    # Ridge shrinks the analogue toward no correction on limited evidence.
+    numerator=sum(d*(r["observed_index_f"]-r["current_index_f"])
+                  for d,r in zip(deltas,rows))
+    gain=max(-1.,min(1.,numerator/(sum(d*d for d in deltas)+6.)))
+    residuals=[(r["observed_index_f"]-r["current_index_f"]-gain*d)/
+               r["baseline_sigma_f"] for r,d in zip(rows,deltas)]
+    rms=math.sqrt(sum(x*x for x in residuals)/len(residuals))
+    scale=max(.75,min(1.65,rms))
+    return {"gain":round(gain,6),"sigma_scale":round(scale,6)}
+
+
 def _case(points: list[tuple], times: list[int], target_ms: int,
           lead_minutes: int) -> dict | None:
     anchor=target_ms-lead_minutes*60000
@@ -152,6 +203,7 @@ def _case(points: list[tuple], times: list[int], target_ms: int,
         "baseline_mean_f":baseline,"baseline_sigma_f":sigma,
         "current_index_f":current,"observed_index_f":label[2],
         "fast_slope":fast,"slow_slope":slow,"hours_ahead":hours,
+        "diurnal_delta_f":_diurnal_delta(points,times,anchor,target_ms),
     }
 
 
@@ -185,6 +237,15 @@ def _cases_from_points(points: list[tuple], asof: datetime,
 
 
 def _estimate(row: dict, model: str, params: dict | None = None) -> float:
+    if model==DIURNAL_MODEL:
+        if (not isinstance(params,dict) or
+            not isinstance(params.get("gain"),(int,float)) or
+            not math.isfinite(params["gain"]) or
+            abs(params["gain"])>1. or
+            not isinstance(row.get("diurnal_delta_f"),(int,float)) or
+            not math.isfinite(row["diurnal_delta_f"])):
+            raise ValueError("INVALID_DIURNAL_ANALOGUE_FEATURES")
+        return row["current_index_f"]+params["gain"]*row["diurnal_delta_f"]
     if model==VOLATILITY_MODEL:
         if not validate_volatility(params):
             raise ValueError("INVALID_VOLATILITY_NOWCAST_PARAMETERS")
@@ -285,9 +346,42 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
                                      volatility))
         except (ValueError,TypeError,OverflowError,ZeroDivisionError):
             pass
+
+    # V12: same-clock prior-day changes can capture repeatable diurnal
+    # temperature movement. Candidate competes only after enough *earlier*
+    # examples and is compared with the V7 incumbent on the identical
+    # untouched 24-hour holdout. No retrospective promotion on the user's
+    # Weather History percentage.
+    usable_train=[r for r in train if isinstance(r.get("diurnal_delta_f"),
+                  (int,float)) and math.isfinite(r["diurnal_delta_f"]) and
+                  r["baseline_sigma_f"]>0]
+    if (len(usable_train)>=80 and len(valid)==HOLDOUT and
+        all(isinstance(r.get("diurnal_delta_f"),(int,float)) and
+            math.isfinite(r["diurnal_delta_f"]) and
+            r["baseline_sigma_f"]>0 for r in valid) and
+        sum(abs(r["diurnal_delta_f"])>=.35 for r in usable_train)>=24):
+        params=_diurnal_params(usable_train)
+        candidate_train=_score(usable_train,DIURNAL_MODEL,
+                               params["sigma_scale"],params)
+        _,_,old_name,old_scale,old_params=incumbent_choice
+        incumbent_train=_score(usable_train,old_name,old_scale,old_params)
+        if (candidate_train["mae_f"]<=incumbent_train["mae_f"]-.03 and
+            candidate_train["crps"]<=incumbent_train["crps"]-.02):
+            alternatives.append((candidate_train["crps"],
+                                 candidate_train["mae_f"],DIURNAL_MODEL,
+                                 params["sigma_scale"],params))
+
     _,_,name,scale,params=min(alternatives,key=lambda r:(r[0],r[1],r[2]))
     baseline=_score(valid,None,1.)
     challenger=_score(valid,name,scale,params)
+    if name==DIURNAL_MODEL:
+        _,_,old_name,old_scale,old_params=incumbent_choice
+        old_scores=_score(valid,old_name,old_scale,old_params)
+        if (challenger["mae_f"]>old_scores["mae_f"]-.05 or
+            challenger["crps"]>old_scores["crps"]-.02 or
+            challenger["coverage_90"]<old_scores["coverage_90"]-.10):
+            name,scale,params=old_name,old_scale,old_params
+            challenger=old_scores
     if name==VOLATILITY_MODEL:
         # A new sigma model is promoted only when it improves the same
         # untouched held-out hours against the V7 incumbent, not merely
@@ -321,9 +415,16 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
 
 def nowcast_prediction(current_f: float, baseline_sigma_f: float,
                        fast_slope: float, slow_slope: float,
-                       hours_ahead: float, decision: dict) -> tuple[float,float]:
+                       hours_ahead: float, decision: dict, *,
+                       diurnal_delta_f: float | None = None) -> tuple[float,float]:
     if not decision.get("enabled"):
         return current_f,baseline_sigma_f
+    if decision.get("model")==DIURNAL_MODEL:
+        if diurnal_delta_f is None:
+            return current_f,baseline_sigma_f
+        row={"current_index_f":current_f,"diurnal_delta_f":diurnal_delta_f}
+        params=decision.get("parameters")
+        return _estimate(row,DIURNAL_MODEL,params),baseline_sigma_f*decision["sigma_scale"]
     if decision.get("model")==VOLATILITY_MODEL:
         return predict_volatility(
             current_f,baseline_sigma_f,fast_slope,slow_slope,hours_ahead,
@@ -343,7 +444,7 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
     fail={"enabled":False,"status":"UNSUPPORTED_LEAD_TIME",
           "history_hours":0,"training_hours":0,"validation_hours":0,
           "model":None,"sigma_scale":1.,"validation":None,
-          "live_slopes":None}
+          "live_slopes":None,"live_diurnal_delta_f":None}
     if lead_minutes not in LEAD_MINUTES:
         return fail
     try:
@@ -354,6 +455,11 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
         samples=_cases_from_points(points,now,lead_minutes)
         decision=choose_index_nowcast(samples)
         decision["live_slopes"]=_slopes_from_points(points,now)
+        if decision.get("model")==DIURNAL_MODEL:
+            times=[r[0] for r in points]
+            ms=int(now.timestamp()*1000)
+            decision["live_diurnal_delta_f"]=_diurnal_delta(
+                points,times,ms,ms+lead_minutes*60000)
         return decision
     except (ValueError,sqlite3.Error):
         return {**fail,"status":"INVALID_INDEX_EVIDENCE"}
