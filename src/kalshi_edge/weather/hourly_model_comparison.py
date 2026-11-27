@@ -39,6 +39,7 @@ def _empty_report(status: str) -> dict:
     return {"status":status,"incumbent_model":"LIVE_WEATHEREDGE_V12",
             "candidate_model":MODEL,
             "matched_hours":0,"verified_market_hours":0,
+            "frozen_live_hours":0,
             "folds":[],"incumbent":_empty_metrics(),"candidate":_empty_metrics(),
             "parameters":None,"eligible_for_live_promotion":False,
             "calibration_certified":False,"real_orders_enabled":False}
@@ -127,6 +128,8 @@ def compare_models(cases: list[dict], *,
         return _empty_report("INSUFFICIENT_CONTIGUOUS_HOURLY_HISTORY")
     base_records=[]
     new_records=[]
+    frozen_live_hours=0
+    frozen_models=set()
     last_params=None
     for i in range(FOLDS):
         end_train=start+i*BLOCK
@@ -137,8 +140,24 @@ def compare_models(cases: list[dict], *,
             params=fit_hybrid(older)
             older_records=[]
             newer_records=[]
+            fold_frozen=0
             for row in holdout:
-                old_mean,old_sigma=_base_prediction(row,incumbent)
+                if ("live_frozen_mean_f" in row and
+                    "live_frozen_sigma_f" in row and
+                    isinstance(row.get("live_frozen_model_kind"),str)):
+                    old_mean=float(row["live_frozen_mean_f"])
+                    old_sigma=float(row["live_frozen_sigma_f"])
+                    if (not all(math.isfinite(v) for v in
+                            (old_mean,old_sigma)) or
+                        old_sigma<=.001 or old_sigma>30.):
+                        raise ValueError("INVALID_FROZEN_LIVE_PREDICTION")
+                    fold_frozen+=1
+                    frozen_models.add(row["live_frozen_model_kind"])
+                else:
+                    # The reconstructed V12 observation path is useful
+                    # diagnostic research but not the full live model, which
+                    # can include settlement and physical ensemble upgrades.
+                    old_mean,old_sigma=_base_prediction(row,incumbent)
                 new_mean,new_sigma=predict_hybrid(row,params)
                 older_records.append(_pair(row,old_mean,old_sigma))
                 newer_records.append(_pair(row,new_mean,new_sigma))
@@ -147,10 +166,12 @@ def compare_models(cases: list[dict], *,
             return _empty_report("INVALID_PAIRED_MODEL_EVIDENCE")
         base_records.extend(older_records)
         new_records.extend(newer_records)
+        frozen_live_hours+=fold_frozen
         old=_aggregate(older_records)
         new=_aggregate(newer_records)
         report["folds"].append({
             "fold":i+1,"hours":BLOCK,
+            "frozen_live_hours":fold_frozen,
             "train_hours":len(older),
             "start_target_utc":holdout[0]["target_utc"],
             "end_target_utc":holdout[-1]["target_utc"],
@@ -163,6 +184,8 @@ def compare_models(cases: list[dict], *,
     b=_aggregate(new_records)
     report.update({"matched_hours":MIN_EVAL,
                    "verified_market_hours":a["market_hours"],
+                   "frozen_live_hours":frozen_live_hours,
+                   "frozen_live_model_kinds":sorted(frozen_models),
                    "incumbent":a,"candidate":b,
                    "parameters":last_params})
     good_temp=(
@@ -172,6 +195,9 @@ def compare_models(cases: list[dict], *,
         b["coverage_90"]>=a["coverage_90"]-.07 and
         sum(f["candidate"]["crps"]<f["incumbent"]["crps"]
             for f in report["folds"])>=2)
+    if frozen_live_hours<MIN_EVAL:
+        report["status"]="INSUFFICIENT_FROZEN_LIVE_FORECASTS"
+        return report
     if a["market_hours"]<24 or b["market_hours"]<24:
         report["status"]="INSUFFICIENT_VERIFIED_MARKET_PAIRS"
         return report
@@ -228,6 +254,12 @@ def _freeze_market_pairs(conn: sqlite3.Connection,city: str,
             raise ValueError("TAMPERED_COMPARISON_FORECAST_IDENTITY")
         if abs((_iso(row["forecast_asof"])-_iso(asof)).total_seconds())>90:
             continue
+        # Actual precommitted full live forecast, not just V12 observation
+        # nowcast. This includes any active V1 settlement correction or
+        # HRRR/NBM physical blend from the originally stored prediction.
+        row.update({"live_frozen_mean_f":float(frozen["predicted_index_f"]),
+                    "live_frozen_sigma_f":float(frozen["sigma_f"]),
+                    "live_frozen_model_kind":frozen["model_kind"]})
         key=(city0,event,ticker)
         observed=source_outcomes.get(key)
         official=finals.get(key)
