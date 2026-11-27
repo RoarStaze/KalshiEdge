@@ -163,3 +163,15 @@ def test_diurnal_candidate_only_promotes_with_genuine_chronological_gain():
     without=[{**row,"diurnal_delta_f":0.} for row in cases]
     no_gain=choose_index_nowcast(without)
     assert no_gain["model"]!="DIURNAL_ANALOGUE_V5" or not no_gain["enabled"]
+
+
+def test_history_reports_collector_heartbeat_instead_of_only_page_refresh(tmp_path):
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    db=tmp_path/"wx.sqlite3"
+    freeze(db,NOW.replace(minute=0)-timedelta(hours=2))
+    history=read_hourly_history(tmp_path,db_path=db)
+    assert history["collector"]["state"]=="NOT_STARTED"
+    html=render_hourly_page("history","")
+    assert 'id="wx-history-collector-warning"' in html
+    assert 'data.collector' in html
+    assert "COLLECTOR" in html
