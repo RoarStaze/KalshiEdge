@@ -15,8 +15,13 @@ from datetime import datetime, timedelta, timezone
 
 from .predictor import normal_cdf
 from .hourly_adaptive import fit_adaptive, predict_adaptive, validate_adaptive
+from .hourly_volatility import (
+    MIN_TRAIN as VOLATILITY_MIN_TRAIN, fit_volatility,
+    predict_volatility, validate_volatility,
+)
 
 ADAPTIVE_MODEL = "OBSERVATION_ADAPTIVE_V3"
+VOLATILITY_MODEL = "OBSERVATION_REGIME_SIGMA_V4"
 
 LEAD_MINUTES = (5, 15, 30, 45, 60)
 MIN_TRAIN = 48
@@ -180,6 +185,13 @@ def _cases_from_points(points: list[tuple], asof: datetime,
 
 
 def _estimate(row: dict, model: str, params: dict | None = None) -> float:
+    if model==VOLATILITY_MODEL:
+        if not validate_volatility(params):
+            raise ValueError("INVALID_VOLATILITY_NOWCAST_PARAMETERS")
+        return predict_volatility(
+            row["current_index_f"], row["baseline_sigma_f"],
+            row["fast_slope"], row["slow_slope"], row["hours_ahead"],
+            params)[0]
     if model==ADAPTIVE_MODEL:
         if not validate_adaptive(params):
             raise ValueError("INVALID_ADAPTIVE_NOWCAST_PARAMETERS")
@@ -206,8 +218,13 @@ def _score(cases: list[dict], model: str | None, scale: float,
     total_mae=total_crps=0.
     covered=0
     for row in cases:
-        mean=row["baseline_mean_f"] if model is None else _estimate(row,model,params)
-        sigma=max(.05,row["baseline_sigma_f"]*scale)
+        if model==VOLATILITY_MODEL:
+            mean,sigma=predict_volatility(
+                row["current_index_f"],row["baseline_sigma_f"],
+                row["fast_slope"],row["slow_slope"],row["hours_ahead"],params)
+        else:
+            mean=row["baseline_mean_f"] if model is None else _estimate(row,model,params)
+            sigma=max(.05,row["baseline_sigma_f"]*scale)
         actual=row["observed_index_f"]
         total_mae+=abs(actual-mean)
         total_crps+=_crps(mean,sigma,actual)
@@ -249,6 +266,21 @@ def choose_index_nowcast(cases: list[dict]) -> dict:
                                  ADAPTIVE_MODEL,params["sigma_scale"],params))
     except (ValueError,TypeError,OverflowError,ZeroDivisionError):
         pass
+    # Separate probabilistic candidate: same adaptive point mean with
+    # uncertainty rising only when fast and slow index trends disagree.
+    # It must have both calm and divergent training hours, then beat the
+    # incumbent on the untouched holdout before changing live probabilities.
+    if len(train)>=VOLATILITY_MIN_TRAIN:
+        try:
+            volatility=fit_volatility(train)
+            if validate_volatility(volatility):
+                scores=_score(train,VOLATILITY_MODEL,
+                              volatility["sigma_scale"],volatility)
+                alternatives.append((scores["crps"],scores["mae_f"],
+                                     VOLATILITY_MODEL,volatility["sigma_scale"],
+                                     volatility))
+        except (ValueError,TypeError,OverflowError,ZeroDivisionError):
+            pass
     _,_,name,scale,params=min(alternatives,key=lambda r:(r[0],r[1],r[2]))
     baseline=_score(valid,None,1.)
     challenger=_score(valid,name,scale,params)
@@ -278,6 +310,10 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
                        hours_ahead: float, decision: dict) -> tuple[float,float]:
     if not decision.get("enabled"):
         return current_f,baseline_sigma_f
+    if decision.get("model")==VOLATILITY_MODEL:
+        return predict_volatility(
+            current_f,baseline_sigma_f,fast_slope,slow_slope,hours_ahead,
+            decision.get("parameters"))
     if decision.get("model")==ADAPTIVE_MODEL:
         return predict_adaptive(
             current_f,baseline_sigma_f,fast_slope,slow_slope,hours_ahead,
