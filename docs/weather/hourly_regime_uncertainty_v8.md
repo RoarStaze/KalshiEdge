@@ -12,7 +12,7 @@ Improve the reliability of next-hour temperature threshold probabilities when sh
 - Use only first-stored Kalshi Index observations available at decision time; same city, configuration and lead bucket. Never use the holdout to fit gains.
 - Compute disagreement D = min(1, abs(fast_slope - slow_slope) / 3) with slopes measured in °F/hour.
 - For sufficiently diverse training examples (at least 80 cases, with 16 quiet and 16 high-disagreement), fit an extra nonnegative multiplier 1 + gain*D for the Gaussian temperature sigma. Bound gain to [0, 1.25], resulting sigma to a sensible finite range, and keep mean forecast identical to the existing robust-adaptive regression.
-- Select among existing static models, existing adaptive regression, and this candidate by **training** CRPS only. The untouched last 24 completed hours decide whether a selected candidate may be used.
+- Select among existing static models, existing adaptive regression, and this candidate by **training** CRPS only. The untouched last 24 completed hours decide whether a selected candidate may be used. A V8 candidate must additionally reduce CRPS by at least 0.01 compared with the prior V7 training champion on those same 24 hours, without losing more than 15 percentage points of nominal 90% interval coverage; otherwise fall back to V7 and its own original validation decision.
 - Version the active model distinctly from V7 so old physical-model promotion locks cannot be reused.
 - Keep prior fallback behavior if evidence is insufficient, malformed or candidate loses; daily-weather collection and order placement remain disabled.
 
