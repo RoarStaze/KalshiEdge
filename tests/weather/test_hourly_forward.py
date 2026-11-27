@@ -213,3 +213,50 @@ def test_tampered_frozen_or_settled_source_never_masquerades_as_metrics(tmp_path
     assert invalid["status"]=="HOURLY_FORWARD_AUDIT_ERROR"
     assert invalid["groups"]==[]
     assert invalid["real_orders_enabled"] is False
+
+
+def test_one_command_weather_worker_freezes_and_reconciles_forward_evidence(tmp_path,monkeypatch):
+    from kalshi_edge.weather import runtime
+
+    db=tmp_path/"weather"/"weatheredge.sqlite3"
+    async def hourly(_):
+        return {"mode":"HOURLY_PAPER_ONLY","cities":{"chicago":{"state":"READY"}}}
+    async def settled(_):
+        return {"mode":"HOURLY_PAPER_ONLY","verified":0,"unverified":0}
+    async def forward_settled(_):
+        return {"mode":"HOURLY_FORWARD_READ_ONLY","verified":2,
+                "unverified":1,"real_orders_enabled":False}
+    calls=[]
+    def forward_journal(path):
+        calls.append(path)
+        return {"mode":"HOURLY_FORWARD_READ_ONLY","inserted":2,
+                "skipped":0,"real_orders_enabled":False}
+    monkeypatch.setattr(runtime,"journal_forward",forward_journal,raising=False)
+    monkeypatch.setattr(runtime,"settle_forward_once",forward_settled,raising=False)
+    worker=runtime.WeatherSupervisor(db,hourly_collect=hourly,hourly_settle=settled)
+    asyncio.run(worker.poll_hourly())
+    asyncio.run(worker.poll_hourly_settlements())
+    health=json.loads((db.parent/"collector-status.json").read_text())
+    assert calls==[db]
+    assert health["hourly"]["forward_v9"]["new_snapshots"]==2
+    assert health["hourly_settlement"]["forward_v9"]["verified"]==2
+    assert health["real_orders_enabled"] is False
+
+
+def test_existing_calibration_api_and_hourly_page_expose_forward_cohorts(tmp_path):
+    from kalshi_edge.weather.hourly import hourly_calibration
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    db=tmp_path/"weatheredge.sqlite3"
+    row=sample()
+    seed(db,row)
+    assert journal_forward(db,asof=NOW,forecasts=[row])["inserted"]==1
+    calibration=hourly_calibration(tmp_path,db_path=db)
+    assert calibration["forward_v9"]["total_frozen"]==1
+    assert calibration["forward_v9"]["groups"][0]["lead_bucket"]==30
+    assert calibration["real_orders_enabled"] is False
+    html=render_hourly_page("train","")
+    assert 'id="wx-forward-cohorts"' in html
+    assert 'forward_v9' in html
+    assert 'Verified hours' in html
+    assert 'MAE' in html
+    assert "NO LIVE ORDERS" in html
