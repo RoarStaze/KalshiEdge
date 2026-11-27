@@ -36,6 +36,10 @@ HOURLY_STYLE = """
 .wx-hourly-ladder .wx-bucket-label{font-size:12px}
 .wx-hourly-yes,.wx-hourly-no{font-size:12px;font-weight:750;font-variant-numeric:tabular-nums}
 .wx-hourly-yes{color:#a8eada}.wx-hourly-no{color:#efc3c3}
+.wx-forward-cohorts{display:grid;gap:7px;margin-top:10px}
+.wx-forward-cohort{border:1px solid #567c8d6b;border-radius:9px;
+  padding:9px 12px;font-size:12px;line-height:1.65;overflow-wrap:anywhere}
+.wx-forward-cohort strong{color:#d4ecf5}
 @media(max-width:650px){.wx-hourly-overview{grid-template-columns:1fr}.wx-hourly-ladder .wx-bucket{gap:6px}}
 """
 
@@ -150,6 +154,17 @@ CALIBRATION = """
   <div class="wx-row"><span>Evidence status</span><strong id="wx-hm-state">WAITING</strong></div>
   <div class="wx-row"><span>Independently certified</span><strong>NOT CERTIFIED</strong></div>
   <div class="wx-row"><span>Live trading enabled</span><strong>NO</strong></div>
+ </div>
+ <div class="wx-hourly-details">
+  <h3>Forward forecast accuracy · by city and lead</h3>
+  <p>Each row represents a separate city, checkpoint horizon, and model.
+   Verified hours count only exact official Index and matching settled
+   Kalshi contract outcomes. Scores remain hidden until 10 verified hours.
+   These are observed research metrics, not certified probabilities or
+   proof of profitable trading.</p>
+  <div id="wx-forward-cohorts" class="wx-forward-cohorts" aria-live="polite">
+   <div class="wx-empty">Waiting for prospective verified forecasts…</div>
+  </div>
  </div>
 </article>
 """
@@ -400,6 +415,35 @@ SCRIPT = r"""<script>
       put("wx-hm-coverage",Number.isFinite(c.empirical_90_coverage)?
           (100*c.empirical_90_coverage).toFixed(1)+"%":"NOT MEASURED");
       put("wx-hm-state",c.status||"UNAVAILABLE");
+      const forward=c.forward_v9||{};
+      const forwardTarget=el("wx-forward-cohorts");
+      if(forwardTarget){
+        forwardTarget.replaceChildren();
+        const intro=document.createElement("div");
+        intro.className="wx-forward-cohort";
+        intro.textContent="V9 evidence: "+(forward.status||"NOT STARTED")+
+          " · frozen "+(forward.total_frozen??0)+
+          " · source-matched "+(forward.total_verified??0);
+        forwardTarget.append(intro);
+        const cohorts=Array.isArray(forward.groups)?forward.groups:[];
+        const score=(value,digits=4)=>Number.isFinite(value)?
+            Number(value).toFixed(digits):"NOT MEASURED";
+        for(const cohort of cohorts.slice(0,30)){
+          const line=document.createElement("div");
+          line.className="wx-forward-cohort";
+          const model=typeof cohort.model_kind==="string"?cohort.model_kind:"UNKNOWN";
+          const city=typeof cohort.city==="string"?cohort.city:"UNKNOWN";
+          line.textContent=city+" · "+(cohort.lead_bucket??"?")+" min"+
+            " · "+model+" · Verified hours "+(cohort.verified_hours??0)+
+            " / "+(cohort.frozen??0)+" frozen"+
+            " · MAE "+score(cohort.mae_f,2)+" °F"+
+            " · Brier "+score(cohort.brier)+
+            " · Log loss "+score(cohort.log_loss)+
+            " · 90% coverage "+(Number.isFinite(cohort.coverage_90)?
+               (100*cohort.coverage_90).toFixed(1)+"%":"NOT MEASURED");
+          forwardTarget.append(line);
+        }
+      }
       const h=s.collector||{},feed=h.hourly||{},outcome=h.hourly_settlement||{};
       const physical=h.hourly_physics||{};
       const quotes=h.hourly_quotes||{};
