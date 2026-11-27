@@ -514,6 +514,20 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
                     decision["live_diurnal_delta_f"]=live_delta
                     decision["enabled"]=True
                     decision["status"]="PAIRED_MARKET_BACKTEST_IMPROVED_UNCERTIFIED"
+                    decision["validation_hours"]=match["matched_hours"]
+                    # Do not display the old V12-only validation as if it
+                    # measured the selected V13 against the full live model.
+                    decision["validation"]={
+                        "baseline_mae_f":match["incumbent"]["mae_f"],
+                        "candidate_mae_f":match["candidate"]["mae_f"],
+                        "baseline_crps":match["incumbent"]["crps"],
+                        "candidate_crps":match["candidate"]["crps"],
+                        "baseline_90_coverage":match["incumbent"]["coverage_90"],
+                        "candidate_90_coverage":match["candidate"]["coverage_90"],
+                        "baseline_brier":match["incumbent"]["brier"],
+                        "candidate_brier":match["candidate"]["brier"],
+                        "frozen_full_live_hours":match["frozen_live_hours"],
+                        "market_verified_hours":match["verified_market_hours"]}
                     decision["paired_comparison"]={
                         "status":match["status"],
                         "matched_hours":match["matched_hours"],
