@@ -224,11 +224,12 @@ def sync_hourly_history(db_path: Path) -> dict:
                       datetime.now(timezone.utc).isoformat())).rowcount
                     result["recorded"]+=inserted
                 except (sqlite3.Error,ValueError,KeyError,TypeError,
-                        OverflowError,json.JSONDecodeError):
+                        OverflowError,AttributeError,json.JSONDecodeError):
                     result["unverified"]+=1
             conn.commit()
         result["status"]="READY" if not result["unverified"] else "UNVERIFIED_EVIDENCE"
-    except (sqlite3.Error,OSError,ValueError,KeyError,TypeError) as exc:
+    except (sqlite3.Error,OSError,ValueError,KeyError,TypeError,
+            AttributeError,OverflowError) as exc:
         result["status"]="HOURLY_HISTORY_SYNC_ERROR"
         result["reason"]=f"{type(exc).__name__}: {exc}"[:180]
     return result
