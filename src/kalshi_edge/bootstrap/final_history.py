@@ -34,6 +34,7 @@ from kalshi_edge.weather.status import read_weather_status
 from kalshi_edge.weather.predictor import read_weather_forecasts
 from kalshi_edge.weather.calibration import calibration_status
 from kalshi_edge.weather.hourly import read_hourly_forecasts, hourly_calibration, hourly_status
+from kalshi_edge.weather.hourly_history import read_hourly_history
 from .api_credentials_ui import integrate_api_credentials
 from .manual_trade_ui import integrate_manual_trade
 from kalshi_edge.trading.vault import CredentialVault, VaultError
@@ -869,6 +870,24 @@ def _make_handler(root: Path, controller=None, *, paper_trader=None, credential_
                 content = json.dumps(hourly_calibration(root), separators=(",", ":"),
                                      allow_nan=False).encode("utf-8")
                 kind = "application/json; charset=utf-8"
+            elif path == "/api/weather/hourly/history":
+                query=parse_qs(urlsplit(self.path).query,keep_blank_values=True)
+                if (not set(query).issubset({"city","filter","limit","offset"}) or
+                    any(len(v)!=1 for v in query.values())):
+                    self._json(400,{"error":"Invalid weather history query"})
+                    return
+                try:
+                    result=read_hourly_history(
+                        root,city=query.get("city",["all"])[0],
+                        verdict=query.get("filter",["ALL"])[0],
+                        limit=int(query.get("limit",["50"])[0]),
+                        offset=int(query.get("offset",["0"])[0]))
+                except (ValueError,TypeError,OverflowError):
+                    self._json(400,{"error":"Invalid weather history filters"})
+                    return
+                content=json.dumps(result,separators=(",",":"),
+                                   allow_nan=False).encode("utf-8")
+                kind="application/json; charset=utf-8"
             elif path == "/api/weather/hourly/status":
                 content = json.dumps(hourly_status(root), separators=(",", ":"),
                                      allow_nan=False).encode("utf-8")
