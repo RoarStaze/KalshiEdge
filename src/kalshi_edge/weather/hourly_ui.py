@@ -111,6 +111,8 @@ body[data-weather-section="forecast"]{min-height:100vh}
 #wx-hourly-flips{color:#9feacb;font-size:10px;font-weight:800;text-align:right}
 .wx-trade-diagnostic{font-size:11px!important;color:#a9c9ce!important;margin:0!important}
 .wx-trade-forecast>.wx-hourly-details{margin-top:0}
+.wx-trade-inline-calibration{border-top:1px solid #42696975;margin-top:14px;padding-top:14px}
+.wx-trade-inline-calibration>strong{font-size:11px;color:#bfe5de;letter-spacing:.4px}
 .wx-trade-quote{display:flex;flex-direction:column;gap:14px}
 .wx-paper-top{display:flex;align-items:center;justify-content:space-between;gap:9px}
 .wx-paper-tabs{display:flex;gap:16px;font-size:14px;letter-spacing:1px}
@@ -282,6 +284,16 @@ MAIN = """
       blend can change YES/NO model probabilities only after a fixed
       prospective, settlement-verified score gate. These limited historical
       scores are not independent calibration certification and are not a profit guarantee.</p>
+    <div class="wx-trade-inline-calibration" aria-label="Prospective accuracy evidence">
+     <strong>Prospective calibration · NOT CERTIFIED</strong>
+     <div class="wx-row"><span>Matched hourly events</span><strong id="wx-hm-matched">0</strong></div>
+     <div class="wx-row"><span>Binary Brier score</span><strong id="wx-hm-brier">NOT MEASURED</strong></div>
+     <div class="wx-row"><span>Binary log loss</span><strong id="wx-hm-logloss">—</strong></div>
+     <div class="wx-row"><span>Observed 90% modeled interval coverage</span><strong id="wx-hm-coverage">NOT MEASURED</strong></div>
+     <div class="wx-row"><span>Evidence status</span><strong id="wx-hm-state">WAITING</strong></div>
+     <p>One precommitted contract per hour is scored against verified settlements.
+      Per-city and lead-time V9 evidence remains available on the Train page.</p>
+    </div>
    </div>
   </details>
 
