@@ -83,6 +83,8 @@ body[data-weather-section="forecast"]{min-height:100vh}
 #wx-hourly-last-forecast{display:block;margin-top:8px;color:#ecf4f1;
   font-size:14px;font-weight:550;font-variant-numeric:tabular-nums}
 .wx-trade-hero{margin-top:1px}
+.wx-trade-model-mean{font-size:11px!important;color:#b5eade!important;margin:0 0 9px!important}
+.wx-trade-model-mean strong{font-size:14px;color:#f6faf8;font-weight:800}
 .wx-trade-direction{font-size:clamp(46px,5vw,62px);font-weight:250;line-height:1.05;
   letter-spacing:-2px;color:#ff839b;overflow-wrap:anywhere}
 .wx-trade-direction.yes{color:#56ebc6}
@@ -201,7 +203,7 @@ MAIN = """
    <div class="wx-trade-price">
     <div class="wx-trade-stat-label">TEMP TO BEAT <span title="Selected actual Kalshi YES threshold" aria-label="Selected actual Kalshi YES threshold">ⓘ</span></div>
     <strong id="wx-hourly-contract">—</strong>
-    <small>Selected listed YES threshold · not the predicted temperature</small>
+    <small>Closest Kalshi contract · YES threshold</small>
    </div>
    <div class="wx-trade-price wx-trade-price-current">
     <div class="wx-trade-stat-label">CURRENT INDEX <span title="Latest official Kalshi Weather Index reading" aria-label="Latest official Kalshi Weather Index reading">ⓘ</span></div>
@@ -213,7 +215,7 @@ MAIN = """
   <div class="wx-trade-timing">
    <div class="wx-trade-time-left">
     <span class="wx-trade-time-icon" aria-hidden="true">◴</span>
-    <div><span class="wx-trade-time-caption">ROUND CLOSES IN</span>
+    <div aria-label="Market closes in"><span class="wx-trade-time-caption">ROUND CLOSES IN</span>
      <strong id="wx-hourly-close-clock" aria-live="off">—</strong></div>
    </div>
    <div class="wx-trade-time-right">
@@ -224,6 +226,7 @@ MAIN = """
   <div class="wx-trade-hero">
    <div id="wx-hourly-direction" class="wx-trade-direction" aria-live="polite">WAITING</div>
    <p class="wx-trade-direction-note">Forecast for the selected listed threshold · research estimate of the official index at the target hour.</p>
+   <p class="wx-trade-model-mean">Predicted temperature <strong id="wx-hourly-mean">—</strong> · Kalshi hourly index model</p>
    <div class="wx-trade-confidence">
     <strong id="wx-hourly-confidence">—</strong>
     <div><b>Forecast probability</b><small id="wx-hourly-lean">Waiting for a listed contract</small></div>
@@ -320,7 +323,7 @@ MAIN = """
   </details>
   <div class="wx-paper-note">
    <strong>Read-only WeatherEdge</strong>
-   <p>Model probabilities remain unvalidated. Prices and sizes reflect exchange snapshots, not guaranteed fills; fees, liquidity and settlement rules matter. No automatic or manual weather trading is enabled.</p>
+   <p>Calibration not verified. Model probabilities remain unvalidated. Prices and sizes reflect exchange snapshots, not guaranteed fills; fees, liquidity and settlement rules matter. No automatic or manual weather trading is enabled.</p>
   </div>
  </article>
 </div>
