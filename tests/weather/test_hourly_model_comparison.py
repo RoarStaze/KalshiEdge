@@ -308,3 +308,17 @@ def test_hypothetical_v12_replay_cannot_replace_frozen_actual_live_forecast():
     assert result["frozen_live_hours"]==0
     assert result["eligible_for_live_promotion"] is False
     assert result["status"]=="INSUFFICIENT_FROZEN_LIVE_FORECASTS"
+
+
+def test_early_hours_without_prior_day_analogue_cannot_poison_later_train():
+    # Real 8-day replay has no previous-day analogue for its earliest hours.
+    # They must not be fabricated as zero changes or block all later
+    # training when enough genuinely available prior-day observations exist.
+    rows=cases()
+    for row in rows[:45]:
+        row["diurnal_delta_f"]=None
+    result=compare_models(rows)
+    assert result["matched_hours"]==72
+    assert result["verified_market_hours"]==72
+    assert result["frozen_live_hours"]==72
+    assert result["parameters"] is not None
