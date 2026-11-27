@@ -27,6 +27,7 @@ from .prospective import capture_station_snapshots
 from .settlement_collector import poll_settlements
 from .hourly import collect_hourly_once, journal_hourly_forecasts, settle_hourly_once
 from .hourly_forward import journal_forward, settle_forward_once
+from .hourly_market_results import collect_final_market_results_once
 from .hourly_physics import collect_hourly_physics_once
 from .hourly_physical_learning import (
     journal_physical_pairs, freeze_candidate_locks,
@@ -484,6 +485,26 @@ class WeatherSupervisor:
                 "errors":forward.get("errors",[])[:8]}
         except Exception as exc:
             self._hourly_settlement["forward_v9"]={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:180]}
+        # Kalshi's REST response lifecycle uses "finalized", which may be
+        # available before an independently exact-index-matched observation.
+        # Save a separate official-market-only tier for History, never as an
+        # index-calibration sample. Run even if legacy/V9 index audit failed.
+        try:
+            final=await asyncio.wait_for(
+                collect_final_market_results_once(self.db_path),timeout=180)
+            if (final.get("mode")!="HOURLY_FINAL_MARKET_RESULTS" or
+                final.get("real_orders_enabled") is not False):
+                raise ValueError("INVALID_FINAL_MARKET_AUDIT")
+            self._hourly_settlement["final_market"]={
+                "state":"READY",
+                "verified":int(final.get("verified",0)),
+                "awaiting":int(final.get("awaiting",0)),
+                "unverified":int(final.get("unverified",0)),
+                "errors":final.get("errors",[])[:8]}
+        except Exception as exc:
+            self._hourly_settlement["final_market"]={
                 "state":"UNAVAILABLE",
                 "reason":f"{type(exc).__name__}: {exc}"[:180]}
         self._persist()
