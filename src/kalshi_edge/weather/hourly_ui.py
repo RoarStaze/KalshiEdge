@@ -816,7 +816,9 @@ def render_hourly_page(section: str, weather_style: str) -> str:
         links.append(f'<a class="site-nav-link{selected}" href="{url}"{current}>{label}</a>')
     title,sub=PAGES[section]
     selector=render_market_selector("weather")
-    details = MAIN + CALIBRATION if section=="forecast" else (
+    # The Trade route mirrors Bitcoin: exactly two equal-height main panels.
+    # V9/V1 calibration metrics remain available on Train and History.
+    details = MAIN if section=="forecast" else (
         CALIBRATION if section in ("train","history") else DATA)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
