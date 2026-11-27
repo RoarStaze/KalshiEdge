@@ -117,13 +117,13 @@ def test_one_forecast_per_hour_with_latest_v9_checkpoint_and_no_fake_skips(tmp_p
     _record(db,START,lead=5,prob=.78,yes="yes")
     _record(db,START+timedelta(hours=1),lead=5,prob=.8,yes=None)
     result=read_hourly_history(tmp_path,db_path=db)
-    assert result["status"]=="INSUFFICIENT_VERIFIED_EVIDENCE"
+    assert result["status"]=="SMALL_SAMPLE_UNCERTIFIED"
     assert result["mode"]=="HOURLY_HISTORY_READ_ONLY"
     assert result["real_orders_enabled"] is False
     assert result["summary"]=={
         "total_final_forecasts":2,"settled_directional_forecasts":1,
         "correct":1,"incorrect":0,"skipped":0,
-        "pending_settlement":1,"accuracy":None,
+        "pending_settlement":1,"accuracy":1.0,
     }
     rows=result["forecasts"]
     assert len(rows)==2
@@ -132,7 +132,7 @@ def test_one_forecast_per_hour_with_latest_v9_checkpoint_and_no_fake_skips(tmp_p
     assert rows[1]["market_ticker"].startswith(event)
     assert rows[1]["forecast"]=="ABOVE"  # Latest 5-min p=.78, not old p=.20.
     assert rows[1]["directional_probability"]==pytest.approx(.78)
-    assert rows[1]["confidence"] is None  # Not independently recorded.
+    assert rows[1]["confidence"]==pytest.approx(.56)  # Derived strength, not observed accuracy.
     assert rows[1]["market_close"]==(START-timedelta(minutes=1)).isoformat()
     assert rows[1]["verdict"]=="CORRECT"
     assert rows[1]["lead_minutes"]==5
@@ -145,6 +145,7 @@ def test_legacy_history_still_appears_without_v9_and_wrong_side_is_incorrect(tmp
     assert out["summary"]["correct"]==0
     assert out["summary"]["incorrect"]==1
     assert out["summary"]["settled_directional_forecasts"]==1
+    assert out["summary"]["accuracy"]==0.0
     assert out["forecasts"][0]["forecast"]=="ABOVE"
     assert out["forecasts"][0]["actual_side"]=="BELOW"
     assert out["forecasts"][0]["verdict"]=="INCORRECT"
@@ -203,7 +204,8 @@ def test_history_page_matches_bitcoin_cards_table_and_filter():
               '/api/weather/hourly/history','No matching forecasts',
               'value="CORRECT"','value="INCORRECT"','value="PENDING"'):
         assert x in html
-    assert "No independent confidence score is recorded" in html
+    assert "Confidence is derived" in html
+    assert "small sample" in html.lower()
     assert "SKIP decisions are not recorded" in html
     assert "<table" in html
     assert 'class="wx-trade-grid"' not in html
@@ -250,3 +252,28 @@ def test_history_endpoint_live_and_preview_remain_read_only(tmp_path):
                 assert client.post(url,json={"buy":True}).status_code in (403,404,405)
         finally:
             server.shutdown();server.server_close();worker.join(timeout=3)
+
+
+def test_directional_strength_and_accuracy_after_one_verification(tmp_path):
+    db=tmp_path/"verified.sqlite3"
+    _record(db,START,lead=5,prob=.82,yes="yes")
+    first=read_hourly_history(tmp_path,db_path=db)
+    assert first["summary"]["correct"]==1
+    assert first["summary"]["incorrect"]==0
+    assert first["summary"]["accuracy"]==1.0
+    assert first["status"]=="SMALL_SAMPLE_UNCERTIFIED"
+    assert first["forecasts"][0]["confidence"]==pytest.approx(.64)
+    # Reload from the same on-disk evidence: no hindsight recomputation of forecasts.
+    again=read_hourly_history(tmp_path,db_path=db)
+    assert again["summary"]["accuracy"]==1.0
+    assert again["forecasts"][0]["verdict"]=="CORRECT"
+
+def test_small_sample_one_right_one_wrong_reports_real_ratio(tmp_path):
+    db=tmp_path/"mixed.sqlite3"
+    _record(db,START,lead=5,prob=.76,yes="yes")
+    _record(db,START+timedelta(hours=1),lead=5,prob=.66,yes="no")
+    report=read_hourly_history(tmp_path,db_path=db)
+    assert (report["summary"]["correct"],report["summary"]["incorrect"])==(1,1)
+    assert report["summary"]["accuracy"]==.5
+    assert report["status"]=="SMALL_SAMPLE_UNCERTIFIED"
+    assert report["calibration_certified"] is False
