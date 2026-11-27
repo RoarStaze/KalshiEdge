@@ -398,3 +398,31 @@ def test_finalized_market_collector_supports_old_legacy_only_databases(tmp_path)
     rows=read_hourly_history(tmp_path,db_path=db)
     assert rows["summary"]["incorrect"]==1
     assert rows["forecasts"][0]["evidence_kind"]=="KALSHI_FINALIZED_MARKET"
+
+
+def test_settlement_loop_checks_official_final_markets_before_slow_index_audits(
+        tmp_path,monkeypatch):
+    import asyncio
+    from kalshi_edge.weather import runtime
+    db=tmp_path/"weather.sqlite3"
+    calls=[]
+    async def finalized(_):
+        calls.append("final")
+        return {"mode":"HOURLY_FINAL_MARKET_RESULTS",
+                "real_orders_enabled":False,"verified":2,"awaiting":1,
+                "unverified":0,"errors":[]}
+    async def legacy(_):
+        calls.append("legacy")
+        return {"mode":"HOURLY_PAPER_ONLY","verified":0,"unverified":0}
+    async def forward(_):
+        calls.append("forward")
+        return {"mode":"HOURLY_FORWARD_READ_ONLY",
+                "real_orders_enabled":False,"verified":0,"unverified":0}
+    monkeypatch.setattr(runtime,"collect_final_market_results_once",finalized)
+    monkeypatch.setattr(runtime,"settle_forward_once",forward)
+    worker=runtime.WeatherSupervisor(db,hourly_settle=legacy)
+    asyncio.run(worker.poll_hourly_settlements())
+    assert calls==["final","legacy","forward"]
+    health=json.loads((db.parent/"collector-status.json").read_text())
+    assert health["hourly_settlement"]["final_market"]["verified"]==2
+    assert health["hourly_settlement"]["final_market"]["awaiting"]==1
