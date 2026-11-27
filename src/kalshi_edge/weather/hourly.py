@@ -891,11 +891,13 @@ async def settle_hourly_once(db_path: Path, *, client: httpx.AsyncClient | None 
 
 def hourly_calibration(root: Path, *, db_path: Path | None = None,
                        preview: bool = False) -> dict:
+    from .hourly_forward import forward_accuracy
+    path=Path(db_path or weather_database_path(root))
     result={"mode":"HOURLY_PAPER_ONLY","matched_hours":0,
             "brier":None,"log_loss":None,"empirical_90_coverage":None,
             "calibration_certified":False,"real_orders_enabled":False,
-            "status":"WAITING_FOR_HOURLY_SETTLEMENTS"}
-    path=Path(db_path or weather_database_path(root))
+            "status":"WAITING_FOR_HOURLY_SETTLEMENTS",
+            "forward_v9":forward_accuracy(root,db_path=path,preview=preview)}
     if preview or not path.is_file():
         return result
     try:
