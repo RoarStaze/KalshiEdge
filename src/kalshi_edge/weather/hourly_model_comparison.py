@@ -138,13 +138,16 @@ def compare_models(cases: list[dict], *,
         # Receipt-time embargo: last canonical hour can be published AFTER
         # a 60-min-ahead forecast begins. Fit only labels actually available
         # before the first forecast of this *whole* test block.
-        older=[row for row in ordered[:end_train]
-               if _iso(row["label_received_at"])<=first_asof
-               if row.get("label_received_at") is not None] + [
-               row for row in ordered[:end_train]
-               if row.get("label_received_at") is None and
-               _iso(row["target_utc"])+timedelta(minutes=10)<=first_asof]
-        older.sort(key=lambda row:_iso(row["target_utc"]))
+        older=[]
+        for row in ordered[:end_train]:
+            receipt=row.get("label_received_at")
+            # For older test fixtures lacking original receipt metadata,
+            # assume the worst-case 10-minute publishing delay. Live saved
+            # Index cases always contain the actual receipt timestamp.
+            recorded=(_iso(receipt) if receipt is not None else
+                      _iso(row["target_utc"])+timedelta(minutes=10))
+            if recorded<=first_asof:
+                older.append(row)
         if len(older)<MIN_PREFIX:
             return _empty_report("INSUFFICIENT_CAUSAL_TRAINING")
         try:
