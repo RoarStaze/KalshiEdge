@@ -159,7 +159,11 @@ def test_conflicting_market_or_ticker_never_records_a_false_verdict(tmp_path):
     history=read_hourly_history(tmp_path,db_path=db)
     assert history["summary"]["correct"]==0
     assert history["summary"]["incorrect"]==0
-    assert history["summary"]["pending_settlement"]==2
+    # An actually conflicting source/ticker must invalidate the entire
+    # audited score, rather than silently promote suspect rows as settled.
+    assert history["status"]=="HOURLY_HISTORY_AUDIT_ERROR"
+    assert history["summary"]["accuracy"] is None
+    assert history["forecasts"]==[]
 
 
 def test_filter_and_pagination_do_not_change_global_summary(tmp_path):
