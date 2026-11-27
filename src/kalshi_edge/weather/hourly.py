@@ -678,6 +678,7 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                     else ("HISTORICAL_ADAPTIVE_INDEX_NOWCAST_V3"
                           if nowcast["model"]=="OBSERVATION_ADAPTIVE_V3"
                           else "HISTORICAL_INDEX_NOWCAST_V2")))
+                result["index_nowcast_selected_model"]=nowcast["model"]
             elif nowcast["enabled"] and not analogue_available:
                 result["index_nowcast_status"]="DIURNAL_LIVE_FEATURE_UNAVAILABLE"
                 result["index_nowcast_selected_model"]=nowcast["model"]
