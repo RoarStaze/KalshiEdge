@@ -370,3 +370,31 @@ def test_market_only_result_tamper_fails_closed(tmp_path):
     assert report["status"]=="HOURLY_HISTORY_AUDIT_ERROR"
     assert report["summary"]["correct"]==0
     assert report["forecasts"]==[]
+
+
+def test_finalized_market_collector_supports_old_legacy_only_databases(tmp_path):
+    import asyncio
+    import httpx
+    from kalshi_edge.weather.hourly_market_results import collect_final_market_results_once
+    db=tmp_path/"legacy.sqlite3"
+    _record(db,START,legacy=True,prob=.8,yes=None)
+    # Simulate databases created before V9 checkpoint tables existed.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TABLE weather_hourly_forward_snapshots")
+        conn.execute("DROP TABLE weather_hourly_forward_outcomes")
+    def transport(request):
+        ticker=request.url.path.rsplit("/",1)[-1]
+        return httpx.Response(200,json={"market":{
+            "ticker":ticker,"event_ticker":ticker.rsplit("-T",1)[0],
+            "status":"finalized","result":"no","is_provisional":False,
+            "yes_sub_title":"55° or above","floor_strike":54.99,
+            "rules_primary":"Kalshi Weather Index.",
+            "settlement_ts":(START+timedelta(minutes=8)).isoformat()}})
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+            return await collect_final_market_results_once(
+                db,client=client,clock=lambda:START+timedelta(minutes=15))
+    assert asyncio.run(go())["verified"]==1
+    rows=read_hourly_history(tmp_path,db_path=db)
+    assert rows["summary"]["incorrect"]==1
+    assert rows["forecasts"][0]["evidence_kind"]=="KALSHI_FINALIZED_MARKET"
