@@ -458,39 +458,10 @@ class WeatherSupervisor:
         self._persist()
 
     async def poll_hourly_settlements(self) -> None:
-        try:
-            report=await asyncio.wait_for(
-                self._settle_hourly(self.db_path),timeout=180)
-            if not isinstance(report,dict) or report.get("mode")!="HOURLY_PAPER_ONLY":
-                raise ValueError("unexpected hourly settlement result")
-            self._hourly_settlement={"state":"READY",
-                     "verified":int(report.get("verified",0)),
-                     "unverified":int(report.get("unverified",0)),
-                     "errors":report.get("errors",[])[:8]}
-        except Exception as exc:
-            self._hourly_settlement={"state":"UNAVAILABLE",
-                   "reason":f"{type(exc).__name__}: {exc}"[:220]}
-        # Exact city/event/ticker forward outcomes are independent of the
-        # legacy one-per-hour settlement journal, and fail separately.
-        try:
-            forward=await asyncio.wait_for(
-                settle_forward_once(self.db_path),timeout=180)
-            if (forward.get("mode")!="HOURLY_FORWARD_READ_ONLY" or
-                forward.get("real_orders_enabled") is not False):
-                raise ValueError("INVALID_FORWARD_SETTLEMENT_STATUS")
-            self._hourly_settlement["forward_v9"]={
-                "state":"COLLECTING",
-                "verified":int(forward.get("verified",0)),
-                "unverified":int(forward.get("unverified",0)),
-                "errors":forward.get("errors",[])[:8]}
-        except Exception as exc:
-            self._hourly_settlement["forward_v9"]={
-                "state":"UNAVAILABLE",
-                "reason":f"{type(exc).__name__}: {exc}"[:180]}
-        # Kalshi's REST response lifecycle uses "finalized", which may be
-        # available before an independently exact-index-matched observation.
-        # Save a separate official-market-only tier for History, never as an
-        # index-calibration sample. Run even if legacy/V9 index audit failed.
+        # Resolve the user's displayed direction as soon as the exact Kalshi
+        # market becomes finalized. Never let slower index/physics audit
+        # loops starve official contract-result collection.
+        self._hourly_settlement={"state":"CHECKING"}
         try:
             final=await asyncio.wait_for(
                 collect_final_market_results_once(self.db_path),timeout=180)
@@ -505,6 +476,41 @@ class WeatherSupervisor:
                 "errors":final.get("errors",[])[:8]}
         except Exception as exc:
             self._hourly_settlement["final_market"]={
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:180]}
+        # Persist the result-feed status now; independent index audits can
+        # take longer and must never hide a confirmed official outcome.
+        self._persist()
+
+        try:
+            report=await asyncio.wait_for(
+                self._settle_hourly(self.db_path),timeout=180)
+            if not isinstance(report,dict) or report.get("mode")!="HOURLY_PAPER_ONLY":
+                raise ValueError("unexpected hourly settlement result")
+            self._hourly_settlement.update({
+                "state":"READY",
+                "verified":int(report.get("verified",0)),
+                "unverified":int(report.get("unverified",0)),
+                "errors":report.get("errors",[])[:8]})
+        except Exception as exc:
+            self._hourly_settlement.update({
+                "state":"UNAVAILABLE",
+                "reason":f"{type(exc).__name__}: {exc}"[:220]})
+        # The higher-certainty index-reconciled V9 outcomes remain independent
+        # from the finalized-market-only history evidence.
+        try:
+            forward=await asyncio.wait_for(
+                settle_forward_once(self.db_path),timeout=180)
+            if (forward.get("mode")!="HOURLY_FORWARD_READ_ONLY" or
+                forward.get("real_orders_enabled") is not False):
+                raise ValueError("INVALID_FORWARD_SETTLEMENT_STATUS")
+            self._hourly_settlement["forward_v9"]={
+                "state":"COLLECTING",
+                "verified":int(forward.get("verified",0)),
+                "unverified":int(forward.get("unverified",0)),
+                "errors":forward.get("errors",[])[:8]}
+        except Exception as exc:
+            self._hourly_settlement["forward_v9"]={
                 "state":"UNAVAILABLE",
                 "reason":f"{type(exc).__name__}: {exc}"[:180]}
         self._persist()
