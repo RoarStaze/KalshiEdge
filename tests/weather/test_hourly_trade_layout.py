@@ -68,7 +68,10 @@ def test_forecast_navigation_and_technical_evidence_are_preserved():
                      "source-matched"):
         # "source-matched" is the V9 calibration telemetry term.
         assert fragment in html
-    assert 'id="wx-hm-matched"' not in html  # No third calibration panel beneath Trade
+    assert 'id="wx-hm-matched"' in html  # Legacy metrics remain in technical details
+    assert html.index('id="wx-hm-matched"') > html.index("Forecast uncertainty and technical details")
+    assert html.count('class="wx-trade-forecast wx-panel"')==1
+    assert html.count('class="wx-trade-quote wx-panel"')==1
     assert "wx-trade-grid{display:grid;grid-template-columns:" in html
     assert "@media(max-width:920px)" in html
     assert "row.status" in html
