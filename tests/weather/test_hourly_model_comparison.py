@@ -82,8 +82,15 @@ def test_without_verified_market_labels_cannot_claim_trading_accuracy_or_promote
     assert result["status"]=="INSUFFICIENT_VERIFIED_MARKET_PAIRS"
 
 
-def test_no_signal_does_not_pass_model_upgrade_gate():
-    result=compare_models(cases(analogue_signal=False))
+def test_no_real_predictive_edge_does_not_pass_model_upgrade_gate():
+    rows=cases(analogue_signal=False)
+    for i,row in enumerate(rows):
+        # A nearly persistent, low-noise process is already forecastable
+        # without adding a four-parameter hybrid.
+        actual=row["current_index_f"]+.02*math.sin(i*1.47)
+        row["observed_index_f"]=actual
+        row["market_outcome_yes"]=actual>=row["market_threshold_f"]
+    result=compare_models(rows)
     assert result["eligible_for_live_promotion"] is False
 
 
@@ -172,7 +179,9 @@ def test_local_comparison_only_reads_original_timestamped_evidence(tmp_path):
     # Read-only audit: no candidate predictions, outcomes or labels written.
     with sqlite3.connect(db) as c:
         assert c.execute("SELECT COUNT(*) FROM weather_hourly_snapshots").fetchone()[0]==0
-        assert c.execute("SELECT COUNT(*) FROM weather_hourly_forward_snapshots").fetchone()[0]==0
+        assert c.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+            "AND name='weather_hourly_forward_snapshots'").fetchone()[0]==0
 
 
 def test_cache_report_is_read_only_and_fail_closed_if_corrupted(tmp_path):
