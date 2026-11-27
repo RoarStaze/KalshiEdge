@@ -36,7 +36,7 @@ def _empty_metrics() -> dict:
 
 
 def _empty_report(status: str) -> dict:
-    return {"status":status,"incumbent_model":"LIVE_WEATHEREDGE_V12",
+    return {"status":status,"incumbent_model":"FROZEN_FULL_LIVE_OR_OBSERVATION_REPLAY",
             "candidate_model":MODEL,
             "matched_hours":0,"verified_market_hours":0,
             "frozen_live_hours":0,
