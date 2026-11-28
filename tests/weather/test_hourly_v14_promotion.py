@@ -208,3 +208,37 @@ def test_v13_can_deploy_from_archived_winner_with_64_current_receipt_safe_traini
     undertrained = promote_local_nowcast(
         incumbent, rows[:63], promoted_version="v13", live_delta=1.4)
     assert undertrained["enabled"] is False
+
+
+def test_live_nowcast_wires_archived_v13_winner_into_current_forecast(tmp_path, monkeypatch):
+    import sqlite3
+    from kalshi_edge.weather import hourly_nowcast as hn
+    db = tmp_path/"weatheredge.sqlite3"
+    _write(tmp_path, "historical-backtest-v14.json", _synthetic_report())
+    base = NOW-timedelta(days=4)
+    samples = []
+    for i, row in enumerate(_rows(80)):
+        when = base+timedelta(hours=i)
+        samples.append({**row,
+                        "target_utc": when.isoformat(),
+                        "forecast_asof": (when-timedelta(minutes=30)).isoformat(),
+                        "label_received_at": (when+timedelta(minutes=10)).isoformat()})
+    current_point = int((NOW-timedelta(minutes=2)).timestamp()*1000)
+    points = [(current_point,current_point+1000,70.,"normal")]
+    monkeypatch.setattr(hn, "_load_points", lambda *args, **kwargs: (points,None))
+    monkeypatch.setattr(hn, "_cases_from_points", lambda *args, **kwargs: samples)
+    monkeypatch.setattr(hn, "_slopes_from_points", lambda *args, **kwargs:
+                        (1.,.5,70.,current_point))
+    monkeypatch.setattr(hn, "_diurnal_delta", lambda *args, **kwargs: 1.4)
+    monkeypatch.setattr(hn, "choose_index_nowcast", lambda *args, **kwargs: {
+        "enabled": False, "model": None, "history_hours": 80,
+        "status": "INDEX_BASELINE", "validation": None, "sigma_scale": 1.})
+    with sqlite3.connect(db) as conn:
+        forecast=hn.index_nowcast_decision(
+            conn, "chicago", NOW, lead_minutes=30, config_version="current-v1",
+            target_utc=NOW+timedelta(minutes=30))
+    assert forecast["model"] == hn.HYBRID_MODEL, forecast
+    assert forecast["status"] == "ARCHIVED_TEMPERATURE_V13_PROMOTED_UNCERTIFIED"
+    assert forecast["historical_temperature_status"] == "ACTIVE_ARCHIVE_EVIDENCE_ONLY"
+    assert forecast["validation"] is None
+    assert forecast["paired_comparison_status"] == "NO_COMPARISON_REPORT"
