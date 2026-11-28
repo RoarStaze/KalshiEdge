@@ -173,3 +173,42 @@ def test_v15_readonly_report_without_local_database(tmp_path):
     assert result["status"]=="NO_LOCAL_WEATHER_HISTORY"
     assert result["groups"]==[]
     assert result["real_orders_enabled"] is False
+
+
+def test_after_v15_activation_frozen_pair_keeps_original_v14_counterfactual():
+    import json
+    import sqlite3
+    from kalshi_edge.weather.hourly_physical_learning import freeze_pair, _init
+    from kalshi_edge.weather.hourly_v15 import V15_KIND
+    conn=sqlite3.connect(":memory:")
+    _init(conn)
+    now=START+timedelta(hours=20,minutes=30)
+    target=START+timedelta(hours=21)
+    row={
+        "city":"chicago","source":"KALSHI_WEATHER_INDEX","asof":now.isoformat(),
+        "target_utc":target.isoformat(),"source_config_version":"test-config",
+        "source_event_ms":int((now-timedelta(minutes=3)).timestamp()*1000),
+        "source_received_at":(now-timedelta(minutes=1)).isoformat(),
+        "model_kind":V15_KIND,
+        "pre_physical_mean_f":61.,"pre_physical_sigma_f":1.2,
+        "pre_physical_model_kind":V15_KIND,
+        "v15_reference_mean_f":59.4,"v15_reference_sigma_f":1.5,
+        "v15_reference_model_kind":V14,
+        "physical_ensemble":{
+            "status":"RESEARCH_ONLY_NOT_PROMOTED",
+            "calibration_version":"test-config",
+            "hrrr_index_f":60.5,"nbm_index_f":60.9,
+            "model_receipts":{"HRRR":(now-timedelta(minutes=5)).isoformat(),
+                              "NBM":(now-timedelta(minutes=3)).isoformat()},
+            "model_runs":{"HRRR":(now-timedelta(hours=2)).isoformat(),
+                          "NBM":(now-timedelta(hours=2)).isoformat()},
+        },
+        "markets":[],
+    }
+    assert freeze_pair(conn,row,now)
+    raw=conn.execute("SELECT frozen_json FROM weather_hourly_physical_pairs").fetchone()[0]
+    pair=json.loads(raw)
+    assert pair["baseline_kind"]==V14
+    assert pair["baseline_f"]==59.4
+    assert pair["sigma_f"]==1.5
+    assert pair["baseline_kind"]!=V15_KIND
