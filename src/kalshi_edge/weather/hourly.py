@@ -741,7 +741,7 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
     result["pre_physical_mean_f"]=round(mean,6)
     result["pre_physical_sigma_f"]=round(sigma,6)
     result["pre_physical_model_kind"]=result["model_kind"]
-    physical=(original_physical if original_physical.get("enabled")
+    physical=(original_physical if not v15["enabled"]
               else physical_live_decision(
                   conn,city,last[4],target,asof,result["physical_ensemble"],
                   baseline_kind=result["pre_physical_model_kind"]))
