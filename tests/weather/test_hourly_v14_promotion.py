@@ -116,6 +116,7 @@ def _rows(n=160):
             "hours_ahead": .5, "current_index_f": current,
             "fast_slope": fast, "slow_slope": slow,
             "diurnal_delta_f": delta, "baseline_sigma_f": 1.5,
+            "baseline_mean_f": current + .55*fast*.5,
             "observed_index_f": actual + .2*math.sin(i*1.7),
         })
     return result
