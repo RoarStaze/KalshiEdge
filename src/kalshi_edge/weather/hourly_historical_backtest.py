@@ -53,12 +53,51 @@ def _empty_report(status: str) -> dict:
     }
 
 
-def decode_archive_page(payload: dict, city: str, start_ms: int,
-                        end_ms: int) -> list[dict]:
-    """Validate separately queried *historical* exchange observations.
+def parse_archive_calibration_timeline(payload: dict, city: str) -> list[dict]:
+    """Validate official effective-date/version mapping; never guess a version.
 
-    available_ms is a simulated embargo, NOT a claimed original receipt time.
-    Archive responses must not be copied into weather_hourly_index.
+    This is a source-provenance check, not validation of individual station
+    observations or proof of first-publication time.
+    """
+    if (not isinstance(payload, dict) or payload.get("city") != city or
+            payload.get("units") != "celsius"):
+        raise ValueError("INVALID_ARCHIVE_CALIBRATION_SOURCE")
+    entries = payload.get("calibrations")
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 1000:
+        raise ValueError("INVALID_ARCHIVE_CALIBRATION_TIMELINE")
+    result = []
+    previous = -1
+    versions = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("INVALID_ARCHIVE_CALIBRATION_ENTRY")
+        version = entry.get("config_version")
+        effective = entry.get("effective_at_ms")
+        published = entry.get("published_at_ms")
+        if (not isinstance(version, str) or not 1 <= len(version) <= 160 or
+                version in versions or type(effective) is not int or
+                not 1500000000000 < effective < 4200000000000 or
+                effective <= previous or
+                (published is not None and
+                 (type(published) is not int or
+                  not 1500000000000 < published < 4200000000000))):
+            raise ValueError("INVALID_ARCHIVE_CALIBRATION_ENTRY")
+        result.append({"config_version": version,
+                       "effective_at_ms": effective,
+                       "published_at_ms": published})
+        previous = effective
+        versions.add(version)
+    return result
+
+
+def decode_archive_page(payload: dict, city: str, start_ms: int,
+                        end_ms: int, *,
+                        calibrations: list[dict] | None = None) -> list[dict]:
+    """Decode actual archived observations under each historical configuration.
+
+    Empty windows need no config. For nonempty historical windows use the
+    independently published effective-time calibration timeline if supplied.
+    Original receipt times are NOT recoverable from a historical response.
     """
     if (city not in CITIES or not isinstance(payload, dict) or
             payload.get("city") != city or payload.get("units") != "fahrenheit" or
@@ -66,11 +105,25 @@ def decode_archive_page(payload: dict, city: str, start_ms: int,
             len(payload["timeseries"]) > 10000):
         raise ValueError("INVALID_ARCHIVE_SOURCE")
     config = payload.get("config_version")
-    if not isinstance(config, str) or not config or len(config) > 160:
+    # Historical/empty windows can omit the optional response-level version,
+    # or return an empty string. Neither can identify an old event's config.
+    if config == "":
+        config = None
+    if config is not None and (
+            not isinstance(config, str) or not 1 <= len(config) <= 160):
         raise ValueError("INVALID_ARCHIVE_CONFIG")
     if (type(start_ms) is not int or type(end_ms) is not int or
             start_ms < 1600000000000 or end_ms < start_ms):
         raise ValueError("INVALID_ARCHIVE_WINDOW")
+    versions = None
+    times = None
+    if calibrations is not None:
+        if not isinstance(calibrations, list) or not calibrations:
+            raise ValueError("INVALID_ARCHIVE_CALIBRATION_TIMELINE")
+        versions = calibrations
+        times = [entry["effective_at_ms"] for entry in versions]
+        if times != sorted(set(times)):
+            raise ValueError("NONMONOTONIC_ARCHIVE_CALIBRATIONS")
     result = []
     for raw in payload["timeseries"]:
         if not isinstance(raw, dict):
@@ -79,8 +132,6 @@ def decode_archive_page(payload: dict, city: str, start_ms: int,
             continue
         if str(raw.get("receipt_basis", "")).lower() == "synthetic":
             continue
-        if raw.get("config_version", config) != config:
-            raise ValueError("INVALID_ARCHIVE_CONFIG")
         event = raw.get("t")
         value = raw.get("v")
         contributors = raw.get("contributors")
@@ -90,11 +141,34 @@ def decode_archive_page(payload: dict, city: str, start_ms: int,
                 abs(value-round(value, 2)) > 1e-6 or
                 type(contributors) is not int or contributors <= 0):
             continue
+        point_config = raw.get("config_version")
+        if point_config is not None and (
+                not isinstance(point_config, str) or
+                not 1 <= len(point_config) <= 160):
+            raise ValueError("INVALID_ARCHIVE_CONFIG")
+        if times is not None:
+            import bisect
+            idx = bisect.bisect_right(times, event) - 1
+            if idx < 0:
+                raise ValueError("NO_APPLICABLE_ARCHIVE_CALIBRATION")
+            selected = versions[idx]
+            chosen = selected["config_version"]
+            published = selected.get("published_at_ms")
+            if published is not None and published > event:
+                raise ValueError("FUTURE_ARCHIVE_CALIBRATION")
+            if point_config is not None and point_config != chosen:
+                raise ValueError("ARCHIVE_CALIBRATION_CONFLICT")
+        else:
+            if config is not None and point_config is not None and point_config != config:
+                raise ValueError("INVALID_ARCHIVE_CONFIG")
+            chosen = point_config or config
+            if chosen is None:
+                raise ValueError("INVALID_ARCHIVE_CONFIG")
         result.append({
             "event_ms": event,
             "available_ms": event + ASSUMED_PUBLICATION_DELAY_MS,
             "temp_f": round(value, 2), "status": raw["status"],
-            "config_version": config,
+            "config_version": chosen,
         })
     return sorted(result, key=lambda p: p["event_ms"])
 
@@ -111,6 +185,8 @@ def download_archived_index(client: httpx.Client, city: str,
     receipts = []
     cursor = start
     count = 0
+    calibrations = None
+    calibration_sha = None
     while cursor < end:
         stop = min(cursor + WINDOW, end)
         lo = int(cursor.timestamp()*1000)
@@ -120,7 +196,24 @@ def download_archived_index(client: httpx.Client, city: str,
         response.raise_for_status()
         if len(response.content) > MAX_RESPONSE_BYTES:
             raise ValueError("OVERSIZED_ARCHIVE_RESPONSE")
-        page = decode_archive_page(response.json(), city, lo, hi)
+        payload = response.json()
+        # Only actual populated windows need a historical configuration.
+        # A normal/degraded value can span a weekly calibration boundary;
+        # never assign the response's latest version to old event minutes.
+        usable = (isinstance(payload, dict) and
+                  isinstance(payload.get("timeseries"), list) and
+                  any(isinstance(item, dict) and
+                      item.get("status") in ("normal", "degraded")
+                      for item in payload["timeseries"]))
+        if usable and calibrations is None:
+            history = client.get(f"{API}/live_data/weather/{city}/calibrations")
+            history.raise_for_status()
+            if len(history.content) > MAX_RESPONSE_BYTES:
+                raise ValueError("OVERSIZED_ARCHIVE_CALIBRATIONS")
+            calibrations = parse_archive_calibration_timeline(history.json(), city)
+            calibration_sha = hashlib.sha256(history.content).hexdigest()
+        page = decode_archive_page(
+            payload, city, lo, hi, calibrations=calibrations)
         count += 1
         receipts.append({
             "window_start_utc": cursor.isoformat(),
@@ -139,6 +232,8 @@ def download_archived_index(client: httpx.Client, city: str,
         "requests": count, "archived_minutes": len(points),
         "start_utc": start.isoformat(), "end_utc": end.isoformat(),
         "source": f"{API}/live_data/weather/{city}",
+        "calibration_source_sha256": calibration_sha,
+        "calibration_versions": len(calibrations) if calibrations else 0,
         "response_manifest": receipts,
     }
 
@@ -312,6 +407,8 @@ def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
                 "city": city, "lead_minutes": lead,
                 "archived_minutes": provenance["archived_minutes"],
                 "retrieval_requests": provenance["requests"],
+                "archive_calibration_source_sha256": provenance["calibration_source_sha256"],
+                "archive_calibration_versions": provenance["calibration_versions"],
                 "archive_window": [provenance["start_utc"], provenance["end_utc"]],
                 "source_response_sha256": [
                     m["source_response_sha256"] for m in provenance["response_manifest"]],
