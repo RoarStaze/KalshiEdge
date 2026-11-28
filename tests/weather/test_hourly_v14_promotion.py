@@ -186,3 +186,25 @@ def test_archived_temperature_promotion_does_not_override_future_market_gate():
         promoted_version="v14", live_delta=None)
     assert result["enabled"] is False
     assert result["historical_temperature_status"] == "WAITING_FOR_LIVE_RECEIPT_SAFE_TRAINING"
+
+
+def test_v13_can_deploy_from_archived_winner_with_64_current_receipt_safe_training_hours():
+    from kalshi_edge.weather.hourly_promotion import promote_local_nowcast
+    base = datetime(2026, 11, 14, tzinfo=UTC)
+    rows = []
+    for i, row in enumerate(_rows(80)):
+        when = base + timedelta(hours=i)
+        rows.append({**row, "target_utc": when.isoformat(),
+                     "forecast_asof": (when-timedelta(minutes=30)).isoformat(),
+                     "label_received_at": (when+timedelta(minutes=10)).isoformat()})
+    incumbent = {"enabled": False, "model": None, "sigma_scale": 1.,
+                 "live_slopes": (1., 1., 70., 1)}
+    deployed = promote_local_nowcast(
+        incumbent, rows, promoted_version="v13", live_delta=1.4)
+    assert deployed["enabled"] is True
+    assert deployed["model"] == "REGULARIZED_HOURLY_HYBRID_V13"
+    assert deployed["historical_temperature_validation"]["hours"] == 0
+    assert deployed["historical_temperature_status"] == "ACTIVE_ARCHIVE_EVIDENCE_ONLY"
+    undertrained = promote_local_nowcast(
+        incumbent, rows[:63], promoted_version="v13", live_delta=1.4)
+    assert undertrained["enabled"] is False
