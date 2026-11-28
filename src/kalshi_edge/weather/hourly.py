@@ -705,9 +705,19 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
     remaining=(target-asof).total_seconds()/60.
     v15_lead=(min(LEAD_MINUTES,key=lambda k:abs(k-remaining))
               if 0<remaining<=60 else None)
-    v15=v15_live_decision(
-        conn,city,last[4],target,asof,v15_lead,
-        result["physical_ensemble"],baseline_kind=result["model_kind"])
+    # An already qualified, prospective, exact-market V4 lockbox is
+    # stronger evidence than V15's temperature-only historical holdout.
+    # Check that ORIGINAL pre-V15 baseline first, so changing model IDs
+    # cannot inadvertently invalidate a superior proven physical blend.
+    original_physical=physical_live_decision(
+        conn,city,last[4],target,asof,result["physical_ensemble"],
+        baseline_kind=result["model_kind"])
+    if original_physical.get("enabled"):
+        v15={"enabled":False,"status":"MARKET_VERIFIED_PHYSICAL_LOCK_PRIORITY"}
+    else:
+        v15=v15_live_decision(
+            conn,city,last[4],target,asof,v15_lead,
+            result["physical_ensemble"],baseline_kind=result["model_kind"])
     result["v15_status"]=v15["status"]
     result["v15_paired_hours"]=v15.get("history_hours",0)
     result["v15_training_hours"]=v15.get("train_hours",0)
@@ -731,9 +741,10 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
     result["pre_physical_mean_f"]=round(mean,6)
     result["pre_physical_sigma_f"]=round(sigma,6)
     result["pre_physical_model_kind"]=result["model_kind"]
-    physical=physical_live_decision(
-        conn,city,last[4],target,asof,result["physical_ensemble"],
-        baseline_kind=result["pre_physical_model_kind"])
+    physical=(original_physical if original_physical.get("enabled")
+              else physical_live_decision(
+                  conn,city,last[4],target,asof,result["physical_ensemble"],
+                  baseline_kind=result["pre_physical_model_kind"]))
     result["physical_adaptive_status"]=physical["status"]
     result["physical_adaptive_paired_hours"]=physical.get("paired_hours",0)
     result["physical_adaptive_scored_hours"]=physical.get("scored_hours",0)
