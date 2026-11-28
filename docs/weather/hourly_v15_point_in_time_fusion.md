@@ -63,6 +63,13 @@ For each city, source configuration, lead bucket and unchanged V13/V14 base:
 - Only then may V15 automatically replace the temperature estimate in
   `kalshiedge start`, with distinct immutable model identity
   `HISTORICAL_PAIRED_NOAA_FUSION_INDEX_V15`.
+- An already-approved prospective, market-verified physical V4 lockbox
+  takes priority over a V15 temperature-only improvement.
+- When V15 does activate, every subsequent immutable physical-pair record
+  continues freezing the contemporaneous, independently computed V13/V14
+  *counterfactual* forecast so V15 can be re-evaluated without accidentally
+  erasing its own training baseline. The actual forward forecast retains
+  V15's separate model identity.
 - If there is not enough data, an invalid receipt, no improvement or a
   changed baseline model, it retains the existing V13/V14 forecast.
 
