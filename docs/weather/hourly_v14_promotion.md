@@ -26,9 +26,10 @@ policy, NOT the stronger market-verified promotion gate.
 
 The production nowcast refits the selected version from real timestamped
 LOCAL receipt-safe Index examples from the current live calibration regime.
-At least 64 original-source, receipt-safe local historical cases with
-adequate diurnal diversity, a present live slope and prior-day diurnal
-feature are needed to fit and activate an archive-qualified V13 or V14
+At least 64 **diurnal-eligible**, original-source, receipt-safe local
+training cases (potentially more than 64 total hours), a present live slope
+and prior-day diurnal feature are needed to fit and activate an
+archive-qualified V13 or V14
 forecast. Prior to 96 local cases, this is explicitly marked
 `ACTIVE_ARCHIVE_EVIDENCE_ONLY` (no separate local holdout). Once 96+
 local cases exist, a 24-hour untouched local safety holdout checks
