@@ -334,8 +334,20 @@ def freeze_pair(conn: sqlite3.Connection,prediction: dict,
             run=_utc(runs[model])
             if not run<=received<=now<target:
                 return False
-        base=_finite(prediction["pre_physical_mean_f"])
-        sigma=_finite(prediction["pre_physical_sigma_f"],.01,30.)
+        from .hourly_v15 import V15_KIND, BASELINE_KINDS
+        if prediction.get("model_kind")==V15_KIND:
+            # Preserve the originally computed V13/V14 forecast as the
+            # independently frozen counterfactual; the actual live final
+            # forecast has its own V15 identity and forward snapshots.
+            base=_finite(prediction["v15_reference_mean_f"])
+            sigma=_finite(prediction["v15_reference_sigma_f"],.01,30.)
+            reference_kind=prediction["v15_reference_model_kind"]
+            if reference_kind not in BASELINE_KINDS:
+                return False
+        else:
+            base=_finite(prediction["pre_physical_mean_f"])
+            sigma=_finite(prediction["pre_physical_sigma_f"],.01,30.)
+            reference_kind=prediction.get("pre_physical_model_kind") or prediction.get("model_kind")
         hrrr=_finite(physics["hrrr_index_f"])
         nbm=_finite(physics["nbm_index_f"])
         markets=prediction.get("markets") or []
@@ -351,8 +363,7 @@ def freeze_pair(conn: sqlite3.Connection,prediction: dict,
              "lead_minutes":bucket,"asof":now.isoformat(),
              "config_version":cfg,
              "baseline_f":base,"sigma_f":sigma,
-             "baseline_kind":prediction.get("pre_physical_model_kind") or
-                             prediction.get("model_kind"),
+             "baseline_kind":reference_kind,
              "hrrr_f":hrrr,"nbm_f":nbm,
              "market_ticker":chosen["ticker"] if chosen else None,
              "threshold_f":_finite(chosen["threshold_f"]) if chosen else None,
@@ -486,6 +497,9 @@ def collect_cases(conn: sqlite3.Connection, city: str,
             is_verified=same_settled_contract(
                 frozen,matched.get(target_raw),actual)
             result.append({"target_utc":target_raw,
+                # Original local forecast and canonical observation receipts.
+                "asof":at_raw,
+                "label_received_at":label_received.isoformat(),
                 **values,"sigma_f":sigma,"observed_f":actual,
                 "threshold_f":threshold,"market_verified":is_verified,
                 "config_version":config_version,

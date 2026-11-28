@@ -26,6 +26,7 @@ from .predictor import normal_cdf, _utc
 from .hourly_learning import learning_decision, apply_correction
 from .hourly_nowcast import (LEAD_MINUTES, index_nowcast_decision,
                              nowcast_prediction)
+from .hourly_v15 import V15_KIND, predict_v15, v15_live_decision
 from .hourly_physics import read_hourly_physics
 from .hourly_quotes import read_latest_quote
 from .hourly_physical_learning import (
@@ -693,14 +694,57 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                 result["index_nowcast_selected_model"]=nowcast["model"]
         else:
             result["index_nowcast_status"]="UNSUPPORTED_LEAD_TIME"
+    # Preserve the ORIGINAL V13/V14 point-in-time counterfactual even after
+    # V15 activates, so later paired research never loses its baseline.
+    result["v15_reference_mean_f"]=round(mean,6)
+    result["v15_reference_sigma_f"]=round(sigma,6)
+    result["v15_reference_model_kind"]=result["model_kind"]
+    # V15: learn source-time-safe NOAA HRRR/NBM correction only from older
+    # immutable paired records with genuinely later canonical outcomes.
+    # A missing, late or mismatched NOAA feed keeps V13/V14 unchanged.
+    remaining=(target-asof).total_seconds()/60.
+    v15_lead=(min(LEAD_MINUTES,key=lambda k:abs(k-remaining))
+              if 0<remaining<=60 else None)
+    # An already qualified, prospective, exact-market V4 lockbox is
+    # stronger evidence than V15's temperature-only historical holdout.
+    # Check that ORIGINAL pre-V15 baseline first, so changing model IDs
+    # cannot inadvertently invalidate a superior proven physical blend.
+    original_physical=physical_live_decision(
+        conn,city,last[4],target,asof,result["physical_ensemble"],
+        baseline_kind=result["model_kind"])
+    if original_physical.get("enabled"):
+        v15={"enabled":False,"status":"MARKET_VERIFIED_PHYSICAL_LOCK_PRIORITY"}
+    else:
+        v15=v15_live_decision(
+            conn,city,last[4],target,asof,v15_lead,
+            result["physical_ensemble"],baseline_kind=result["model_kind"])
+    result["v15_status"]=v15["status"]
+    result["v15_paired_hours"]=v15.get("history_hours",0)
+    result["v15_training_hours"]=v15.get("train_hours",0)
+    result["v15_validation_hours"]=v15.get("validation_hours",0)
+    if v15["enabled"]:
+        mean,sigma=predict_v15({
+            "baseline_f":mean,"sigma_f":sigma,
+            "hrrr_f":result["physical_ensemble"]["hrrr_index_f"],
+            "nbm_f":result["physical_ensemble"]["nbm_index_f"],
+        },v15["parameters"])
+        result["model_kind"]=V15_KIND
+        result["index_nowcast_selected_model"]=V15_KIND
+        result["index_nowcast_status"]="V15_PAIRED_TEMPERATURE_IMPROVED"
+        result["v15_validation"]={
+            "incumbent":v15["evidence"]["incumbent"],
+            "candidate":v15["evidence"]["candidate"],
+            "market_verified_hours":v15["market_verified_hours"],
+        }
     # Freeze the exact current-model estimate for prospective paired scores.
     # Never use an already blended prediction as the baseline label.
     result["pre_physical_mean_f"]=round(mean,6)
     result["pre_physical_sigma_f"]=round(sigma,6)
     result["pre_physical_model_kind"]=result["model_kind"]
-    physical=physical_live_decision(
-        conn,city,last[4],target,asof,result["physical_ensemble"],
-        baseline_kind=result["pre_physical_model_kind"])
+    physical=(original_physical if not v15["enabled"]
+              else physical_live_decision(
+                  conn,city,last[4],target,asof,result["physical_ensemble"],
+                  baseline_kind=result["pre_physical_model_kind"]))
     result["physical_adaptive_status"]=physical["status"]
     result["physical_adaptive_paired_hours"]=physical.get("paired_hours",0)
     result["physical_adaptive_scored_hours"]=physical.get("scored_hours",0)
