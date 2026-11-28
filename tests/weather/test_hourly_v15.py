@@ -126,3 +126,50 @@ def test_v15_live_rejects_new_config_or_wrong_baseline(monkeypatch):
                            "NBM":(now-timedelta(hours=2)).isoformat()}}
     assert not v15_live_decision(object(),"chicago","synthetic-current-config",
                                   target,now,30,physics,baseline_kind=V14)["enabled"]
+
+
+def test_v15_forecast_promotes_new_model_identity_without_order_or_market_fabrication(monkeypatch):
+    import json
+    import sqlite3
+    from kalshi_edge.weather import hourly
+    from kalshi_edge.weather.hourly import _init as init_hourly, _forecast
+    from kalshi_edge.weather.hourly_v15 import V15_KIND
+    conn=sqlite3.connect(":memory:")
+    init_hourly(conn)
+    now=START+timedelta(hours=20,minutes=30)
+    at=now-timedelta(minutes=3)
+    raw={"t":int(at.timestamp()*1000),"v":59.0,"status":"normal","contributors":3}
+    conn.execute("""INSERT INTO weather_hourly_index
+        (city,event_ms,received_at,temp_f,status,config_version,source_sha,payload)
+        VALUES(?,?,?,?,?,?,?,?)""",
+        ("chicago",raw["t"],(at+timedelta(minutes=1)).isoformat(),59.,
+         "normal","synthetic-current-config","a"*64,json.dumps(raw)))
+    monkeypatch.setattr(hourly,"read_hourly_physics",lambda *args,**kwargs:{
+        "status":"RESEARCH_ONLY_NOT_PROMOTED","calibration_version":"synthetic-current-config",
+        "hrrr_index_f":61.,"nbm_index_f":61.})
+    monkeypatch.setattr(hourly,"v15_live_decision",lambda *args,**kwargs:{
+        "enabled":True,"status":"V15_PAIRED_TEMPERATURE_IMPROVED",
+        "model_kind":V15_KIND,"market_verified_hours":0,
+        "parameters":{"nwp_gain":.8,"contrast_gain":0.,"bias_f":0.,
+                      "sigma_scale":1.,"spread_gain":0.},
+        "evidence":{"incumbent":{"mae_f":1.},"candidate":{"mae_f":.5}},
+        "history_hours":100,"train_hours":75,"validation_hours":24,
+    })
+    monkeypatch.setattr(hourly,"physical_live_decision",lambda *args,**kwargs:{
+        "enabled":False,"status":"COLLECTING_PAIRED_HOURS"})
+    output=_forecast(conn,"chicago",now)
+    assert output["model_kind"]==V15_KIND
+    assert output["pre_physical_model_kind"]==V15_KIND
+    assert output["pre_physical_mean_f"]==output["predicted_index_f"]
+    assert output["predicted_index_f"]>output["current_index_f"]
+    assert output["real_orders_enabled"] is False
+    assert output["calibration_certified"] is False
+    conn.close()
+
+
+def test_v15_readonly_report_without_local_database(tmp_path):
+    from kalshi_edge.weather.hourly_v15 import compare_local_v15
+    result=compare_local_v15(tmp_path/"missing.sqlite3")
+    assert result["status"]=="NO_LOCAL_WEATHER_HISTORY"
+    assert result["groups"]==[]
+    assert result["real_orders_enabled"] is False
