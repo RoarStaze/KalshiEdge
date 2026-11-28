@@ -262,7 +262,13 @@ def promote_local_nowcast(decision: dict, samples: list[dict], *,
             "market_verified_hours": 0,
         },
     })
+    if not local_holdout:
+        # Old V12 validation scores must not appear as if they measured
+        # this newly selected V13/V14 forecast before a local holdout.
+        result["validation"] = None
+        result["validation_hours"] = 0
     if local_holdout:
+        result["validation_hours"] = len(valid)
         result["validation"] = {
             "baseline_mae_f": base["mae_f"],
             "candidate_mae_f": candidate["mae_f"],
