@@ -151,8 +151,9 @@ def read_historical_promotions(db_path: Path, city: str, lead: int, *,
                                asof: datetime | None = None) -> dict:
     """Automatically read the normal research files from the app's data dir.
 
-    No manual promotion commands required after downloading the new code.
-    Source bytes must still be present to independently audit provenance.
+    No manual promotion command is required. Report-level SHA metadata
+    is checked for shape and continuity; original API response bytes are
+    NOT reverified by this reader (especially for older uncached runs).
     """
     now = _utc(asof or datetime.now(timezone.utc))
     folder = Path(db_path).parent
