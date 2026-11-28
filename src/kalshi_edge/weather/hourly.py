@@ -694,6 +694,11 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                 result["index_nowcast_selected_model"]=nowcast["model"]
         else:
             result["index_nowcast_status"]="UNSUPPORTED_LEAD_TIME"
+    # Preserve the ORIGINAL V13/V14 point-in-time counterfactual even after
+    # V15 activates, so later paired research never loses its baseline.
+    result["v15_reference_mean_f"]=round(mean,6)
+    result["v15_reference_sigma_f"]=round(sigma,6)
+    result["v15_reference_model_kind"]=result["model_kind"]
     # V15: learn source-time-safe NOAA HRRR/NBM correction only from older
     # immutable paired records with genuinely later canonical outcomes.
     # A missing, late or mismatched NOAA feed keeps V13/V14 unchanged.
