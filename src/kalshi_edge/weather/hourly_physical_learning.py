@@ -486,6 +486,9 @@ def collect_cases(conn: sqlite3.Connection, city: str,
             is_verified=same_settled_contract(
                 frozen,matched.get(target_raw),actual)
             result.append({"target_utc":target_raw,
+                # Original local forecast and canonical observation receipts.
+                "asof":at_raw,
+                "label_received_at":label_received.isoformat(),
                 **values,"sigma_f":sigma,"observed_f":actual,
                 "threshold_f":threshold,"market_verified":is_verified,
                 "config_version":config_version,
