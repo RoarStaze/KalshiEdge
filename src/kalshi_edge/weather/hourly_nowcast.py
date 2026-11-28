@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from .predictor import normal_cdf
 from .hourly_adaptive import fit_adaptive, predict_adaptive, validate_adaptive
 from .hourly_hybrid import predict_hybrid, validate_hybrid
+from .hourly_v14 import V14_MODEL, predict_v14
 from .hourly_volatility import (
     MIN_TRAIN as VOLATILITY_MIN_TRAIN, fit_volatility,
     predict_volatility, validate_volatility,
@@ -423,6 +424,15 @@ def nowcast_prediction(current_f: float, baseline_sigma_f: float,
                        diurnal_delta_f: float | None = None) -> tuple[float,float]:
     if not decision.get("enabled"):
         return current_f,baseline_sigma_f
+    if decision.get("model")==V14_MODEL:
+        if diurnal_delta_f is None:
+            return current_f,baseline_sigma_f
+        row={"current_index_f":current_f,
+             "baseline_sigma_f":baseline_sigma_f,
+             "fast_slope":fast_slope,"slow_slope":slow_slope,
+             "hours_ahead":hours_ahead,
+             "diurnal_delta_f":diurnal_delta_f}
+        return predict_v14(row,decision.get("parameters"))
     if decision.get("model")==HYBRID_MODEL:
         if diurnal_delta_f is None:
             return current_f,baseline_sigma_f
@@ -480,6 +490,31 @@ def index_nowcast_decision(conn: sqlite3.Connection, city: str,
             decision["live_diurnal_delta_f"]=_diurnal_delta(
                 points,times,ms,actual_target_ms)
 
+        # Historical temperature-only promotion is separate from the
+        # stricter market-outcome and live-trading certification gates.
+        # Only exact local research files produced by the archive runner
+        # can propose winners; live coefficients are refitted on genuinely
+        # received Index observations from the CURRENT calibration version.
+        try:
+            from pathlib import Path
+            from .hourly_promotion import (
+                promote_local_nowcast, read_historical_promotions,
+            )
+            db_name=conn.execute("PRAGMA database_list").fetchone()[2]
+            if db_name:
+                policy=read_historical_promotions(
+                    Path(db_name),city,lead_minutes,asof=now)
+                decision["historical_temperature_backtest"]=policy
+                if policy["model"] is not None:
+                    delta=_diurnal_delta(points,times,ms,actual_target_ms)
+                    decision=promote_local_nowcast(
+                        decision,samples,
+                        promoted_version=policy["model"],live_delta=delta)
+        except (OSError,ValueError,TypeError,KeyError,sqlite3.Error):
+            decision["historical_temperature_status"]="HISTORICAL_TEMPERATURE_POLICY_UNAVAILABLE"
+
+        # The stronger full-pipeline market-verified promotion still takes
+        # precedence when all independent frozen-market gates pass.
         # Promotion cannot be decided from training MAE or imagined
         # settlement: only the collector's saved, checksum-verified
         # three-block paired contest against V12 + exact verified Kalshi
