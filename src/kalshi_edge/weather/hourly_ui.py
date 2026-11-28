@@ -380,7 +380,10 @@ CALIBRATION = """
   <p>Three chronological 24-hour blocks compare the same hourly Index targets.
    Temperature MAE/CRPS use only timely source observations. Brier requires
    originally frozen matching contracts and verified YES/NO settlements.
-   Promotion needs all gates; synthetic tests cannot establish real accuracy.</p>
+   At least 144 eligible Index hours, 72 frozen full-model forecasts and 24
+   verified market pairs are needed for promotion. Source-hour shortfalls
+   are lower bounds, not an estimated completion time. Promotion needs all
+   gates; synthetic tests cannot establish real accuracy.</p>
   <div id="wx-model-comparison" class="wx-forward-cohorts" aria-live="polite">
    <div class="wx-empty">No verified market comparison yet. Waiting for
    the collector's point-in-time evidence.</div>
@@ -793,6 +796,9 @@ SCRIPT = r"""<script>
           for(const item of groups.slice(0,20)){
              const base=item.incumbent||{},candidate=item.candidate||{};
              line((item.city||"city")+" · "+(item.lead_minutes||"?")+"min"+
+                  " · eligible Index hours "+(item.observed_index_hours??item.available_index_hours??0)+
+                  " / "+(item.minimum_index_hours??144)+" minimum"+
+                  " · more eligible hours "+(item.additional_eligible_hours_needed??"UNKNOWN")+
                   " · matched hours "+(item.matched_hours||0)+
                   " · frozen current-model hours "+(item.frozen_live_hours||0)+
                   " · verified contracts "+(item.verified_market_hours||0)+
