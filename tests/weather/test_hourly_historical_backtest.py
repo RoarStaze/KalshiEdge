@@ -138,3 +138,105 @@ def test_source_unavailable_is_explicit_not_a_model_defeat():
     assert report["any_promoted"] is False
     assert report["groups"][0]["matched_hours"] == 0
     assert report["groups"][0]["candidate"]["crps"] is None
+
+
+def test_archive_empty_window_without_config_is_not_an_error():
+    start = int(START.timestamp() * 1000)
+    page = {"city": "chicago", "units": "fahrenheit", "timeseries": []}
+    assert decode_archive_page(page, "chicago", start, start + 60000) == []
+
+
+def test_archive_uses_calibration_effective_at_event_not_current_header():
+    start = int(START.timestamp() * 1000)
+    # One historical range straddles a weekly recalibration; the response
+    # header is not a valid per-minute historical config identifier.
+    switch = start + 300000
+    page = {
+        "city": "chicago", "units": "fahrenheit",
+        "config_version": "latest-v2",
+        "timeseries": [_raw_point(START), _raw_point(START + timedelta(minutes=5))],
+    }
+    versions = [
+        {"config_version": "old-v1", "effective_at_ms": start - 86400000},
+        {"config_version": "latest-v2", "effective_at_ms": switch},
+    ]
+    rows = decode_archive_page(page, "chicago", start, start + 600000,
+                               calibrations=versions)
+    assert [x["config_version"] for x in rows] == ["old-v1", "latest-v2"]
+    assert [x["event_ms"] for x in rows] == [start, switch]
+
+
+def test_archive_disagrees_with_original_point_config_fails_closed():
+    start = int(START.timestamp() * 1000)
+    page = {
+        "city": "chicago", "units": "fahrenheit",
+        "timeseries": [{**_raw_point(START), "config_version": "wrong-v2"}],
+    }
+    versions = [{"config_version": "actual-v1",
+                 "effective_at_ms": start-3600000}]
+    with pytest.raises(ValueError, match="ARCHIVE_CALIBRATION_CONFLICT"):
+        decode_archive_page(page, "chicago", start, start+60000,
+                            calibrations=versions)
+
+
+def test_archive_download_resolves_missing_header_using_published_timeline():
+    start = int(START.timestamp() * 1000)
+    requests = []
+    def handle(request):
+        requests.append(str(request.url))
+        if request.url.path.endswith("/calibrations"):
+            return httpx.Response(200, json={
+                "city": "chicago", "units": "celsius",
+                "calibrations": [
+                    {"config_version": "v1", "effective_at_ms": start-3600000},
+                    {"config_version": "v2", "effective_at_ms": start+86400000},
+                ],
+            })
+        if int(request.url.params["from"]) == start:
+            return httpx.Response(200, json={
+                "city": "chicago", "units": "fahrenheit",
+                "timeseries": [_raw_point(START)],
+            })
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit",
+            "timeseries": [_raw_point(START+timedelta(days=1))],
+        })
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        rows, meta = download_archived_index(
+            client, "chicago", START, START+timedelta(days=2))
+    assert [r["config_version"] for r in rows] == ["v1", "v2"]
+    assert meta["requests"] == 2
+    assert meta["calibration_source_sha256"]
+    assert len(requests) == 3
+
+
+def test_missing_calibration_source_cannot_be_relabelled_to_guess():
+    def handle(request):
+        if request.url.path.endswith("/calibrations"):
+            return httpx.Response(404, json={"error": "no history"})
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit",
+            "timeseries": [_raw_point(START)],
+        })
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        report = run_archive_research(
+            client, cities=("chicago",), start=START,
+            end=START+timedelta(days=1), leads=(30,))
+    assert report["status"] == "ARCHIVE_SOURCE_UNAVAILABLE"
+    assert report["groups"][0]["matched_hours"] == 0
+    assert report["groups"][0]["candidate"]["mae_f"] is None
+    assert "404" in report["groups"][0]["reason"]
+
+
+def test_no_config_and_no_index_points_reports_no_data_not_invalid_source():
+    def handle(request):
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit", "timeseries": [],
+        })
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        report = run_archive_research(
+            client, cities=("chicago",), start=START,
+            end=START+timedelta(days=2), leads=(30,))
+    assert report["status"] == "NO_ARCHIVED_INDEX_HISTORY"
+    assert report["groups"][0]["status"] == "INSUFFICIENT_ARCHIVED_WALKFORWARD"
+    assert report["groups"][0]["matched_hours"] == 0
