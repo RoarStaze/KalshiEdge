@@ -140,20 +140,23 @@ def test_source_unavailable_is_explicit_not_a_model_defeat():
     assert report["groups"][0]["candidate"]["crps"] is None
 
 
-def test_archive_empty_window_without_config_is_not_an_error():
+@pytest.mark.parametrize("missing_version", [None, ""])
+def test_archive_empty_window_without_config_is_not_an_error(missing_version):
     start = int(START.timestamp() * 1000)
-    page = {"city": "chicago", "units": "fahrenheit", "timeseries": []}
+    page = {"city": "chicago", "units": "fahrenheit",
+            "config_version": missing_version, "timeseries": []}
     assert decode_archive_page(page, "chicago", start, start + 60000) == []
 
 
-def test_archive_uses_calibration_effective_at_event_not_current_header():
+@pytest.mark.parametrize("header_version", ["latest-v2", ""])
+def test_archive_uses_calibration_effective_at_event_not_current_header(header_version):
     start = int(START.timestamp() * 1000)
     # One historical range straddles a weekly recalibration; the response
     # header is not a valid per-minute historical config identifier.
     switch = start + 300000
     page = {
         "city": "chicago", "units": "fahrenheit",
-        "config_version": "latest-v2",
+        "config_version": header_version,
         "timeseries": [_raw_point(START), _raw_point(START + timedelta(minutes=5))],
     }
     versions = [
