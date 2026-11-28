@@ -23,6 +23,7 @@ import httpx
 
 from .hourly import API, CITIES
 from .hourly_hybrid import fit_hybrid, predict_hybrid
+from .hourly_v14 import fit_v14, predict_v14
 from .hourly_model_comparison import _aggregate, _base_prediction, _empty_metrics, _iso, _pair
 from .hourly_nowcast import LEAD_MINUTES, _cases_from_points, choose_index_nowcast
 
@@ -433,9 +434,14 @@ def archive_index_cases(points: list[dict], end_utc: datetime, *,
     return sorted(cases, key=lambda row: row["target_utc"])
 
 
-def compare_archived_models(cases: list[dict]) -> dict:
-    """Train on earlier reconstructed hours; score disjoint later 24h blocks."""
+def compare_archived_models(cases: list[dict], *,
+                            challenger: str = "v13") -> dict:
+    """Compare unchanged chronological blocks; never score on fit labels."""
+    if challenger not in ("v13", "v14"):
+        raise ValueError("UNSUPPORTED_HISTORICAL_CHALLENGER")
     report = _empty_report("INSUFFICIENT_ARCHIVED_WALKFORWARD")
+    report["comparison_identity"] = (
+        "RECONSTRUCTED_V13_VS_V14" if challenger=="v14" else REPLAY_IDENTITY)
     report["available_index_hours"] = len(cases)
     if len(cases) < MIN_TRAIN_HOURS + FOLD_HOURS:
         return report
@@ -473,15 +479,23 @@ def compare_archived_models(cases: list[dict]) -> dict:
             if len(older) < 72:
                 continue
             try:
-                incumbent = choose_index_nowcast(older)
-                params = fit_hybrid(older)
+                incumbent = (choose_index_nowcast(older)
+                             if challenger=="v13" else None)
+                baseline_params = (fit_hybrid(older)
+                                   if challenger=="v14" else None)
+                params = (fit_v14(older)
+                          if challenger=="v14" else fit_hybrid(older))
                 current = []
                 candidate = []
                 for row in holdout:
                     if row.get("diurnal_delta_f") is None:
                         raise ValueError("HISTORICAL_DIURNAL_FEATURE_MISSING")
-                    base_mean, base_sigma = _base_prediction(row, incumbent)
-                    new_mean, new_sigma = predict_hybrid(row, params)
+                    if challenger=="v14":
+                        base_mean, base_sigma = predict_hybrid(row, baseline_params)
+                        new_mean, new_sigma = predict_v14(row, params)
+                    else:
+                        base_mean, base_sigma = _base_prediction(row, incumbent)
+                        new_mean, new_sigma = predict_hybrid(row, params)
                     current.append(_pair(row, base_mean, base_sigma))
                     candidate.append(_pair(row, new_mean, new_sigma))
             except (KeyError, ValueError, TypeError, OverflowError,
@@ -495,8 +509,10 @@ def compare_archived_models(cases: list[dict]) -> dict:
                 "end_target_utc": holdout[-1]["target_utc"],
                 "source_config_version": holdout[0]["source_config_version"],
                 "train_hours": len(older), "hours": len(holdout),
-                "incumbent_model": incumbent.get("model") if incumbent.get("enabled")
-                                   else "CURRENT_INDEX_PERSISTENCE",
+                "incumbent_model": (
+                    "REGULARIZED_HOURLY_HYBRID_V13" if challenger=="v14"
+                    else incumbent.get("model") if incumbent.get("enabled")
+                    else "CURRENT_INDEX_PERSISTENCE"),
                 "incumbent": current_scores, "candidate": candidate_scores,
             })
             all_current.extend(current)
@@ -522,18 +538,25 @@ def compare_archived_models(cases: list[dict]) -> dict:
 def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
                          start: datetime, end: datetime,
                          leads: tuple[int, ...] = LEAD_MINUTES,
+                         challenger: str = "v13",
                          cache_dir: Path | None = None,
                          request_interval_seconds: float = 0.0) -> dict:
     start, end = _utc(start), _utc(end)
     if not cities or not leads or any(city not in CITIES for city in cities):
         raise ValueError("INVALID_ARCHIVE_SELECTION")
+    if challenger not in ("v13", "v14"):
+        raise ValueError("UNSUPPORTED_HISTORICAL_CHALLENGER")
     if any(lead not in LEAD_MINUTES for lead in leads):
         raise ValueError("INVALID_ARCHIVE_LEADS")
     if not start < end or end > datetime.now(timezone.utc) or end-start > timedelta(days=MAX_DAYS):
         raise ValueError("INVALID_ARCHIVE_RANGE")
     limiter = _ArchiveRequestPacer(request_interval_seconds)
     report = {
-        "mode": "WEATHEREDGE_HISTORICAL_REPLAY_V1",
+        "mode": ("WEATHEREDGE_HISTORICAL_REPLAY_V14_CHALLENGER"
+                 if challenger=="v14" else "WEATHEREDGE_HISTORICAL_REPLAY_V1"),
+        "comparison_identity": (
+            "RECONSTRUCTED_V13_VS_V14" if challenger=="v14"
+            else REPLAY_IDENTITY),
         "status": "NO_ARCHIVED_INDEX_HISTORY",
         "asof_utc": datetime.now(timezone.utc).isoformat(),
         "start_utc": start.isoformat(), "end_utc": end.isoformat(),
@@ -563,11 +586,14 @@ def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
         for lead in leads:
             try:
                 cases = archive_index_cases(points, end, lead_minutes=lead)
-                result = compare_archived_models(cases)
+                result = compare_archived_models(cases, challenger=challenger)
             except (ValueError, TypeError, KeyError, OverflowError) as exc:
                 result = _empty_report("ARCHIVE_SOURCE_AUDIT_ERROR")
                 result["reason"] = f"{type(exc).__name__}: {exc}"[:160]
             result.update({
+                "comparison_identity": (
+                    "RECONSTRUCTED_V13_VS_V14" if challenger=="v14"
+                    else REPLAY_IDENTITY),
                 "city": city, "lead_minutes": lead,
                 "archived_minutes": provenance["archived_minutes"],
                 "retrieval_requests": provenance["requests"],
@@ -595,6 +621,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Research-only V12 component versus V13 archived-index replay; NO promotion.")
     parser.add_argument("--days", type=int, default=90)
+    parser.add_argument("--challenger", choices=("v13", "v14"), default="v13",
+                        help="v13 versus reconstructed V12, or new v14 versus V13.")
     parser.add_argument("--city", action="append", choices=tuple(CITIES))
     parser.add_argument("--lead", action="append", type=int, choices=LEAD_MINUTES)
     parser.add_argument("--end-utc", type=str, help="UTC ISO timestamp, e.g. 2026-11-27T00:00:00Z")
@@ -625,6 +653,7 @@ def main() -> int:
                       headers={"User-Agent": "KalshiEdge-Weather-Historical-Research/1.0"}) as client:
         report = run_archive_research(
             client, cities=cities, start=start, end=end, leads=leads,
+            challenger=args.challenger,
             cache_dir=args.cache_dir,
             request_interval_seconds=args.request_interval_seconds)
     rendered = json.dumps(report, sort_keys=True, indent=2, allow_nan=False)
