@@ -1,6 +1,7 @@
 """Historical archived Kalshi Index replay: synthetic fixtures, never live evidence."""
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -332,8 +333,9 @@ def test_corrupt_archive_cache_fails_closed_without_using_tampered_observations(
                                 START + timedelta(days=1), cache_dir=cache)
     items = list(cache.rglob("*.json"))
     assert len(items) == 1
-    data = items[0].read_text(encoding="utf-8")
-    items[0].write_text(data.replace("fahrenheit", "celsius"), encoding="utf-8")
+    saved = json.loads(items[0].read_text(encoding="utf-8"))
+    saved["response_sha256"] = "0" * 64
+    items[0].write_text(json.dumps(saved), encoding="utf-8")
     def should_not_fetch(request):
         raise AssertionError("Corrupted saved evidence must not be trusted or silently replaced")
     with httpx.Client(transport=httpx.MockTransport(should_not_fetch)) as client:
