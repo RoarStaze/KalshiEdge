@@ -150,3 +150,39 @@ def test_v14_archived_head_to_head_never_fabricates_trading_accuracy():
     assert report["candidate"]["crps"] is not None
     assert report["incumbent"]["brier"] is None
     assert report["eligible_for_live_promotion"] is False
+
+
+def test_promoted_v13_uses_only_locally_received_earlier_labels():
+    from kalshi_edge.weather.hourly_promotion import promote_local_nowcast
+    rows = _rows(192)
+    base = datetime(2026, 11, 1, tzinfo=UTC)
+    cases = []
+    for i, row in enumerate(rows):
+        when = base + timedelta(hours=i)
+        cases.append({
+            **row,
+            "target_utc": when.isoformat(),
+            "forecast_asof": (when-timedelta(minutes=30)).isoformat(),
+            "label_received_at": (when+timedelta(minutes=10)).isoformat(),
+        })
+    decision = {"enabled": False, "model": None, "sigma_scale": 1.,
+                "live_slopes": (1., 1., 70., 1)}
+    promoted = promote_local_nowcast(
+        decision, cases, promoted_version="v13", live_delta=1.5)
+    assert promoted["model"] == "REGULARIZED_HOURLY_HYBRID_V13", promoted
+    assert promoted["enabled"] is True
+    assert promoted["historical_temperature_status"] == "ACTIVE_OBSERVATION_COMPONENT_ONLY"
+    assert promoted["historical_temperature_validation"]["market_verified_hours"] == 0
+    assert decision["enabled"] is False
+    missing_feature = promote_local_nowcast(
+        decision, cases, promoted_version="v13", live_delta=None)
+    assert missing_feature["enabled"] is False
+
+
+def test_archived_temperature_promotion_does_not_override_future_market_gate():
+    from kalshi_edge.weather.hourly_promotion import promote_local_nowcast
+    result = promote_local_nowcast(
+        {"enabled": False, "model": None, "live_slopes": None}, [],
+        promoted_version="v14", live_delta=None)
+    assert result["enabled"] is False
+    assert result["historical_temperature_status"] == "WAITING_FOR_LIVE_RECEIPT_SAFE_TRAINING"
