@@ -212,3 +212,37 @@ def test_after_v15_activation_frozen_pair_keeps_original_v14_counterfactual():
     assert pair["baseline_f"]==59.4
     assert pair["sigma_f"]==1.5
     assert pair["baseline_kind"]!=V15_KIND
+
+
+def test_v15_never_overrides_preexisting_prospective_market_verified_physical_lock(monkeypatch):
+    import json
+    import sqlite3
+    from kalshi_edge.weather import hourly
+    conn=sqlite3.connect(":memory:")
+    hourly._init(conn)
+    now=START+timedelta(hours=20,minutes=30)
+    at=now-timedelta(minutes=3)
+    raw={"t":int(at.timestamp()*1000),"v":59.0,"status":"normal","contributors":4}
+    conn.execute("""INSERT INTO weather_hourly_index
+        (city,event_ms,received_at,temp_f,status,config_version,source_sha,payload)
+        VALUES(?,?,?,?,?,?,?,?)""",("chicago",raw["t"],
+          (at+timedelta(minutes=1)).isoformat(),59.,
+          "normal","synthetic-current-config","a"*64,json.dumps(raw)))
+    monkeypatch.setattr(hourly,"read_hourly_physics",lambda *args,**kwargs:{
+        "status":"RESEARCH_ONLY_NOT_PROMOTED","calibration_version":"synthetic-current-config",
+        "hrrr_index_f":61.,"nbm_index_f":61.})
+    monkeypatch.setattr(hourly,"v15_live_decision",lambda *args,**kwargs:{
+        "enabled":True,"parameters":{"nwp_gain":.8,"contrast_gain":0.,
+        "bias_f":0.,"sigma_scale":1.,"spread_gain":0.},
+        "history_hours":100,"train_hours":75,"validation_hours":24,
+        "status":"V15_PAIRED_TEMPERATURE_IMPROVED","market_verified_hours":0})
+    monkeypatch.setattr(hourly,"physical_live_decision",lambda *args,**kwargs:{
+        "enabled":True,"status":"PROSPECTIVE_LOCKBOX_IMPROVED_NOT_CERTIFIED",
+        "weights":[0.,.5,.5],"bias_f":0.,"sigma_scale":1.,
+        "paired_hours":125,"lockbox_hours":32,
+        "market_verified_hours":32})
+    result=hourly._forecast(conn,"chicago",now)
+    assert result["model_kind"]=="PROSPECTIVE_LOCKBOX_PHYSICAL_INDEX_V4"
+    assert result["v15_status"]=="MARKET_VERIFIED_PHYSICAL_LOCK_PRIORITY"
+    assert result["real_orders_enabled"] is False
+    conn.close()
