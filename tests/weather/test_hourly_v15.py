@@ -1,0 +1,128 @@
+"""WeatherEdge V15: leak-safe NOAA fusion promotion; all numeric cases synthetic."""
+from __future__ import annotations
+
+import copy
+import math
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from kalshi_edge.weather.hourly_v15 import (
+    V15_KIND, fit_v15, predict_v15, select_v15,
+    evaluate_v15_pairs, v15_live_decision,
+)
+
+UTC=timezone.utc
+START=datetime(2026,11,1,tzinfo=UTC)
+V14="HISTORICAL_REGIME_HYBRID_INDEX_NOWCAST_V14"
+
+
+def paired(n=120, *, edge=True):
+    result=[]
+    for i in range(n):
+        base=50+3*math.sin(i*.21)
+        signal=1.4*math.sin(i*.43)+.8*math.cos(i*.11)
+        observed=base+(signal if edge else .04*math.sin(i*1.1))
+        hrrr=base+signal+.13*math.sin(i*.27) if edge else base+3.
+        nbm=base+signal-.17*math.sin(i*.33) if edge else base-3.
+        result.append({
+            "target_utc":(START+timedelta(hours=i)).isoformat(),
+            "baseline_f":base,"sigma_f":1.4,
+            "hrrr_f":hrrr,"nbm_f":nbm,
+            "observed_f":observed,"baseline_kind":V14,
+            "config_version":"synthetic-current-config",
+            "market_verified":False,"threshold_f":None})
+    return result
+
+
+def test_v15_fit_improves_synthetic_out_of_sample_noaa_edge():
+    rows=paired()
+    params=fit_v15(rows[:72])
+    mean,sigma=predict_v15(rows[90],params)
+    assert math.isfinite(mean) and sigma>0
+    result=select_v15(rows[:96])
+    assert result["status"]=="V15_HOLDOUT_IMPROVED",result
+    assert result["promotable"] is True
+    assert result["incumbent"]["mae_f"]>result["candidate"]["mae_f"]
+    assert result["candidate"]["crps"]<result["incumbent"]["crps"]
+    assert result["baseline_kind"]==V14
+
+
+def test_v15_training_does_not_access_future_validation_outcomes():
+    rows=paired(96)
+    first=select_v15(rows)
+    altered=copy.deepcopy(rows)
+    for row in altered[-24:]:
+        row["observed_f"]+=40.
+    second=select_v15(altered)
+    assert first["parameters"]==second["parameters"]
+    assert second["promotable"] is False
+
+
+def test_v15_rejects_unsupported_malformed_and_insufficient_evidence():
+    assert select_v15(paired(87))["status"]=="INSUFFICIENT_PAIRED_HOURS"
+    no_edge=select_v15(paired(96,edge=False))
+    assert no_edge["promotable"] is False
+    rows=paired(100)
+    rows[-1]["baseline_kind"]="HISTORICAL_ARCHIVE_HYBRID_INDEX_NOWCAST_V13"
+    mixed=select_v15(rows)
+    assert mixed["status"]=="INSUFFICIENT_PAIRED_HOURS"
+    with pytest.raises(ValueError):
+        predict_v15({**paired(1)[0],"hrrr_f":float("nan")},fit_v15(paired(88)))
+
+
+def test_v15_prospective_score_requires_immutable_snapshot_window():
+    rows=paired(120)
+    scores=evaluate_v15_pairs(rows)
+    assert scores["evaluated_hours"]>=24
+    assert scores["status"]=="V15_RESEARCH_SCORED"
+    assert scores["market_verified_hours"]==0
+    assert scores["brier"] is None
+    assert scores["calibration_certified"] is False
+    assert scores["real_orders_enabled"] is False
+
+
+def test_v15_live_requires_matching_provenance_and_exact_new_noaa_snapshot(monkeypatch):
+    from kalshi_edge.weather import hourly_v15 as v
+    rows=paired(96)
+    monkeypatch.setattr(v,"collect_cases",lambda *args,**kwargs:rows)
+    decision=v15_live_decision(
+        object(),"chicago","synthetic-current-config",
+        START+timedelta(days=4),START+timedelta(days=3,hours=23,minutes=30),
+        30,{"status":"RESEARCH_ONLY_NOT_PROMOTED",
+            "calibration_version":"synthetic-current-config",
+            "forecast_target_utc":(START+timedelta(days=4)).isoformat(),
+            "hrrr_index_f":55.,"nbm_index_f":54.,
+            "model_receipts":{
+                "HRRR":(START+timedelta(days=3,hours=23,minutes=20)).isoformat(),
+                "NBM":(START+timedelta(days=3,hours=23,minutes=25)).isoformat()},
+            "model_runs":{
+                "HRRR":(START+timedelta(days=3,hours=21)).isoformat(),
+                "NBM":(START+timedelta(days=3,hours=21)).isoformat()},
+        },baseline_kind=V14)
+    assert decision["enabled"] is True,decision
+    assert decision["model_kind"]==V15_KIND
+    assert decision["market_verified_hours"]==0
+    bad=copy.deepcopy(decision["physics"])
+    bad["model_receipts"]["NBM"]=(START+timedelta(days=4)).isoformat()
+    assert not v15_live_decision(
+        object(),"chicago","synthetic-current-config",
+        START+timedelta(days=4),START+timedelta(days=3,hours=23,minutes=30),
+        30,bad,baseline_kind=V14)["enabled"]
+
+
+def test_v15_live_rejects_new_config_or_wrong_baseline(monkeypatch):
+    from kalshi_edge.weather import hourly_v15 as v
+    monkeypatch.setattr(v,"collect_cases",lambda *args,**kwargs:paired(96))
+    now=START+timedelta(days=3,hours=23,minutes=30)
+    target=START+timedelta(days=4)
+    physics={"status":"RESEARCH_ONLY_NOT_PROMOTED",
+             "calibration_version":"different-config",
+             "forecast_target_utc":target.isoformat(),
+             "hrrr_index_f":55.,"nbm_index_f":54.,
+             "model_receipts":{"HRRR":(now-timedelta(minutes=2)).isoformat(),
+                               "NBM":(now-timedelta(minutes=1)).isoformat()},
+             "model_runs":{"HRRR":(now-timedelta(hours=2)).isoformat(),
+                           "NBM":(now-timedelta(hours=2)).isoformat()}}
+    assert not v15_live_decision(object(),"chicago","synthetic-current-config",
+                                  target,now,30,physics,baseline_kind=V14)["enabled"]
