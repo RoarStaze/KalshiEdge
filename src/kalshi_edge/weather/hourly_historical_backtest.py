@@ -105,6 +105,10 @@ def decode_archive_page(payload: dict, city: str, start_ms: int,
             len(payload["timeseries"]) > 10000):
         raise ValueError("INVALID_ARCHIVE_SOURCE")
     config = payload.get("config_version")
+    # Historical/empty windows can omit the optional response-level version,
+    # or return an empty string. Neither can identify an old event's config.
+    if config == "":
+        config = None
     if config is not None and (
             not isinstance(config, str) or not 1 <= len(config) <= 160):
         raise ValueError("INVALID_ARCHIVE_CONFIG")
