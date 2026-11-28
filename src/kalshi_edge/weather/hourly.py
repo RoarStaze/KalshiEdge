@@ -26,6 +26,7 @@ from .predictor import normal_cdf, _utc
 from .hourly_learning import learning_decision, apply_correction
 from .hourly_nowcast import (LEAD_MINUTES, index_nowcast_decision,
                              nowcast_prediction)
+from .hourly_v15 import V15_KIND, predict_v15, v15_live_decision
 from .hourly_physics import read_hourly_physics
 from .hourly_quotes import read_latest_quote
 from .hourly_physical_learning import (
@@ -696,7 +697,6 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
     # V15: learn source-time-safe NOAA HRRR/NBM correction only from older
     # immutable paired records with genuinely later canonical outcomes.
     # A missing, late or mismatched NOAA feed keeps V13/V14 unchanged.
-    from .hourly_v15 import V15_KIND, predict_v15, v15_live_decision
     remaining=(target-asof).total_seconds()/60.
     v15_lead=(min(LEAD_MINUTES,key=lambda k:abs(k-remaining))
               if 0<remaining<=60 else None)
