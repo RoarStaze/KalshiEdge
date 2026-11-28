@@ -177,11 +177,12 @@ def read_historical_promotions(db_path: Path, city: str, lead: int, *,
 
 def promote_local_nowcast(decision: dict, samples: list[dict], *,
                           promoted_version: str, live_delta: float | None) -> dict:
-    """Fit a historical winner using strictly earlier locally received labels.
+    """Deploy a historical temperature winner on current-regime live data.
 
-    Last 24 contiguous original-source local hours are a safety monitor,
-    not new market-evidence promotion. If they badly regress, stay on the
-    incumbent observation component. Models may remain waiting after startup.
+    64+ original receipt-safe hourly examples are sufficient to *fit* a
+    report-qualified observation challenger. At 96+ hours, the latest 24
+    local hours become a separate rollback safety monitor. No archived
+    observation is ever inserted in the live receipt evidence database.
     """
     from .hourly_nowcast import (
         HYBRID_MODEL, HOLDOUT, nowcast_prediction,
@@ -192,39 +193,50 @@ def promote_local_nowcast(decision: dict, samples: list[dict], *,
     result["historical_temperature_candidate"] = promoted_version
     if (promoted_version not in ("v13", "v14") or
             not _valid_number(live_delta) or
-            len(samples) < 96 or not decision.get("live_slopes")):
+            len(samples) < 64 or not decision.get("live_slopes")):
         result["historical_temperature_status"] = "WAITING_FOR_LIVE_RECEIPT_SAFE_TRAINING"
         return result
-    ordered = sorted(samples, key=lambda r: _utc(r["target_utc"]))
-    train = ordered[:-HOLDOUT]
-    valid = ordered[-HOLDOUT:]
-    first_asof = _utc(valid[0]["forecast_asof"])
-    older = [r for r in train if _utc(r["label_received_at"]) <= first_asof]
-    if (len(older) < 72 or
-            any(_utc(valid[i]["target_utc"]) -
-                _utc(valid[i-1]["target_utc"]) != timedelta(hours=1)
-                for i in range(1, len(valid))) or
-            any(r.get("diurnal_delta_f") is None for r in valid)):
-        result["historical_temperature_status"] = "WAITING_FOR_UNTOUCHED_LOCAL_HOLDOUT"
-        return result
     try:
+        ordered = sorted(samples, key=lambda r: _utc(r["target_utc"]))
+        local_holdout = len(ordered) >= 96
+        if local_holdout:
+            train = ordered[:-HOLDOUT]
+            valid = ordered[-HOLDOUT:]
+            first_asof = _utc(valid[0]["forecast_asof"])
+            older = [r for r in train if _utc(r["label_received_at"]) <= first_asof]
+            if (len(older) < 64 or
+                    any(_utc(valid[i]["target_utc"]) -
+                        _utc(valid[i-1]["target_utc"]) != timedelta(hours=1)
+                        for i in range(1, len(valid))) or
+                    any(r.get("diurnal_delta_f") is None for r in valid)):
+                result["historical_temperature_status"] = "WAITING_FOR_UNTOUCHED_LOCAL_HOLDOUT"
+                return result
+        else:
+            # All local source receipts are confirmed at the current live
+            # as-of by the original _load_points() source-time checks.
+            # The archived 90-day walk-forward is the only held-out
+            # comparison until enough local cases accumulate.
+            older = ordered
+            valid = []
+
         params = fit_v14(older) if promoted_version == "v14" else fit_hybrid(older)
         predict = predict_v14 if promoted_version == "v14" else predict_hybrid
-        current_scores, new_scores = [], []
-        for row in valid:
-            mean, sigma = nowcast_prediction(
-                row["current_index_f"], row["baseline_sigma_f"],
-                row["fast_slope"], row["slow_slope"], row["hours_ahead"],
-                decision, diurnal_delta_f=row.get("diurnal_delta_f"))
-            new_mean, new_sigma = predict(row, params)
-            current_scores.append(_pair(row, mean, sigma))
-            new_scores.append(_pair(row, new_mean, new_sigma))
-        base, candidate = _aggregate(current_scores), _aggregate(new_scores)
-        if (candidate["mae_f"] > base["mae_f"]+.05 or
-                candidate["crps"] > base["crps"]+.025 or
-                candidate["coverage_90"] < max(.75, base["coverage_90"]-.10)):
-            result["historical_temperature_status"] = "LOCAL_HOLDOUT_REGRESSION"
-            return result
+        if local_holdout:
+            current_scores, new_scores = [], []
+            for row in valid:
+                mean, sigma = nowcast_prediction(
+                    row["current_index_f"], row["baseline_sigma_f"],
+                    row["fast_slope"], row["slow_slope"], row["hours_ahead"],
+                    decision, diurnal_delta_f=row.get("diurnal_delta_f"))
+                new_mean, new_sigma = predict(row, params)
+                current_scores.append(_pair(row, mean, sigma))
+                new_scores.append(_pair(row, new_mean, new_sigma))
+            base, candidate = _aggregate(current_scores), _aggregate(new_scores)
+            if (candidate["mae_f"] > base["mae_f"]+.05 or
+                    candidate["crps"] > base["crps"]+.025 or
+                    candidate["coverage_90"] < max(.75, base["coverage_90"]-.10)):
+                result["historical_temperature_status"] = "LOCAL_HOLDOUT_REGRESSION"
+                return result
     except (ValueError, TypeError, KeyError, OverflowError,
             ZeroDivisionError, IndexError):
         result["historical_temperature_status"] = "WAITING_FOR_VALID_LOCAL_MODEL_FIT"
@@ -238,22 +250,25 @@ def promote_local_nowcast(decision: dict, samples: list[dict], *,
         "status": ("ARCHIVED_TEMPERATURE_V14_PROMOTED_UNCERTIFIED"
                    if promoted_version=="v14" else
                    "ARCHIVED_TEMPERATURE_V13_PROMOTED_UNCERTIFIED"),
-        "historical_temperature_status": "ACTIVE_OBSERVATION_COMPONENT_ONLY",
+        "historical_temperature_status": (
+            "ACTIVE_OBSERVATION_COMPONENT_ONLY" if local_holdout
+            else "ACTIVE_ARCHIVE_EVIDENCE_ONLY"),
         "historical_temperature_validation": {
-            "incumbent_mae_f": base["mae_f"],
-            "candidate_mae_f": candidate["mae_f"],
-            "incumbent_crps": base["crps"],
-            "candidate_crps": candidate["crps"],
+            "incumbent_mae_f": base["mae_f"] if local_holdout else None,
+            "candidate_mae_f": candidate["mae_f"] if local_holdout else None,
+            "incumbent_crps": base["crps"] if local_holdout else None,
+            "candidate_crps": candidate["crps"] if local_holdout else None,
             "hours": len(valid),
             "market_verified_hours": 0,
         },
     })
-    result["validation"] = {
-        "baseline_mae_f": base["mae_f"],
-        "candidate_mae_f": candidate["mae_f"],
-        "baseline_crps": base["crps"],
-        "candidate_crps": candidate["crps"],
-        "baseline_90_coverage": base["coverage_90"],
-        "candidate_90_coverage": candidate["coverage_90"],
-    }
+    if local_holdout:
+        result["validation"] = {
+            "baseline_mae_f": base["mae_f"],
+            "candidate_mae_f": candidate["mae_f"],
+            "baseline_crps": base["crps"],
+            "candidate_crps": candidate["crps"],
+            "baseline_90_coverage": base["coverage_90"],
+            "candidate_90_coverage": candidate["coverage_90"],
+        }
     return result
