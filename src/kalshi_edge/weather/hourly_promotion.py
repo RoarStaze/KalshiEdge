@@ -185,7 +185,7 @@ def promote_local_nowcast(decision: dict, samples: list[dict], *,
     observation is ever inserted in the live receipt evidence database.
     """
     from .hourly_nowcast import (
-        HYBRID_MODEL, HOLDOUT, nowcast_prediction,
+        HYBRID_MODEL, HOLDOUT, choose_index_nowcast, nowcast_prediction,
         V14_MODEL,
     )
     from .hourly_model_comparison import _aggregate, _pair
@@ -222,12 +222,15 @@ def promote_local_nowcast(decision: dict, samples: list[dict], *,
         params = fit_v14(older) if promoted_version == "v14" else fit_hybrid(older)
         predict = predict_v14 if promoted_version == "v14" else predict_hybrid
         if local_holdout:
+            # Fit/select the comparison baseline exclusively on the same
+            # pre-holdout labels, never using the holdout to choose it.
+            original_incumbent = choose_index_nowcast(older)
             current_scores, new_scores = [], []
             for row in valid:
                 mean, sigma = nowcast_prediction(
                     row["current_index_f"], row["baseline_sigma_f"],
                     row["fast_slope"], row["slow_slope"], row["hours_ahead"],
-                    decision, diurnal_delta_f=row.get("diurnal_delta_f"))
+                    original_incumbent, diurnal_delta_f=row.get("diurnal_delta_f"))
                 new_mean, new_sigma = predict(row, params)
                 current_scores.append(_pair(row, mean, sigma))
                 new_scores.append(_pair(row, new_mean, new_sigma))
