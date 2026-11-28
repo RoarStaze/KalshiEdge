@@ -26,10 +26,15 @@ policy, NOT the stronger market-verified promotion gate.
 
 The production nowcast refits the selected version from real timestamped
 LOCAL receipt-safe Index examples from the current live calibration regime.
-At least 96 historical cases, 72 safe prior labels, valid diurnal context,
-24 contiguous untouched local validation hours, a present live slope and
-diurnal feature, and a non-regressing local safety holdout are required.
-If there is insufficient recent data, the model remains the current
+At least 64 original-source, receipt-safe local historical cases with
+adequate diurnal diversity, a present live slope and prior-day diurnal
+feature are needed to fit and activate an archive-qualified V13 or V14
+forecast. Prior to 96 local cases, this is explicitly marked
+`ACTIVE_ARCHIVE_EVIDENCE_ONLY` (no separate local holdout). Once 96+
+local cases exist, a 24-hour untouched local safety holdout checks
+whether the promoted candidate regresses against the live observation
+incumbent; a meaningful regression rolls back to the incumbent.
+If there is insufficient recent data, the model remains the existing
 observation incumbent with an explicit waiting reason. The historical
 archive is NEVER inserted into the live receipt evidence database.
 The existing physical blend/settlement pipeline stays separate.
