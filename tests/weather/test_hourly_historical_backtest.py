@@ -243,3 +243,115 @@ def test_no_config_and_no_index_points_reports_no_data_not_invalid_source():
     assert report["status"] == "NO_ARCHIVED_INDEX_HISTORY"
     assert report["groups"][0]["status"] == "INSUFFICIENT_ARCHIVED_WALKFORWARD"
     assert report["groups"][0]["matched_hours"] == 0
+
+
+def test_archive_429_retries_with_retry_after_and_then_scores_real_page(monkeypatch):
+    """A transient exchange rate limit must not discard an available page."""
+    import kalshi_edge.weather.hourly_historical_backtest as archive
+    pauses = []
+    monkeypatch.setattr(archive.time, "sleep", lambda seconds: pauses.append(seconds))
+    attempts = []
+    def handle(request):
+        attempts.append(str(request.url))
+        if len(attempts) == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"})
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit", "timeseries": [],
+        })
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        rows, meta = download_archived_index(
+            client, "chicago", START, START + timedelta(days=1))
+    assert rows == []
+    assert len(attempts) == 2
+    assert any(delay >= 2 for delay in pauses)
+    assert meta["requests"] == 1
+
+
+def test_archive_cache_resumes_completed_days_after_repeated_429(tmp_path, monkeypatch):
+    """An interrupted 90-day run should only refetch windows not yet committed."""
+    import kalshi_edge.weather.hourly_historical_backtest as archive
+    monkeypatch.setattr(archive.time, "sleep", lambda seconds: None)
+    base = int(START.timestamp() * 1000)
+    windows = []
+    def fail_second(request):
+        if request.url.path.endswith("/calibrations"):
+            return httpx.Response(200, json={
+                "city": "chicago", "units": "celsius",
+                "calibrations": [{"config_version": "v1",
+                    "effective_at_ms": base-3600000, "published_at_ms": base-7200000}],
+            })
+        first = int(request.url.params["from"])
+        windows.append(first)
+        if first != base:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit",
+            "timeseries": [_raw_point(START)],
+        })
+    cache = tmp_path / "archive_cache"
+    with httpx.Client(transport=httpx.MockTransport(fail_second)) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            download_archived_index(
+                client, "chicago", START, START + timedelta(days=2),
+                cache_dir=cache)
+    assert windows[0] == base
+    assert any(x != base for x in windows)
+    # Second attempt may read day one from immutable disk cache, no duplicate
+    # network request for the already verified historical page.
+    resumed = []
+    def resume(request):
+        if request.url.path.endswith("/calibrations"):
+            return httpx.Response(200, json={
+                "city": "chicago", "units": "celsius",
+                "calibrations": [{"config_version": "v1",
+                    "effective_at_ms": base-3600000, "published_at_ms": base-7200000}],
+            })
+        resumed.append(int(request.url.params["from"]))
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit",
+            "timeseries": [_raw_point(START + timedelta(days=1))],
+        })
+    with httpx.Client(transport=httpx.MockTransport(resume)) as client:
+        rows, metadata = download_archived_index(
+            client, "chicago", START, START + timedelta(days=2),
+            cache_dir=cache)
+    assert [r["event_ms"] for r in rows] == [base, base+86400000]
+    assert resumed == [base+86400000]
+    assert metadata["cache_hits"] == 1
+    assert metadata["requests"] == 1
+
+
+def test_corrupt_archive_cache_fails_closed_without_using_tampered_observations(tmp_path):
+    cache = tmp_path / "archive_cache"
+    def handle(request):
+        return httpx.Response(200, json={
+            "city": "chicago", "units": "fahrenheit", "timeseries": [],
+        })
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        download_archived_index(client, "chicago", START,
+                                START + timedelta(days=1), cache_dir=cache)
+    items = list(cache.rglob("*.json"))
+    assert len(items) == 1
+    data = items[0].read_text(encoding="utf-8")
+    items[0].write_text(data.replace("fahrenheit", "celsius"), encoding="utf-8")
+    def should_not_fetch(request):
+        raise AssertionError("Corrupted saved evidence must not be trusted or silently replaced")
+    with httpx.Client(transport=httpx.MockTransport(should_not_fetch)) as client:
+        with pytest.raises(ValueError, match="ARCHIVE_CACHE_INTEGRITY"):
+            download_archived_index(client, "chicago", START,
+                                    START + timedelta(days=1), cache_dir=cache)
+
+
+def test_excessive_retry_after_does_not_send_early_unauthorized_retry(monkeypatch):
+    import kalshi_edge.weather.hourly_historical_backtest as archive
+    monkeypatch.setattr(archive.time, "sleep",
+                        lambda seconds: (_ for _ in ()).throw(AssertionError("Do not sleep")))
+    calls = []
+    def handle(request):
+        calls.append(1)
+        return httpx.Response(429, headers={"Retry-After": "3600"})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValueError, match="ARCHIVE_RATE_LIMIT_RETRY_AFTER_EXCEEDS_CAP"):
+            download_archived_index(client, "chicago", START,
+                                    START+timedelta(days=1))
+    assert len(calls) == 1
