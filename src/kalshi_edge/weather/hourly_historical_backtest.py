@@ -8,13 +8,16 @@ No trading, orders, or calibration certification.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
-import sys
+import os
+import tempfile
+import time
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 
@@ -31,6 +34,10 @@ REPLAY_RECEIPT = "EVENT_TIME_PLUS_10_MINUTES_UNVERIFIED"
 MIN_TRAIN_HOURS = 96
 FOLD_HOURS = 24
 MAX_RESPONSE_BYTES = 3_000_000
+ARCHIVE_CACHE_FORMAT = 1
+MAX_RATE_LIMIT_RETRIES = 5
+MAX_RETRY_AFTER_SECONDS = 60.0
+DEFAULT_REQUEST_INTERVAL_SECONDS = 1.0
 
 
 def _utc(value: datetime) -> datetime:
@@ -173,53 +180,204 @@ def decode_archive_page(payload: dict, city: str, start_ms: int,
     return sorted(result, key=lambda p: p["event_ms"])
 
 
-def download_archived_index(client: httpx.Client, city: str,
-                            start: datetime, end: datetime) -> tuple[list[dict], dict]:
-    """Fetch bounded official history in 24h chunks; no future or proxy data."""
+
+
+class _ArchiveRequestPacer:
+    """Share one bounded request cadence across cities and calibration calls."""
+
+    def __init__(self, minimum_interval_seconds: float = 0.0):
+        if (type(minimum_interval_seconds) not in (int, float) or
+                not math.isfinite(minimum_interval_seconds) or
+                not 0. <= minimum_interval_seconds <= 60.):
+            raise ValueError("INVALID_ARCHIVE_REQUEST_INTERVAL")
+        self.interval = float(minimum_interval_seconds)
+        self.last_request = None
+        self.rate_limited_retries = 0
+
+    def before_request(self) -> None:
+        now = time.monotonic()
+        if self.last_request is not None:
+            remaining = self.interval - (now - self.last_request)
+            if remaining > 0:
+                time.sleep(remaining)
+        self.last_request = time.monotonic()
+
+
+def _archive_retry_delay(response: httpx.Response, attempt: int) -> float:
+    raw = response.headers.get("Retry-After")
+    delay = min(32., 2. ** (attempt + 1))
+    if raw:
+        try:
+            delay = float(raw)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+                if when.utcoffset() is None:
+                    raise ValueError("NAIVE_RETRY_AFTER")
+                delay = max(0., (when - datetime.now(timezone.utc)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                # An unparseable header is not permission to hammer the API.
+                delay = min(32., 2. ** (attempt + 1))
+    if not math.isfinite(delay) or delay < 0:
+        raise ValueError("INVALID_ARCHIVE_RETRY_AFTER")
+    if delay > MAX_RETRY_AFTER_SECONDS:
+        # Never retry before the server's explicitly requested delay when
+        # that delay exceeds the bounded synchronous request policy.
+        raise ValueError("ARCHIVE_RATE_LIMIT_RETRY_AFTER_EXCEEDS_CAP")
+    return max(.1, delay)
+
+
+def _get_archive_source(
+    client: httpx.Client, url: str, *,
+    params: dict | None = None, pacer: _ArchiveRequestPacer,
+) -> bytes:
+    for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+        pacer.before_request()
+        response = client.get(url, params=params)
+        if response.status_code != 429:
+            response.raise_for_status()
+            if len(response.content) > MAX_RESPONSE_BYTES:
+                raise ValueError("OVERSIZED_ARCHIVE_RESPONSE")
+            return response.content
+        if attempt == MAX_RATE_LIMIT_RETRIES:
+            response.raise_for_status()
+        delay = _archive_retry_delay(response, attempt)
+        pacer.rate_limited_retries += 1
+        time.sleep(delay)
+    raise ValueError("ARCHIVE_RETRY_EXHAUSTED")
+
+
+def _cached_window_path(cache_dir: Path, city: str, start_ms: int,
+                        end_ms: int) -> Path:
+    # The caller has already checked city membership in the whitelist.
+    return Path(cache_dir) / city / f"{start_ms}-{end_ms}.json"
+
+
+def _read_cached_window(path: Path, city: str,
+                        start_ms: int, end_ms: int) -> bytes | None:
+    if not path.exists():
+        return None
+    try:
+        if path.stat().st_size > (MAX_RESPONSE_BYTES * 2 + 4096):
+            raise ValueError("OVERSIZED_CACHE")
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(saved, dict) or
+                saved.get("schema") != ARCHIVE_CACHE_FORMAT or
+                saved.get("city") != city or
+                saved.get("start_ms") != start_ms or
+                saved.get("end_ms") != end_ms or
+                saved.get("source") != f"{API}/live_data/weather/{city}"):
+            raise ValueError("CACHE_WINDOW_MISMATCH")
+        raw = base64.b64decode(saved["body_b64"], validate=True)
+        if (len(raw) > MAX_RESPONSE_BYTES or
+                hashlib.sha256(raw).hexdigest() != saved["response_sha256"]):
+            raise ValueError("CACHE_BODY_HASH_MISMATCH")
+        return raw
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError,
+            base64.binascii.Error) as exc:
+        raise ValueError("ARCHIVE_CACHE_INTEGRITY") from exc
+
+
+def _save_cached_window(path: Path, city: str, start_ms: int,
+                        end_ms: int, raw: bytes) -> None:
+    # Cache only original, fully decoded and source-checked HTTP 200 data.
+    # Atomic writes keep a power loss or interrupted run from creating a
+    # seemingly valid partially downloaded day.
+    if path.exists():
+        existing = _read_cached_window(path, city, start_ms, end_ms)
+        if existing != raw:
+            raise ValueError("ARCHIVE_CACHE_CONFLICT")
+        return
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ValueError("OVERSIZED_ARCHIVE_RESPONSE")
+    record = {
+        "schema": ARCHIVE_CACHE_FORMAT, "city": city,
+        "start_ms": start_ms, "end_ms": end_ms,
+        "source": f"{API}/live_data/weather/{city}",
+        "response_sha256": hashlib.sha256(raw).hexdigest(),
+        "body_b64": base64.b64encode(raw).decode("ascii"),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", prefix=".weather-archive-",
+                suffix=".tmp", dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(record, handle, sort_keys=True, allow_nan=False)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def download_archived_index(
+    client: httpx.Client, city: str, start: datetime, end: datetime, *,
+    cache_dir: Path | None = None,
+    pacer: _ArchiveRequestPacer | None = None,
+) -> tuple[list[dict], dict]:
+    """Fetch bounded official history with resumable source-validated cache.
+
+    Successful daily response bytes survive interrupted runs; the cache never
+    supplies new, unverified observations to the live weather tables.
+    """
     start, end = _utc(start), _utc(end)
     if city not in CITIES or not start < end or end > datetime.now(timezone.utc):
         raise ValueError("INVALID_ARCHIVE_RANGE")
     if end-start > timedelta(days=MAX_DAYS):
         raise ValueError("ARCHIVE_RANGE_EXCEEDS_90_DAYS")
+    limiter = pacer if pacer is not None else _ArchiveRequestPacer()
+    previous_retries = limiter.rate_limited_retries
     records: dict[int, dict] = {}
     receipts = []
     cursor = start
     count = 0
+    cache_hits = 0
     calibrations = None
     calibration_sha = None
     while cursor < end:
         stop = min(cursor + WINDOW, end)
         lo = int(cursor.timestamp()*1000)
         hi = int(stop.timestamp()*1000)-1
-        response = client.get(f"{API}/live_data/weather/{city}",
-                              params={"from": lo, "to": hi, "detailed": "false"})
-        response.raise_for_status()
-        if len(response.content) > MAX_RESPONSE_BYTES:
-            raise ValueError("OVERSIZED_ARCHIVE_RESPONSE")
-        payload = response.json()
-        # Only actual populated windows need a historical configuration.
-        # A normal/degraded value can span a weekly calibration boundary;
-        # never assign the response's latest version to old event minutes.
+        cache_path = (_cached_window_path(cache_dir, city, lo, hi)
+                      if cache_dir is not None else None)
+        raw = (_read_cached_window(cache_path, city, lo, hi)
+               if cache_path is not None else None)
+        from_cache = raw is not None
+        if from_cache:
+            cache_hits += 1
+        else:
+            raw = _get_archive_source(
+                client, f"{API}/live_data/weather/{city}",
+                params={"from": lo, "to": hi, "detailed": "false"},
+                pacer=limiter)
+            count += 1
+        payload = json.loads(raw)
+        # Each nonempty historical window must pass the official effective-
+        # time calibration audit. The current response header is not evidence
+        # of the version effective on a historical day.
         usable = (isinstance(payload, dict) and
                   isinstance(payload.get("timeseries"), list) and
                   any(isinstance(item, dict) and
                       item.get("status") in ("normal", "degraded")
                       for item in payload["timeseries"]))
         if usable and calibrations is None:
-            history = client.get(f"{API}/live_data/weather/{city}/calibrations")
-            history.raise_for_status()
-            if len(history.content) > MAX_RESPONSE_BYTES:
-                raise ValueError("OVERSIZED_ARCHIVE_CALIBRATIONS")
-            calibrations = parse_archive_calibration_timeline(history.json(), city)
-            calibration_sha = hashlib.sha256(history.content).hexdigest()
+            calibration_bytes = _get_archive_source(
+                client, f"{API}/live_data/weather/{city}/calibrations",
+                pacer=limiter)
+            calibrations = parse_archive_calibration_timeline(
+                json.loads(calibration_bytes), city)
+            calibration_sha = hashlib.sha256(calibration_bytes).hexdigest()
         page = decode_archive_page(
             payload, city, lo, hi, calibrations=calibrations)
-        count += 1
+        if cache_path is not None and not from_cache:
+            _save_cached_window(cache_path, city, lo, hi, raw)
         receipts.append({
             "window_start_utc": cursor.isoformat(),
             "window_end_utc": stop.isoformat(),
-            "source_response_sha256": hashlib.sha256(response.content).hexdigest(),
+            "source_response_sha256": hashlib.sha256(raw).hexdigest(),
             "decoded_minutes": len(page),
+            "cache_hit": from_cache,
         })
         for point in page:
             old = records.get(point["event_ms"])
@@ -229,7 +387,9 @@ def download_archived_index(client: httpx.Client, city: str,
         cursor = stop
     points = sorted(records.values(), key=lambda p: p["event_ms"])
     return points, {
-        "requests": count, "archived_minutes": len(points),
+        "requests": count, "cache_hits": cache_hits,
+        "rate_limited_retries": limiter.rate_limited_retries - previous_retries,
+        "archived_minutes": len(points),
         "start_utc": start.isoformat(), "end_utc": end.isoformat(),
         "source": f"{API}/live_data/weather/{city}",
         "calibration_source_sha256": calibration_sha,
@@ -361,7 +521,9 @@ def compare_archived_models(cases: list[dict]) -> dict:
 
 def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
                          start: datetime, end: datetime,
-                         leads: tuple[int, ...] = LEAD_MINUTES) -> dict:
+                         leads: tuple[int, ...] = LEAD_MINUTES,
+                         cache_dir: Path | None = None,
+                         request_interval_seconds: float = 0.0) -> dict:
     start, end = _utc(start), _utc(end)
     if not cities or not leads or any(city not in CITIES for city in cities):
         raise ValueError("INVALID_ARCHIVE_SELECTION")
@@ -369,6 +531,7 @@ def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
         raise ValueError("INVALID_ARCHIVE_LEADS")
     if not start < end or end > datetime.now(timezone.utc) or end-start > timedelta(days=MAX_DAYS):
         raise ValueError("INVALID_ARCHIVE_RANGE")
+    limiter = _ArchiveRequestPacer(request_interval_seconds)
     report = {
         "mode": "WEATHEREDGE_HISTORICAL_REPLAY_V1",
         "status": "NO_ARCHIVED_INDEX_HISTORY",
@@ -385,7 +548,8 @@ def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
     success = 0
     for city in cities:
         try:
-            points, provenance = download_archived_index(client, city, start, end)
+            points, provenance = download_archived_index(
+                client, city, start, end, cache_dir=cache_dir, pacer=limiter)
         except (httpx.HTTPError, ValueError, KeyError, TypeError,
                 OverflowError, json.JSONDecodeError) as exc:
             for lead in leads:
@@ -407,6 +571,8 @@ def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
                 "city": city, "lead_minutes": lead,
                 "archived_minutes": provenance["archived_minutes"],
                 "retrieval_requests": provenance["requests"],
+                "cache_hits": provenance["cache_hits"],
+                "rate_limited_retries": provenance["rate_limited_retries"],
                 "archive_calibration_source_sha256": provenance["calibration_source_sha256"],
                 "archive_calibration_versions": provenance["calibration_versions"],
                 "archive_window": [provenance["start_utc"], provenance["end_utc"]],
@@ -421,6 +587,7 @@ def run_archive_research(client: httpx.Client, *, cities: tuple[str, ...],
             group["status"] == "ARCHIVE_SOURCE_UNAVAILABLE"
             for group in report["groups"]) else "NO_ARCHIVED_INDEX_HISTORY")
     report["scored_groups"] = success
+    report["rate_limited_retries"] = limiter.rate_limited_retries
     return report
 
 
@@ -432,12 +599,23 @@ def main() -> int:
     parser.add_argument("--lead", action="append", type=int, choices=LEAD_MINUTES)
     parser.add_argument("--end-utc", type=str, help="UTC ISO timestamp, e.g. 2026-11-27T00:00:00Z")
     parser.add_argument("--output", type=Path,
-                        help="Save summary JSON here; original archived minute data are not saved.")
+                        help="Save summary JSON here; original archived minute data are cached separately.")
+    parser.add_argument("--cache-dir", type=Path,
+                        default=Path("data/weather/historical_archive_cache_v14"),
+                        help="Resumable SHA-256 checked cache of original API response bytes.")
+    parser.add_argument("--request-interval-seconds", type=float,
+                        default=DEFAULT_REQUEST_INTERVAL_SECONDS,
+                        help="Minimum time between requests to the source (default 1 second).")
     args = parser.parse_args()
     if not 1 <= args.days <= MAX_DAYS:
         parser.error("--days must be between 1 and 90")
+    if (not math.isfinite(args.request_interval_seconds) or
+            not 0 <= args.request_interval_seconds <= 60):
+        parser.error("--request-interval-seconds must be between 0 and 60")
+    # Midnight UTC produces stable exact 24-hour cache windows between runs.
     end = (_iso(args.end_utc) if args.end_utc else
-           datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0))
+           datetime.now(timezone.utc).replace(
+               hour=0, minute=0, second=0, microsecond=0))
     if end > datetime.now(timezone.utc):
         parser.error("--end-utc cannot be in the future")
     start = end-timedelta(days=args.days)
@@ -446,7 +624,9 @@ def main() -> int:
     with httpx.Client(timeout=30., follow_redirects=False,
                       headers={"User-Agent": "KalshiEdge-Weather-Historical-Research/1.0"}) as client:
         report = run_archive_research(
-            client, cities=cities, start=start, end=end, leads=leads)
+            client, cities=cities, start=start, end=end, leads=leads,
+            cache_dir=args.cache_dir,
+            request_interval_seconds=args.request_interval_seconds)
     rendered = json.dumps(report, sort_keys=True, indent=2, allow_nan=False)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
