@@ -382,7 +382,7 @@ CALIBRATION = """
    originally frozen matching contracts and verified YES/NO settlements.
    At least 144 eligible Index hours, 72 frozen full-model forecasts and 24
    verified market pairs are needed for promotion. Source-hour shortfalls
-   are lower bounds, not an estimated completion time. Promotion needs all
+   are lower bounds. Not an estimated completion time. Promotion needs all
    gates; synthetic tests cannot establish real accuracy.</p>
   <div id="wx-model-comparison" class="wx-forward-cohorts" aria-live="polite">
    <div class="wx-empty">No verified market comparison yet. Waiting for
