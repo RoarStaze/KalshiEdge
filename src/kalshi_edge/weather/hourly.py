@@ -676,7 +676,9 @@ def _forecast(conn: sqlite3.Connection, city: str, asof: datetime,
                 result["model_kind"]=(
                     "HISTORICAL_REGIME_HYBRID_INDEX_NOWCAST_V14"
                     if nowcast["model"]=="REGIME_RESIDUAL_HYBRID_V14"
-                    else "HISTORICAL_PAIRED_HYBRID_INDEX_NOWCAST_V13"
+                    else ("HISTORICAL_ARCHIVE_HYBRID_INDEX_NOWCAST_V13"
+                          if nowcast["status"]=="ARCHIVED_TEMPERATURE_V13_PROMOTED_UNCERTIFIED"
+                          else "HISTORICAL_PAIRED_HYBRID_INDEX_NOWCAST_V13")
                     if nowcast["model"]=="REGULARIZED_HOURLY_HYBRID_V13"
                     else ("HISTORICAL_DIURNAL_INDEX_NOWCAST_V12"
                     if nowcast["model"]=="DIURNAL_ANALOGUE_V5"
