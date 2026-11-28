@@ -285,6 +285,10 @@ def v15_live_decision(conn: sqlite3.Connection,city: str,
         _numeric({"hrrr_f":physics["hrrr_index_f"]},"hrrr_f",-129.,159.)
         _numeric({"nbm_f":physics["nbm_index_f"]},"nbm_f",-129.,159.)
         cases=collect_cases(conn,city,config_version,lead_minutes,now)
+        if (not cases or
+            now-_utc(cases[-1]["target_utc"])>timedelta(hours=48)):
+            output["status"]="V15_LOCAL_SOURCE_HISTORY_STALE_OR_MISSING"
+            return output
         decision=select_v15(cases)
         output["status"]=decision["status"]
         output["history_hours"]=decision["history_hours"]
@@ -316,6 +320,11 @@ def compare_local_v15(db_path: Path, *, asof: datetime | None = None) -> dict:
         with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",
                                     uri=True,timeout=10)) as conn:
             conn.execute("PRAGMA query_only=ON")
+            tables={row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "weather_hourly_physical_pairs" not in tables:
+                report["status"]="COLLECTING_POINT_IN_TIME_NOAA_PAIRS"
+                return report
             pairs=conn.execute(
                 "SELECT DISTINCT city,config_version,lead_minutes FROM weather_hourly_physical_pairs "
                 "ORDER BY city,config_version,lead_minutes").fetchall()
@@ -344,10 +353,26 @@ def main() -> int:
         "Score V15 HRRR/NBM fusion only on previously frozen point-in-time pairs."))
     parser.add_argument("--db",type=Path,default=None,
                         help="Exact existing local WeatherEdge SQLite database.")
+    parser.add_argument("--json",action="store_true",
+                        help="Show full evidence report instead of compact comparison.")
     args=parser.parse_args()
     path=args.db or weather_database_path(BootstrapSettings().bootstrap_dir)
     report=compare_local_v15(path)
-    print(json.dumps(report,indent=2,sort_keys=True,allow_nan=False))
+    if args.json:
+        print(json.dumps(report,indent=2,sort_keys=True,allow_nan=False))
+    else:
+        print("WeatherEdge V15 | "+report["status"])
+        print("City          Lead  Pairs  Baseline vs V15         Local promotion")
+        for group in report["groups"]:
+            candidate=group["latest"]
+            old=candidate.get("incumbent") or {}
+            new=candidate.get("candidate") or {}
+            comparison=(f'{old["mae_f"]:.4f}F / {new["mae_f"]:.4f}F'
+                        if old and new else "not enough paired hours")
+            print(f'{group["city"]:<13} {group["lead_minutes"]:>3}m'
+                  f' {group["paired_hours"]:>6}  {comparison:<27} '
+                  f'{candidate["status"]}')
+        print("Research-only NOAA + Kalshi Index pairs; weather orders disabled.")
     return 0 if report["status"]!="V15_SOURCE_EVIDENCE_UNAVAILABLE" else 2
 
 
