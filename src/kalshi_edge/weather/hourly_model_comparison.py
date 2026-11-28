@@ -38,6 +38,11 @@ def _empty_metrics() -> dict:
 def _empty_report(status: str) -> dict:
     return {"status":status,"incumbent_model":"FROZEN_FULL_LIVE_OR_OBSERVATION_REPLAY",
             "candidate_model":MODEL,
+            "observed_index_hours":0,
+            "minimum_index_hours":MIN_PREFIX+MIN_EVAL,
+            "additional_eligible_hours_needed":MIN_PREFIX+MIN_EVAL,
+            "minimum_frozen_live_hours":MIN_EVAL,
+            "minimum_verified_market_pairs":24,
             "matched_hours":0,"verified_market_hours":0,
             "frozen_live_hours":0,
             "folds":[],"incumbent":_empty_metrics(),"candidate":_empty_metrics(),
@@ -112,6 +117,9 @@ def compare_models(cases: list[dict], *,
     using market settlement outcomes; those labels are held solely for score.
     """
     report=_empty_report("INSUFFICIENT_WALKFORWARD_HOURS")
+    report["observed_index_hours"]=len(cases)
+    report["additional_eligible_hours_needed"]=max(
+        0,report["minimum_index_hours"]-len(cases))
     if len(cases)<MIN_PREFIX+MIN_EVAL:
         return report
     from .hourly_nowcast import choose_index_nowcast

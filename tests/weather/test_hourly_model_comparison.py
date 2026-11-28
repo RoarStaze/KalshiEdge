@@ -372,3 +372,37 @@ def test_live_diurnal_feature_uses_actual_contract_hour_not_rounded_lead(monkeyp
     assert d["enabled"]
     assert d["live_diurnal_delta_f"]==1.2
     assert observed==[int(actual_target.timestamp()*1000)]
+
+
+def test_insufficient_local_hours_show_exact_readiness_without_fabricated_scores():
+    # Reproduces the user's 2026-11-27 real local report: only 59-63
+    # eligible index hours per city/lead. This is NOT a failed challenger.
+    for n in (59,60,63):
+        result=compare_models(cases(n))
+        assert result["status"]=="INSUFFICIENT_WALKFORWARD_HOURS"
+        assert result["observed_index_hours"]==n
+        assert result["minimum_index_hours"]==144
+        assert result["additional_eligible_hours_needed"]==144-n
+        assert result["minimum_frozen_live_hours"]==72
+        assert result["minimum_verified_market_pairs"]==24
+        assert result["matched_hours"]==0
+        assert result["eligible_for_live_promotion"] is False
+        assert result["incumbent"]["mae_f"] is None
+        assert result["candidate"]["mae_f"] is None
+
+
+def test_weather_train_displays_eligibility_progress_without_implying_accuracy():
+    from kalshi_edge.weather.hourly_ui import render_hourly_page
+    html=render_hourly_page("train","")
+    assert "eligible Index hours" in html
+    assert "additional_eligible_hours_needed" in html
+    assert "minimum_index_hours" in html
+    assert "Not an estimated completion time" in html
+
+
+def test_causal_or_missing_frozen_evidence_still_blocks_v13_promotion():
+    result=compare_models(cases(192,market=False,frozen_live=False))
+    assert result["observed_index_hours"]==192
+    assert result["additional_eligible_hours_needed"]==0
+    assert result["minimum_frozen_live_hours"]==72
+    assert result["eligible_for_live_promotion"] is False
